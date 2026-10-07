@@ -99,7 +99,14 @@ namespace nvhttp {
     }
 
     virtual ~SunshineHTTPS() {
-      // Gracefully shutdown the TLS connection
+      // Send our close_notify, but don't wait for the client's. This destructor runs on
+      // the HTTPS server's only I/O thread, and a synchronous shutdown blocks there until
+      // the client answers or disconnects. A client that keeps the connection idle
+      // (curl's connection cache does) froze pairing, launching and serverinfo for every
+      // other client for as long as it stayed connected.
+      if (auto *ssl = native_handle()) {
+        SSL_set_shutdown(ssl, SSL_get_shutdown(ssl) | SSL_RECEIVED_SHUTDOWN);
+      }
       SimpleWeb::error_code ec;
       shutdown(ec);
     }
