@@ -3518,6 +3518,8 @@ namespace stream {
         }
       } else if (session.remote_role == remote_session::role_e::input && !session.device_uuid.empty()) {
         nvhttp::notify_remote_input_transport_lost(session.device_uuid, session.remote_role_generation);
+      } else if (session.remote_role == remote_session::role_e::display && !session.device_uuid.empty()) {
+        nvhttp::notify_remote_display_ended(session.device_uuid, session.remote_role_generation);
       }
 
       auto lifecycle_teardown_reservation = util::fail_guard([&]() {

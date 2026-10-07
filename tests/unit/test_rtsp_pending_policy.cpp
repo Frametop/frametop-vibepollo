@@ -98,3 +98,16 @@ TEST(RtspPendingPolicy, DisconnectCleanupDoesNotSelectPostRemovalInputGeneration
   EXPECT_FALSE(remembered_generations.contains(7));
   EXPECT_TRUE(remembered_generations.contains(8));
 }
+
+TEST(RtspPendingPolicy, FrametopDisplayOwnersAreForgottenLikeInputOwners) {
+  const std::vector<rtsp_stream::pending_policy::pending_owner_t> owners {
+    {.role = remote_session::role_e::display, .client_uuid = "display", .generation = 3},
+    {.role = remote_session::role_e::monitor, .client_uuid = "monitor", .generation = 4},
+  };
+  const auto expired = rtsp_stream::pending_policy::expired_remote_input_owners(owners);
+  ASSERT_EQ(expired.size(), 1);
+  EXPECT_EQ(expired[0].client_uuid, "display");
+  const auto removed = rtsp_stream::pending_policy::disconnect_input_owners_to_forget(owners);
+  ASSERT_EQ(removed.size(), 1);
+  EXPECT_EQ(removed[0].generation, 3u);
+}

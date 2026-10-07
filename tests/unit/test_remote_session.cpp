@@ -559,3 +559,28 @@ TEST(RemoteSession, LayoutGraphRejectsInvalidAnchorsCyclesAndDuplicatePrimary) {
   EXPECT_FALSE(remote_session::validate_layout({{"a", "physical", "missing", "right", "center", 0, false}}, clients, physical, &error));
   EXPECT_FALSE(remote_session::validate_layout({{"a", "physical", "DISPLAY1", "right", "center", 0, true}, {"b", "physical", "DISPLAY1", "right", "center", 0, true}}, clients, physical, &error));
 }
+
+TEST(RemoteSession, FrametopDisplayStreamsOneExistingDisplayPerClient) {
+  EXPECT_EQ(remote_session::identify(remote_session::display_id), remote_session::control_e::display);
+  EXPECT_TRUE(remote_session::dispatch(caller("frametop"), {}, {}, remote_session::control_e::display).allowed);
+  EXPECT_TRUE(remote_session::dispatch(caller("frametop"), game(), {}, remote_session::control_e::display).allowed);
+  EXPECT_TRUE(remote_session::dispatch(caller("frametop"), {}, {.role = remote_session::role_e::display}, remote_session::control_e::display).allowed);
+  EXPECT_FALSE(remote_session::dispatch(caller("frametop", true, false), {}, {}, remote_session::control_e::display).allowed);
+  EXPECT_FALSE(remote_session::dispatch(caller("monitor"), {}, {.role = remote_session::role_e::monitor}, remote_session::control_e::display).allowed);
+  EXPECT_FALSE(remote_session::dispatch(caller("frametop"), {}, {.role = remote_session::role_e::display}, remote_session::control_e::monitor).allowed);
+
+  EXPECT_EQ(remote_session::capture_plan(remote_session::role_e::display).source, remote_session::capture_source_e::invalid);
+  const auto plan = remote_session::capture_plan(remote_session::role_e::display, std::string {"\\\\.\\DISPLAY1"});
+  EXPECT_EQ(plan.source, remote_session::capture_source_e::exact_output);
+  EXPECT_EQ(plan.output, std::optional<std::string> {"\\\\.\\DISPLAY1"});
+
+  EXPECT_FALSE(remote_session::uses_audio(remote_session::role_e::display, true));
+  EXPECT_TRUE(remote_session::uses_audio(remote_session::role_e::display, false));
+  EXPECT_TRUE(remote_session::uses_host_audio(remote_session::role_e::display));
+
+  const auto projection = remote_session::project(caller("frametop"), {}, {}, {}, false);
+  EXPECT_TRUE(std::none_of(projection.catalogue.begin(), projection.catalogue.end(), [](const auto &app) {
+    return app.id == remote_session::display_id;
+  }));
+  EXPECT_NE(remote_session::synthetic_running_game_id(remote_session::display_id ^ 0x40000000), remote_session::display_id);
+}

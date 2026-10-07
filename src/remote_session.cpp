@@ -44,6 +44,7 @@ namespace remote_session {
       return (id >= resume_id && id <= running_game_id) ||
              id == secondary_resume_id || id == secondary_terminate_id ||
              id == secondary_monitor_id || id == secondary_input_id ||
+             id == display_id ||
              (id >= 2147483601 && id <= 2147483606);
     }
 
@@ -82,6 +83,7 @@ namespace remote_session {
     if (id == monitor_id || id == 2147483605 || uuid == "9a1c5a25-58fe-40e0-b9aa-7d3f00000005") return control_e::monitor;
     if (id == input_id || id == 2147483606 || uuid == "9a1c5a25-58fe-40e0-b9aa-7d3f00000006") return control_e::input;
     if (id == running_game_id || uuid == "9a1c5a25-58fe-40e0-b9aa-7d3f00000007") return control_e::running_game;
+    if (id == display_id) return control_e::display;
     return control_e::none;
   }
 
@@ -230,6 +232,12 @@ namespace remote_session {
         result.permission = permission_e::launch;
         result.allowed = caller.may_launch && owner.role == role_e::none;
         break;
+      case control_e::display:
+        // One existing display per paired client; launching again replaces the
+        // client's previous display stream.
+        result.permission = permission_e::launch;
+        result.allowed = caller.may_launch && (owner.role == role_e::none || owner.role == role_e::display);
+        break;
       case control_e::monitor:
         result.permission = permission_e::launch;
         // Moonlight may retry a slow /launch request or invoke a cached Remote
@@ -375,10 +383,10 @@ namespace remote_session {
   bool input_uses_display_or_audio(const role_e role) { return role != role_e::input; }
 
   bool uses_audio(const role_e role, const bool mute_remote_monitor) {
-    return role != role_e::input && !(role == role_e::monitor && mute_remote_monitor);
+    return role != role_e::input && !((role == role_e::monitor || role == role_e::display) && mute_remote_monitor);
   }
 
-  bool uses_host_audio(const role_e role) { return role == role_e::monitor; }
+  bool uses_host_audio(const role_e role) { return role == role_e::monitor || role == role_e::display; }
 
   bool disconnect_monitor_after_stream(
     const bool disconnect_on_stream_end,
@@ -392,7 +400,7 @@ namespace remote_session {
     if (role == role_e::input) {
       return {.source = capture_source_e::synthetic_black};
     }
-    if (role == role_e::monitor) {
+    if (role == role_e::monitor || role == role_e::display) {
       if (!output || output->empty()) {
         return {.source = capture_source_e::invalid};
       }

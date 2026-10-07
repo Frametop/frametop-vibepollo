@@ -130,7 +130,7 @@ namespace nvhttp {
       {
         std::lock_guard lock {remote_role_owners_mutex};
         result.active = !remote_role_owners.empty();
-        for (const auto role : {remote_session::role_e::monitor, remote_session::role_e::input}) {
+        for (const auto role : {remote_session::role_e::monitor, remote_session::role_e::input, remote_session::role_e::display}) {
           const auto it = remote_role_owners.find(remote_role_owner_key(uuid, role));
           if (it == remote_role_owners.end()) continue;
           caller_owner = it->second;
@@ -172,6 +172,7 @@ namespace nvhttp {
         std::lock_guard lock {remote_role_owners_mutex};
         remote_role_owners.erase(remote_role_owner_key(uuid, remote_session::role_e::monitor));
         remote_role_owners.erase(remote_role_owner_key(uuid, remote_session::role_e::input));
+        remote_role_owners.erase(remote_role_owner_key(uuid, remote_session::role_e::display));
       }
       remote_session::clear_app_replacement_confirmation(uuid);
     }
@@ -207,6 +208,10 @@ namespace nvhttp {
 
   void notify_remote_monitor_released(const std::string_view client_uuid, const std::uint64_t generation) {
     forget_remote_owner(client_uuid, remote_session::role_e::monitor, generation);
+  }
+
+  void notify_remote_display_ended(const std::string_view client_uuid, const std::uint64_t generation) {
+    forget_remote_owner(client_uuid, remote_session::role_e::display, generation);
   }
 
   namespace fs = std::filesystem;
@@ -338,6 +343,26 @@ namespace nvhttp {
         if (node.primary) topology.primary_device = device_id;
       }
       return display_helper_integration::apply_remote_composed_topology(topology);
+    }
+
+    // Frametop display role: the capture output of an existing, active display
+    // that Vibepollo did not create, named by its device id (as listed by
+    // /api/display-devices) or its display name (\\.\DISPLAYn).
+    std::optional<std::string> existing_display_capture_output(const std::string &requested) {
+      if (requested.empty()) return std::nullopt;
+      const auto devices = display_helper_integration::enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
+      if (!devices) return std::nullopt;
+      const auto capture_outputs = platf::display_names(platf::mem_type_e::dxgi);
+      for (const auto &device : *devices) {
+        if (!remote_device_id_equals(device.m_device_id, requested) && !remote_device_id_equals(device.m_display_name, requested)) continue;
+        if (!device.m_info || device.m_display_name.empty() || VDISPLAY::is_virtual_display_output(device.m_device_id)) return std::nullopt;
+        const auto output = std::find_if(capture_outputs.begin(), capture_outputs.end(), [&](const auto &candidate) {
+          return remote_device_id_equals(candidate, device.m_display_name);
+        });
+        if (output != capture_outputs.end()) return *output;
+        return std::nullopt;
+      }
+      return std::nullopt;
     }
 
     std::optional<std::string> remote_monitor_exact_capture_output(
@@ -4426,6 +4451,7 @@ namespace nvhttp {
 
         if (synthetic_control != remote_session::control_e::input &&
             synthetic_control != remote_session::control_e::monitor &&
+            synthetic_control != remote_session::control_e::display &&
             synthetic_control != remote_session::control_e::resume &&
             synthetic_control != remote_session::control_e::running_game) {
           tree.put("root.resume", 0);
@@ -4519,9 +4545,33 @@ namespace nvhttp {
         launch_session->role_generation = launch_session->id;
         launch_session->role = is_remote_input ?
                                  remote_session::role_e::input :
+                                 synthetic_control == remote_session::control_e::display ?
+                                 remote_session::role_e::display :
                                  remote_session::role_e::monitor;
         launch_session->host_audio = remote_session::uses_host_audio(launch_session->role);
         launch_session->continuous_audio = false;
+        if (launch_session->role == remote_session::role_e::display) {
+          // Capture an existing display as it is: no display is created and the
+          // layout isn't touched, so ending this stream has nothing to undo.
+          const auto requested_display = get_arg(args, std::string {remote_session::display_launch_arg}.c_str(), "");
+#ifdef _WIN32
+          const auto output = existing_display_capture_output(requested_display);
+#else
+          const std::optional<std::string> output;
+#endif
+          if (!output) {
+            tree.put("root.resume", 0);
+            tree.put("root.<xmlattr>.status_code", 404);
+            tree.put(
+              "root.<xmlattr>.status_message",
+              "frametopDisplay must name an active display that Vibepollo did not create (a device id from /api/display-devices)"
+            );
+            return;
+          }
+          launch_session->remote_capture_output = *output;
+          BOOST_LOG(info) << "Frametop display for client '" << request_client_identity.uuid
+                          << "' captures existing display '" << *output << "' (requested '" << requested_display << "').";
+        }
         if (launch_session->role == remote_session::role_e::monitor) {
 #ifdef __linux__
           launch_session->display_power_guard = platf::display_power::acquire();

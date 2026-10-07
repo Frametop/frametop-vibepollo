@@ -26,10 +26,15 @@ namespace remote_session {
   inline constexpr std::int32_t secondary_terminate_id = 2147483514;
   inline constexpr std::int32_t secondary_monitor_id = 2147483515;
   inline constexpr std::int32_t secondary_input_id = 2147483516;
+  // Frametop: stream one of the host's existing displays, named by the launch
+  // argument display_launch_arg, without creating a display or changing the
+  // layout. Hidden from the app list; launched by id.
+  inline constexpr std::int32_t display_id = 2147483521;
+  inline constexpr std::string_view display_launch_arg = "frametopDisplay";
   inline constexpr std::size_t max_client_vdds = 4;
 
-  enum class role_e : std::uint8_t { none, input, monitor, game };
-  enum class control_e : std::uint8_t { none, resume, disconnect_monitor, disconnect_input, terminate, monitor, input, running_game };
+  enum class role_e : std::uint8_t { none, input, monitor, game, display };
+  enum class control_e : std::uint8_t { none, resume, disconnect_monitor, disconnect_input, terminate, monitor, input, running_game, display };
   enum class permission_e : std::uint8_t { view, launch, terminate };
 
   struct app_t {
