@@ -58,6 +58,15 @@ namespace remote_display_topology {
     // prevents a callback from treating a GUID/device-id lookup as readiness.
     std::function<std::optional<std::string>(const std::string &client_uuid, const mode_t &mode)> exact_target_has_current_mode_and_dxgi;
     std::function<bool(const std::string &client_uuid)> remove_owned_display;
+    // Retire a departing owned display before recomposing the displays that remain,
+    // and recompose only when another owned display remains. Windows sets this:
+    // removing the virtual display lets Windows restore its own saved layout for
+    // the physical monitors, while switching the display off through a composed
+    // SetDisplayConfig can be refused (ERROR_INVALID_PARAMETER with a monitor
+    // placed above the primary), which then left the role held and the display
+    // attached. Linux keeps the default order so KWin is never left without
+    // outputs.
+    bool retire_before_recompose = false;
   };
 
   struct activation_result_t {
@@ -156,6 +165,8 @@ namespace remote_display_topology {
     struct capture_reference_t;
     void release_normal_game_identity_locked(const std::string &client_uuid, client_state_t &state);
     void release_locked(const std::string &client_uuid, client_state_t &state, const std::string &reason);
+    // Recomposes the remaining owned displays, if there are any (retire_before_recompose).
+    void recompose_remaining_locked();
     static mode_t desired_mode(const client_state_t &state);
     void resolve_effective_mode_locked(const std::string &client_uuid, client_state_t &state);
     std::vector<node_t> compose_locked(std::vector<std::string> &warnings) const;

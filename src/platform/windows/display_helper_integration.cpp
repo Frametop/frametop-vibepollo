@@ -521,6 +521,11 @@ namespace {
       return true;
     }
 
+    // A layout Windows refuses must leave the user's own layout alone. With
+    // automatic recovery, a refused Remote Monitor composition reapplied the
+    // display database, jogged the topology and reset display settings, which
+    // moved the host's physical monitors and changed its primary display.
+    display_device::DisplayRecoveryBehaviorGuard recovery_guard(display_device::DisplayRecoveryBehavior::Skip);
     auto ctx = make_settings_manager();
     if (!ctx) {
       BOOST_LOG(warning) << "Display helper: unable to initialize display context for topology apply (" << label << ").";
