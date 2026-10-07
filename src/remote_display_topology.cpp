@@ -284,6 +284,18 @@ namespace remote_display_topology {
       return;
     }
 
+    if (callbacks_.retire_before_recompose) {
+      // A display that can't be removed (or is already gone) still releases the
+      // identity: keeping it would make every later composition include a display
+      // that no longer exists.
+      if (callbacks_.remove_owned_display) {
+        (void) callbacks_.remove_owned_display(client_uuid);
+      }
+      clients_.erase(client_uuid);
+      recompose_remaining_locked();
+      return;
+    }
+
     // Retire the output from KWin only after the remaining/saved topology is
     // active.  Disconnecting the connector first can transiently leave the
     // compositor with zero outputs and force a physical-link retrain.
@@ -462,6 +474,14 @@ namespace remote_display_topology {
     }
     std::sort(managed_ids.begin(), managed_ids.end());
     clients_.clear();
+    if (callbacks_.retire_before_recompose) {
+      for (const auto &uuid : managed_ids) {
+        if (callbacks_.remove_owned_display) {
+          (void) callbacks_.remove_owned_display(uuid);
+        }
+      }
+      return;
+    }
     if (callbacks_.apply_composed_topology) {
       std::vector<std::string> ignored;
       (void) callbacks_.apply_composed_topology(compose_locked(ignored));
@@ -471,6 +491,16 @@ namespace remote_display_topology {
         (void) callbacks_.remove_owned_display(uuid);
       }
     }
+  }
+
+  void coordinator_t::recompose_remaining_locked() {
+    if (!callbacks_.apply_composed_topology) return;
+    const bool remaining = std::any_of(clients_.begin(), clients_.end(), [](const auto &entry) {
+      return entry.second.normal_game || entry.second.remote_monitor;
+    });
+    if (!remaining) return;
+    std::vector<std::string> ignored;
+    (void) callbacks_.apply_composed_topology(compose_locked(ignored));
   }
 
   void coordinator_t::release_locked(const std::string &client_uuid, client_state_t &state, const std::string &reason) {
@@ -493,6 +523,20 @@ namespace remote_display_topology {
     state.lease_held = state.normal_game;
     state.lifecycle = lifecycle_e::released;
     state.warning = reason;
+
+    if (remove_display && callbacks_.retire_before_recompose) {
+      if (!callbacks_.remove_owned_display || !callbacks_.remove_owned_display(client_uuid)) {
+        state.remote_monitor = true;
+        state.monitor_requested_mode = monitor_mode;
+        state.lease_held = previous_lease;
+        state.lifecycle = previous_lifecycle;
+        state.warning = previous_warning;
+        resolve_effective_mode_locked(client_uuid, state);
+        return;
+      }
+      recompose_remaining_locked();
+      return;
+    }
 
     // Recompose only the remaining explicit owners.  This intentionally does
     // not restore a saved/global topology or remove any peer identity.

@@ -387,6 +387,7 @@ namespace nvhttp {
           std::memcpy(&guid, stable_uuid.b8, sizeof(guid));
           return VDISPLAY::removeVirtualDisplay(guid);
         },
+        .retire_before_recompose = true,
       });
       remote_display_topology::instance().set_plaintext_rtsp_warning_provider([](const std::string &) {
         return rtsp_stream::plaintext_route_warning();
