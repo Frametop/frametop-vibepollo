@@ -175,6 +175,7 @@ jobs:
             lower=$(echo "$dll" | tr '[:upper:]' '[:lower:]')
             case $lower in
               libwebrtc.dll|zlib1.dll) echo "from the install: $dll" ;;
+              api-ms-win-*|ext-ms-*) echo "Windows API set: $dll" ;;  # the loader maps these, no file
               *) if [ -e "/c/Windows/System32/$dll" ]; then echo "from Windows: $dll"; else echo "::error::not in Windows or the install: $dll"; bad=1; fi ;;
             esac
           done
