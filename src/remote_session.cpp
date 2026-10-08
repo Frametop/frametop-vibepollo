@@ -388,6 +388,10 @@ namespace remote_session {
 
   bool uses_host_audio(const role_e role) { return role == role_e::monitor || role == role_e::display; }
 
+  bool display_stream_turns_hdr_off(const role_e role, const bool client_requested_hdr, const bool hdr_option_automatic) {
+    return role == role_e::display && !client_requested_hdr && hdr_option_automatic;
+  }
+
   bool disconnect_monitor_after_stream(
     const bool disconnect_on_stream_end,
     const bool disconnect_on_client_disconnect,

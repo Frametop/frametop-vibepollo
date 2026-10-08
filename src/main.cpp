@@ -48,6 +48,7 @@
 
   #include "src/display_helper_integration.h"
   #include "src/platform/windows/frame_limiter_nvcp.h"
+  #include "src/platform/windows/frametop_display_hdr.h"
   #include "src/platform/windows/misc.h"
   #include "src/platform/windows/playnite_integration.h"
   #include "src/platform/windows/rtss_integration.h"
@@ -999,6 +1000,10 @@ int main(int argc, char *argv[]) {
   std::thread rtspThread {rtsp_stream::start};
 
 #ifdef _WIN32
+  // Frametop: displays whose HDR a Frametop display stream turned off before a crash or a
+  // forced stop.
+  platf::frametop_display_hdr::restore_after_restart();
+
   // Stale-display cleanup is separate from encoder validation and therefore
   // runs only after the network listeners are available.
   if (startup_probe_succeeded) {

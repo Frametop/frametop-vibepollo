@@ -584,3 +584,11 @@ TEST(RemoteSession, FrametopDisplayStreamsOneExistingDisplayPerClient) {
   }));
   EXPECT_NE(remote_session::synthetic_running_game_id(remote_session::display_id ^ 0x40000000), remote_session::display_id);
 }
+
+TEST(RemoteSession, FrametopDisplayTurnsHdrOffOnlyForSdrStreamsWhenHdrFollowsTheClient) {
+  EXPECT_TRUE(remote_session::display_stream_turns_hdr_off(remote_session::role_e::display, false, true));
+  EXPECT_FALSE(remote_session::display_stream_turns_hdr_off(remote_session::role_e::display, true, true));
+  EXPECT_FALSE(remote_session::display_stream_turns_hdr_off(remote_session::role_e::display, false, false));
+  EXPECT_FALSE(remote_session::display_stream_turns_hdr_off(remote_session::role_e::monitor, false, true));
+  EXPECT_FALSE(remote_session::display_stream_turns_hdr_off(remote_session::role_e::game, false, true));
+}

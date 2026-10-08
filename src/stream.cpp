@@ -67,6 +67,7 @@ extern "C" {
 #ifdef _WIN32
   #include "platform/windows/frame_limiter.h"
   #include "platform/windows/display.h"
+  #include "platform/windows/frametop_display_hdr.h"
   #include "platform/windows/ipc/misc_utils.h"
   #include "platform/windows/misc.h"
   #include "platform/windows/present_timing.h"
@@ -583,6 +584,10 @@ namespace stream {
   struct session_t {
     std::shared_ptr<void> display_power_guard;
     std::shared_ptr<void> normal_display_capture;
+#ifdef _WIN32
+    // Frametop: holds an existing display's HDR off while this SDR stream captures it.
+    std::shared_ptr<void> frametop_display_hdr;
+#endif
     config_t config;
     int stream_fps = 0;
     int stream_fps_scaled = 0;
@@ -3501,6 +3506,9 @@ namespace stream {
       // this capture has joined and released every encoder/conversion import.
       session.normal_display_capture.reset();
       remote_display_topology::instance().release_drained_normal_game_identities();
+#ifdef _WIN32
+      session.frametop_display_hdr.reset();
+#endif
 
       if (session.remote_role == remote_session::role_e::monitor && !session.device_uuid.empty()) {
         const bool client_disconnected = session.client_disconnected.load(std::memory_order_acquire);
@@ -3934,6 +3942,16 @@ namespace stream {
       BOOST_LOG(info) << "Session capture source: role=" << static_cast<int>(launch_session.role)
                       << " source=" << static_cast<int>(session->config.monitor.capture_source)
                       << " output='" << session->config.monitor.capture_output.value_or(std::string {}) << "'.";
+#ifdef _WIN32
+      if (remote_session::display_stream_turns_hdr_off(
+            launch_session.role,
+            session->config.monitor.dynamicRange != 0,
+            config::video.dd.hdr_option == config::video_t::dd_t::hdr_option_e::automatic
+          ) &&
+          session->config.monitor.capture_output) {
+        session->frametop_display_hdr = platf::frametop_display_hdr::hold_sdr(*session->config.monitor.capture_output);
+      }
+#endif
 
 #if defined(_WIN32) || defined(__linux__)
       session->virtual_display.active = launch_session.virtual_display;

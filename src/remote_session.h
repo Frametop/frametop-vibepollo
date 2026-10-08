@@ -195,6 +195,10 @@ namespace remote_session {
   // localAudioPlayMode request. remote_monitor_mute_audio separately controls
   // whether the monitor receives an audio stream at all.
   [[nodiscard]] bool uses_host_audio(role_e role);
+  // Frametop: an SDR stream of an existing display turns that display's HDR off while it
+  // streams (an HDR desktop in an SDR stream looks washed out), when Vibepollo matches HDR to
+  // the client (dd_hdr_option automatic) as it does for main sessions.
+  [[nodiscard]] bool display_stream_turns_hdr_off(role_e role, bool client_requested_hdr, bool hdr_option_automatic);
   [[nodiscard]] bool disconnect_monitor_after_stream(bool disconnect_on_stream_end, bool disconnect_on_client_disconnect, bool client_disconnected);
   [[nodiscard]] capture_plan_t capture_plan(role_e role, std::optional<std::string> output = std::nullopt);
 
