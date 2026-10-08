@@ -151,7 +151,8 @@ jobs:
             -DSUNSHINE_PUBLISHER_WEBSITE="https://github.com/Frametop/frametop-vibepollo" \
             -DSUNSHINE_PUBLISHER_ISSUE_URL="https://github.com/DeeJanuz/frametop/issues"
           echo "::add-matcher::.github/matchers/gcc.json"
-          cmake --build build --target sunshine test_sunshine --parallel "$CMAKE_BUILD_PARALLEL_LEVEL"
+          cmake --build build --parallel "$CMAKE_BUILD_PARALLEL_LEVEL" --target sunshine \
+            test_component_remote_display_topology test_component_remote_session test_component_rtsp_pending_policy
           echo "::remove-matcher owner=gcc::"
 
       # The suites Frametop's changes touch (the Remote Monitor release, the Frametop display
@@ -160,7 +161,8 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$(cygpath -u "${WEBRTC_ROOT}")/bin:$(cygpath -u "${WEBRTC_ROOT}")/lib:$PATH"
-          ./build/tests/test_sunshine.exe --gtest_filter='RemoteDisplayTopology.*:RemoteSession.*:RtspPendingPolicy.*'
+          ctest --test-dir build --output-on-failure \
+            -R '^test_component_(remote_display_topology|remote_session|rtsp_pending_policy)$'
 
       # The exe goes into an existing Vibepollo 2.0.0 install, so it may only load DLLs that
       # Windows or that install has.
