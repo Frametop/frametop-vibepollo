@@ -23,6 +23,11 @@ on:
       release_version:
         required: true
         type: string
+      runner:
+        description: The runner when not self-hosted (Frametop's build uses a Depot runner)
+        required: false
+        type: string
+        default: ubuntu-latest
 
 jobs:
   build_archlinux:
@@ -37,7 +42,7 @@ jobs:
       COMMIT: ${{ inputs.release_commit }}
     permissions:
       contents: read
-    runs-on: ${{ inputs.use_self_hosted && github.repository == 'Nonary/Vibepollo' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && fromJSON('["self-hosted", "Linux", "X64", "linux-release"]') || fromJSON('["ubuntu-latest"]') }}
+    runs-on: ${{ inputs.use_self_hosted && github.repository == 'Nonary/Vibepollo' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && fromJSON('["self-hosted", "Linux", "X64", "linux-release"]') || inputs.runner }}
     container:
       image: archlinux/archlinux:base-devel
       options: --cpus 8 --memory 16g

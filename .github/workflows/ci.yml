@@ -16,8 +16,10 @@ on:
   push:
     branches:
       - '**'
+      - '!frametop/**'  # Frametop's branches and tags build in frametop-build.yml
     tags:
       - '*'
+      - '!frametop-*'
   pull_request:
     branches:
       - vibe
