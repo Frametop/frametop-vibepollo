@@ -8,5 +8,6 @@ The changes:
 - Windows: a Remote Monitor is released before the display topology is recomposed, and the host's own monitor layout is never reset.
 - A Frametop display role streams one of the host's existing displays.
 - The HTTPS thread never blocks waiting for a client's TLS close.
+- Windows: a Frametop display stream that asks for SDR turns the display's HDR off while it captures it, and back on when the stream ends (with `dd_hdr_option` automatic, the default). An HDR desktop in an SDR stream looked washed out.
 
 Each file has its SHA-256 next to it (`.sha256`). The source is this tag, under GPL-3.0 like Vibepollo.
