@@ -592,3 +592,10 @@ TEST(RemoteSession, FrametopDisplayTurnsHdrOffOnlyForSdrStreamsWhenHdrFollowsThe
   EXPECT_FALSE(remote_session::display_stream_turns_hdr_off(remote_session::role_e::monitor, false, true));
   EXPECT_FALSE(remote_session::display_stream_turns_hdr_off(remote_session::role_e::game, false, true));
 }
+
+TEST(RemoteSession, FrametopDisplaySetsTheStreamResolutionWhenResolutionFollowsTheClient) {
+  EXPECT_TRUE(remote_session::display_stream_sets_resolution(remote_session::role_e::display, true));
+  EXPECT_FALSE(remote_session::display_stream_sets_resolution(remote_session::role_e::display, false));
+  EXPECT_FALSE(remote_session::display_stream_sets_resolution(remote_session::role_e::monitor, true));
+  EXPECT_FALSE(remote_session::display_stream_sets_resolution(remote_session::role_e::game, true));
+}

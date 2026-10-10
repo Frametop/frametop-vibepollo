@@ -392,6 +392,10 @@ namespace remote_session {
     return role == role_e::display && !client_requested_hdr && hdr_option_automatic;
   }
 
+  bool display_stream_sets_resolution(const role_e role, const bool resolution_option_automatic) {
+    return role == role_e::display && resolution_option_automatic;
+  }
+
   bool disconnect_monitor_after_stream(
     const bool disconnect_on_stream_end,
     const bool disconnect_on_client_disconnect,

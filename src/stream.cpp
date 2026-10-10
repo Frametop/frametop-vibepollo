@@ -68,6 +68,7 @@ extern "C" {
   #include "platform/windows/frame_limiter.h"
   #include "platform/windows/display.h"
   #include "platform/windows/frametop_display_hdr.h"
+  #include "platform/windows/frametop_display_mode.h"
   #include "platform/windows/ipc/misc_utils.h"
   #include "platform/windows/misc.h"
   #include "platform/windows/present_timing.h"
@@ -587,6 +588,8 @@ namespace stream {
 #ifdef _WIN32
     // Frametop: holds an existing display's HDR off while this SDR stream captures it.
     std::shared_ptr<void> frametop_display_hdr;
+    // Frametop: holds an existing display at this stream's resolution while it captures it.
+    std::shared_ptr<void> frametop_display_mode;
 #endif
     config_t config;
     int stream_fps = 0;
@@ -3508,6 +3511,7 @@ namespace stream {
       remote_display_topology::instance().release_drained_normal_game_identities();
 #ifdef _WIN32
       session.frametop_display_hdr.reset();
+      session.frametop_display_mode.reset();
 #endif
 
       if (session.remote_role == remote_session::role_e::monitor && !session.device_uuid.empty()) {
@@ -3943,6 +3947,17 @@ namespace stream {
                       << " source=" << static_cast<int>(session->config.monitor.capture_source)
                       << " output='" << session->config.monitor.capture_output.value_or(std::string {}) << "'.";
 #ifdef _WIN32
+      if (remote_session::display_stream_sets_resolution(
+            launch_session.role,
+            config::video.dd.resolution_option == config::video_t::dd_t::resolution_option_e::automatic
+          ) &&
+          session->config.monitor.capture_output) {
+        session->frametop_display_mode = platf::frametop_display_mode::hold_resolution(
+          *session->config.monitor.capture_output,
+          session->config.monitor.width,
+          session->config.monitor.height
+        );
+      }
       if (remote_session::display_stream_turns_hdr_off(
             launch_session.role,
             session->config.monitor.dynamicRange != 0,
