@@ -9,5 +9,6 @@ The changes:
 - A Frametop display role streams one of the host's existing displays.
 - The HTTPS thread never blocks waiting for a client's TLS close.
 - Windows: a Frametop display stream that asks for SDR turns the display's HDR off while it captures it, and back on when the stream ends (with `dd_hdr_option` automatic, the default). An HDR desktop in an SDR stream looked washed out.
+- Windows: a Frametop display stream switches the display to the stream's resolution while it streams, and back when it ends (with `dd_resolution_option` automatic, the default), instead of scaling the display's own resolution into the stream.
 
 Each file has its SHA-256 next to it (`.sha256`). The source is this tag, under GPL-3.0 like Vibepollo.
