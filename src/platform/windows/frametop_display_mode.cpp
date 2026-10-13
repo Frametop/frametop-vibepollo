@@ -9,9 +9,11 @@
   #include "src/platform/windows/utf_utils.h"
   #include "src/state_storage.h"
 
+  #include <algorithm>
   #include <boost/algorithm/string/predicate.hpp>
   #include <boost/property_tree/ptree.hpp>
   #include <chrono>
+  #include <cmath>
   #include <display_device/windows/win_api_layer.h>
   #include <display_device/windows/win_api_utils.h>
   #include <display_device/windows/win_display_device.h>
@@ -22,7 +24,9 @@
   #include <nlohmann/json.hpp>
   #include <optional>
   #include <thread>
+  #include <tuple>
   #include <utility>
+  #include <vector>
 
 namespace platf::frametop_display_mode {
   using namespace std::literals;
@@ -73,6 +77,47 @@ namespace platf::frametop_display_mode {
 
     bool same_size(const DisplayMode &a, const DisplayMode &b) {
       return a.m_resolution.m_width == b.m_resolution.m_width && a.m_resolution.m_height == b.m_resolution.m_height;
+    }
+
+    // The display's own mode closest to width x height (EnumDisplaySettings on \\.\DISPLAYn): that
+    // size if it has it, else the nearest size with the same shape (within 1%), else the nearest
+    // shape. Windows takes only sizes the display lists: 1921x1080 failed outright on a monitor
+    // with 1920x1080 (2026-10-13). The refresh rate stays the display's own where that size has it.
+    std::optional<DisplayMode> closest_mode(const std::string &output_name, const DisplayMode &original, unsigned width, unsigned height) {
+      struct listed_t {
+        unsigned w, h, hz;
+      };
+
+      std::vector<listed_t> modes;
+      const std::wstring name = utf_utils::from_utf8(output_name);
+      (void) as_user([&]() {
+        DEVMODEW dm {};
+        dm.dmSize = sizeof dm;
+        for (DWORD i = 0; EnumDisplaySettingsW(name.c_str(), i, &dm); ++i) {
+          if ((dm.dmFields & (DM_PELSWIDTH | DM_PELSHEIGHT)) == (DM_PELSWIDTH | DM_PELSHEIGHT) && dm.dmPelsWidth && dm.dmPelsHeight) {
+            modes.push_back({dm.dmPelsWidth, dm.dmPelsHeight, dm.dmDisplayFrequency});
+          }
+        }
+        return true;
+      });
+      if (modes.empty() || !width || !height) {
+        return std::nullopt;
+      }
+      const auto &rate = original.m_refresh_rate;
+      const double hz = rate.m_denominator ? double(rate.m_numerator) / rate.m_denominator : 0.0;
+      const double shape = double(width) / height, area = double(width) * height;
+      const auto score = [&](const listed_t &m) {
+        const double off = std::abs(std::log(double(m.w) / m.h / shape));
+        return std::make_tuple(off > 0.01 ? off : 0.0, std::abs(std::log(double(m.w) * m.h / area)), std::abs(double(m.hz) - hz));
+      };
+      const auto best = *std::min_element(modes.begin(), modes.end(), [&](const listed_t &a, const listed_t &b) {
+        return score(a) < score(b);
+      });
+      DisplayMode mode {{best.w, best.h}, rate};
+      if (std::lround(hz) != long(best.hz)) {
+        mode.m_refresh_rate = {best.hz, 1};  // the display's own rate isn't listed at that size
+      }
+      return mode;
     }
 
     std::string describe(const DisplayMode &mode) {
@@ -330,8 +375,9 @@ namespace platf::frametop_display_mode {
           return nullptr;
         }
         const DisplayMode wanted {{static_cast<unsigned>(width), static_cast<unsigned>(height)}, original->m_refresh_rate};
-        if (same_size(*original, wanted)) {
-          return nullptr;
+        const DisplayMode target = closest_mode(output_name, *original, wanted.m_resolution.m_width, wanted.m_resolution.m_height).value_or(wanted);
+        if (same_size(*original, target)) {
+          return nullptr;  // (the display's closest mode is the one it's in)
         }
 
         // Listed first, so a crash while it's changed still gets it put back.
@@ -344,14 +390,14 @@ namespace platf::frametop_display_mode {
             }
           }
         }
-        pending["displays"][device_id] = {{"original", to_json(*original)}, {"set", to_json(wanted)}};
+        pending["displays"][device_id] = {{"original", to_json(*original)}, {"set", to_json(target)}};
         save_pending(pending);
 
-        const bool applied = dd->setDisplayModesTemporary({{device_id, wanted}});
+        const bool applied = dd->setDisplayModesTemporary({{device_id, target}});
         const auto now = current_mode(*dd, device_id);
         if (!applied || !now || same_size(*now, *original)) {
           BOOST_LOG(warning) << "Frametop display: couldn't switch " << output_name << " from " << describe(*original) << " to "
-                             << describe(wanted) << "; streaming it scaled.";
+                             << describe(target) << "; streaming it scaled.";
           if (now && !display_device::win_utils::fuzzyCompareModes(*now, *original)) {
             (void) dd->setDisplayModesTemporary({{device_id, *original}});
           }
