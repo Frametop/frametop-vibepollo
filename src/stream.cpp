@@ -3510,8 +3510,8 @@ namespace stream {
       session.normal_display_capture.reset();
       remote_display_topology::instance().release_drained_normal_game_identities();
 #ifdef _WIN32
+      session.frametop_display_mode.reset();  // the reverse of the start: resolution, then HDR
       session.frametop_display_hdr.reset();
-      session.frametop_display_mode.reset();
 #endif
 
       if (session.remote_role == remote_session::role_e::monitor && !session.device_uuid.empty()) {
@@ -3947,6 +3947,16 @@ namespace stream {
                       << " source=" << static_cast<int>(session->config.monitor.capture_source)
                       << " output='" << session->config.monitor.capture_output.value_or(std::string {}) << "'.";
 #ifdef _WIN32
+      // HDR first: Windows re-applies a display's saved mode when its HDR changes, which undid a
+      // resolution set just before (the stream captured the old size, letterboxed; 2026-10-13).
+      if (remote_session::display_stream_turns_hdr_off(
+            launch_session.role,
+            session->config.monitor.dynamicRange != 0,
+            config::video.dd.hdr_option == config::video_t::dd_t::hdr_option_e::automatic
+          ) &&
+          session->config.monitor.capture_output) {
+        session->frametop_display_hdr = platf::frametop_display_hdr::hold_sdr(*session->config.monitor.capture_output);
+      }
       if (remote_session::display_stream_sets_resolution(
             launch_session.role,
             config::video.dd.resolution_option == config::video_t::dd_t::resolution_option_e::automatic
@@ -3957,14 +3967,6 @@ namespace stream {
           session->config.monitor.width,
           session->config.monitor.height
         );
-      }
-      if (remote_session::display_stream_turns_hdr_off(
-            launch_session.role,
-            session->config.monitor.dynamicRange != 0,
-            config::video.dd.hdr_option == config::video_t::dd_t::hdr_option_e::automatic
-          ) &&
-          session->config.monitor.capture_output) {
-        session->frametop_display_hdr = platf::frametop_display_hdr::hold_sdr(*session->config.monitor.capture_output);
       }
 #endif
 
