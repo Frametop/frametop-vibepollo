@@ -1,3 +1,27 @@
+# Vibepollo, Frametop's build
+
+This fork is Vibepollo 2.0.0 with a few changes for [Frametop](https://github.com/Frametop/frametop)'s remote displays, which show a computer's monitors as screens on a Steam Frame. The branch is `frametop/2.0.0`, and each `frametop-*` tag is a release. The rest of this README is Vibepollo's own.
+
+## Install it
+
+Don't build it yourself. Frametop's host kits install the release:
+
+- **Windows:** [host/windows/README.md](https://github.com/Frametop/frametop/blob/experimental/host/windows/README.md). The kit installs Vibepollo 2.0.0 if needed, then swaps its `sunshine.exe` for this build after checking the file's SHA-256. The original stays next to it as `sunshine.exe.2.0.0-original`, and the kit's `-Undo` puts it back. Only Vibepollo 2.0.0's own exe is replaced; another version stops the kit with a message.
+- **Linux (Arch, CachyOS; not tested with Frametop yet):** [host/linux/README.md](https://github.com/Frametop/frametop/blob/experimental/host/linux/README.md). Install the release's `vibepollo-*.pkg.tar.zst` with Vibepollo's installer. Don't add Vibepollo's package repository afterwards: an update from it would replace this build.
+- **macOS:** Vibepollo has no Mac build. Frametop's Mac kit uses LizardByte's Sunshine instead, one instance per monitor: [host/macos/README.md](https://github.com/Frametop/frametop/blob/experimental/host/macos/README.md).
+
+## What it changes
+
+- A hidden "Frametop display" app (id 2147483521) streams one of the host's existing monitors, picked by its device id, without touching the monitor layout. Each client can hold one, so several monitors stream at once, and the main desktop app stays free for other clients.
+- Windows: while such a stream runs, its monitor switches to the stream's resolution (or the closest mode the monitor lists with the same shape), at its own refresh rate, and back when the stream ends. The change is temporary: Windows' saved display settings never change, and a crash or forced stop is undone at the next start. Needs `dd_resolution_option` automatic, the default.
+- Windows: a stream that asks for SDR turns the monitor's HDR off while it captures it, and back on after. HDR goes off before the resolution changes. Needs `dd_hdr_option` automatic, the default.
+- Windows: removing a Remote Monitor (a virtual display) releases it before the layout is recomposed, so the host's own monitor layout is never reset.
+- The HTTPS thread never waits on a client's TLS close, so the Web UI doesn't stall after a client disconnects.
+
+Frametop's own settings for Vibepollo (sound on Remote Monitors, and when they go away) are set by the Windows kit; see its README.
+
+---
+
 # Vibepollo
 
 ## What is Vibepollo?
