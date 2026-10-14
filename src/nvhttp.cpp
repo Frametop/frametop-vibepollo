@@ -467,6 +467,23 @@ namespace nvhttp {
       return static_cast<int>(std::lround(pixels / std::max(factor, 0.01)));
     }
 
+    // Frametop display role: the capture output of an existing, enabled display
+    // that Vibepollo did not create, named by its connector (the device id
+    // /api/display-devices lists, such as DP-1).
+    std::optional<std::string> existing_display_capture_output(const std::string &requested) {
+      if (requested.empty() || platf::linux_private_display::is_private_output(requested)) return std::nullopt;
+      // Full detail: KScreen info is only filled in for enabled outputs.
+      const auto devices = display_helper_integration::enumerate_devices(display_device::DeviceEnumerationDetail::Full);
+      if (!devices) return std::nullopt;
+      const auto device = std::find_if(devices->begin(), devices->end(), [&](const auto &candidate) {
+        return candidate.m_device_id == requested;
+      });
+      if (device == devices->end() || !device->m_info) return std::nullopt;
+      const auto capture_outputs = platf::display_names(platf::mem_type_e::unknown);
+      if (std::find(capture_outputs.begin(), capture_outputs.end(), requested) == capture_outputs.end()) return std::nullopt;
+      return requested;
+    }
+
     void refresh_remote_monitor_baseline(const bool extend_active_stream) {
       const auto devices = display_helper_integration::enumerate_devices(
         display_device::DeviceEnumerationDetail::Full
@@ -4554,7 +4571,17 @@ namespace nvhttp {
           // Capture an existing display as it is: no display is created and the
           // layout isn't touched, so ending this stream has nothing to undo.
           const auto requested_display = get_arg(args, std::string {remote_session::display_launch_arg}.c_str(), "");
-#ifdef _WIN32
+#ifdef __linux__
+          // An idle desktop may have blanked the display; wake it as a Remote Monitor does.
+          launch_session->display_power_guard = platf::display_power::acquire();
+          if (!launch_session->display_power_guard) {
+            tree.put("root.resume", 0);
+            tree.put("root.<xmlattr>.status_code", 503);
+            tree.put("root.<xmlattr>.status_message", "The desktop display could not be woken for streaming");
+            return;
+          }
+#endif
+#if defined(_WIN32) || defined(__linux__)
           const auto output = existing_display_capture_output(requested_display);
 #else
           const std::optional<std::string> output;

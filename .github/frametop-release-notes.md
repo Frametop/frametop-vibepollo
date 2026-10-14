@@ -6,7 +6,7 @@ Vibepollo 2.0.0 with Frametop's changes, for streaming a computer's displays to 
 The changes:
 
 - Windows: a Remote Monitor is released before the display topology is recomposed, and the host's own monitor layout is never reset.
-- A Frametop display role streams one of the host's existing displays.
+- A Frametop display role streams one of the host's existing displays, on Windows and Linux.
 - The HTTPS thread never blocks waiting for a client's TLS close.
 - Windows: a Frametop display stream that asks for SDR turns the display's HDR off while it captures it, and back on when the stream ends (with `dd_hdr_option` automatic, the default). An HDR desktop in an SDR stream looked washed out.
 - Windows: a Frametop display stream switches the display to the stream's resolution (or the closest mode the display lists with the same shape) while it streams, and back when it ends, instead of scaling the display's own resolution into the stream (with `dd_resolution_option` automatic, the default). HDR goes off before the resolution changes.
