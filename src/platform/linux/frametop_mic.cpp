@@ -25,6 +25,7 @@
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 using namespace std::literals;
@@ -221,6 +222,16 @@ namespace platf::frametop_mic {
   }  // namespace
 
   std::unique_ptr<device_t> open_device() {
+    // As a system service, Vibepollo reaches the desktop's sound only through its session broker,
+    // which has no operation for this yet.
+    if (std::getenv("VIBEPOLLO_MACHINE_HOST")) {
+      static bool told = false;
+      if (!std::exchange(told, true)) {
+        BOOST_LOG(warning) << "Frametop mic: Vibepollo's system service can't add a microphone to the desktop yet"sv;
+      }
+      return nullptr;
+    }
+
     auto device = std::make_unique<pipe_device_t>();
     if (!device->open()) {
       return nullptr;
