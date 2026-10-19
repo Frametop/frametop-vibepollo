@@ -385,6 +385,8 @@ sunshine_register_component(NAME test_component_rtsp_pending_policy TEST_SOURCE 
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/rtsp_pending_policy.cpp")
 sunshine_register_component(NAME test_component_pyrowave_policy TEST_SOURCE unit/test_pyrowave_policy.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/pyrowave_policy.cpp")
+sunshine_register_component(NAME test_component_frametop_mic_policy TEST_SOURCE unit/test_frametop_mic_policy.cpp
+    PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/frametop_mic_policy.cpp")
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     sunshine_register_component(NAME test_component_linux_routed_link
         TEST_SOURCE unit/platform/linux/test_routed_link.cpp

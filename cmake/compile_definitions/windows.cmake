@@ -275,6 +275,7 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/frametop_display_hdr.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/frametop_display_mode.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/frametop_display_mode.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/frametop_mic.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/lossless_scaling_paths.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/image_convert.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/image_convert.cpp"

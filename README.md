@@ -17,6 +17,7 @@ Don't build it yourself. Frametop's host kits install the release:
 - Windows: a stream that asks for SDR turns the monitor's HDR off while it captures it, and back on after. HDR goes off before the resolution changes. Needs `dd_hdr_option` automatic, the default.
 - Windows: removing a Remote Monitor (a virtual display) releases it before the layout is recomposed, so the host's own monitor layout is never reset.
 - The HTTPS thread never waits on a client's TLS close, so the Web UI doesn't stall after a client disconnects.
+- A client can send its microphone on the encrypted control stream (packet type 0x3003, Opus), and apps on the host record it. Windows: from "Microphone (Steam Streaming Microphone)", Steam's virtual microphone, installed from Steam's drivers if it's missing; the level Windows adds to it above 0 dB is taken back off, so apps hear the client's own level. Linux: from "Frametop Microphone", a PulseAudio or PipeWire source that's there while a client sends. Only clients allowed keyboard input can send it, one at a time, and never in the clear.
 
 Frametop's own settings for Vibepollo (sound on Remote Monitors, and when they go away) are set by the Windows kit; see its README.
 
