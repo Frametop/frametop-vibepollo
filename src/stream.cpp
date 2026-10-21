@@ -3964,6 +3964,7 @@ namespace stream {
         case remote_session::capture_source_e::exact_output:
           session->config.monitor.capture_source = video::capture_source_e::exact_output;
           session->config.monitor.capture_output = capture_plan.output;
+          session->config.monitor.capture_device_id = launch_session.remote_capture_device_id;
           break;
         case remote_session::capture_source_e::invalid:
           throw std::runtime_error("Remote Monitor launch is missing its exact capture output");
@@ -3976,6 +3977,19 @@ namespace stream {
                       << " source=" << static_cast<int>(session->config.monitor.capture_source)
                       << " output='" << session->config.monitor.capture_output.value_or(std::string {}) << "'.";
 #ifdef _WIN32
+      // Windows can give the displays other \\.\DISPLAYn names when one's HDR or mode changes
+      // (the LC34G55T got the name the MPG491CX had: the next step switched and streamed the
+      // wrong display, 2026-10-21), so each step goes by the display's name after the last one.
+      const auto refresh_capture_output = [&session]() {
+        const auto &device_id = session->config.monitor.capture_device_id;
+        if (!device_id || !session->config.monitor.capture_output) return;
+        const auto name = video::display_name_for_device(*device_id);
+        if (name && !boost::iequals(*name, *session->config.monitor.capture_output)) {
+          BOOST_LOG(info) << "Frametop display: " << *device_id << " is " << *name << " now (was "
+                          << *session->config.monitor.capture_output << ").";
+          session->config.monitor.capture_output = name;
+        }
+      };
       // HDR first: Windows re-applies a display's saved mode when its HDR changes, which undid a
       // resolution set just before (the stream captured the old size, letterboxed; 2026-10-13).
       if (remote_session::display_stream_turns_hdr_off(
@@ -3985,6 +3999,7 @@ namespace stream {
           ) &&
           session->config.monitor.capture_output) {
         session->frametop_display_hdr = platf::frametop_display_hdr::hold_sdr(*session->config.monitor.capture_output);
+        refresh_capture_output();
       }
       if (remote_session::display_stream_sets_resolution(
             launch_session.role,
@@ -3996,6 +4011,7 @@ namespace stream {
           session->config.monitor.width,
           session->config.monitor.height
         );
+        refresh_capture_output();
       }
 #endif
 

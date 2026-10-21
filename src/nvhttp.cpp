@@ -365,6 +365,34 @@ namespace nvhttp {
       return std::nullopt;
     }
 
+    // The device id of the display a display-role launch names (a device id or \\.\DISPLAYn).
+    std::optional<std::string> existing_display_device_id(const std::string &requested) {
+      if (requested.empty()) return std::nullopt;
+      const auto devices = display_helper_integration::enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
+      if (!devices) return std::nullopt;
+      for (const auto &device : *devices) {
+        if (remote_device_id_equals(device.m_device_id, requested) || remote_device_id_equals(device.m_display_name, requested)) {
+          return device.m_device_id;
+        }
+      }
+      return std::nullopt;
+    }
+
+    // The name of the display a display-role launch names when it's there and active but a
+    // capture worker (another stream) holds it: Desktop Duplication captures an output once
+    // per process, so its DXGI test fails and existing_display_capture_output() finds nothing.
+    std::optional<std::string> existing_display_held_by_another_stream(const std::string &requested) {
+      if (requested.empty()) return std::nullopt;
+      const auto devices = display_helper_integration::enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
+      if (!devices) return std::nullopt;
+      for (const auto &device : *devices) {
+        if (!remote_device_id_equals(device.m_device_id, requested) && !remote_device_id_equals(device.m_display_name, requested)) continue;
+        if (!device.m_info || device.m_display_name.empty() || !video::output_is_captured(device.m_display_name)) return std::nullopt;
+        return device.m_friendly_name.empty() ? device.m_display_name : device.m_friendly_name;
+      }
+      return std::nullopt;
+    }
+
     std::optional<std::string> remote_monitor_exact_capture_output(
       const std::string &client_uuid,
       const remote_display_topology::mode_t &mode
@@ -4587,6 +4615,17 @@ namespace nvhttp {
           const std::optional<std::string> output;
 #endif
           if (!output) {
+#ifdef _WIN32
+            if (const auto held = existing_display_held_by_another_stream(requested_display)) {
+              tree.put("root.resume", 0);
+              tree.put("root.<xmlattr>.status_code", 409);
+              tree.put(
+                "root.<xmlattr>.status_message",
+                *held + " is already streaming to another client; end that stream first"
+              );
+              return;
+            }
+#endif
             tree.put("root.resume", 0);
             tree.put("root.<xmlattr>.status_code", 404);
             tree.put(
@@ -4596,6 +4635,9 @@ namespace nvhttp {
             return;
           }
           launch_session->remote_capture_output = *output;
+#ifdef _WIN32
+          launch_session->remote_capture_device_id = existing_display_device_id(requested_display);
+#endif
           BOOST_LOG(info) << "Frametop display for client '" << request_client_identity.uuid
                           << "' captures existing display '" << *output << "' (requested '" << requested_display << "').";
         }

@@ -80,6 +80,10 @@ namespace video {
     // sessions use an in-memory black producer and never initialize capture.
     capture_source_e capture_source {capture_source_e::active_output};
     std::optional<std::string> capture_output;
+    // The display's device id when the exact output is an existing display (Frametop display
+    // role). Windows can renumber the \\.\DISPLAYn names, for one when a display's HDR is
+    // turned off, so capture finds the output's current name from it.
+    std::optional<std::string> capture_device_id;
     // Opt into the smallest supported host-side queues for a launch-qualified VRR
     // session. This remains false for clients that do not negotiate the mode.
     bool vrr_low_latency = false;
@@ -508,6 +512,20 @@ namespace video {
    * @warning This is only safe to call when there is no client actively streaming.
    */
   int probe_encoders();
+
+  /**
+   * @brief Whether a session's capture worker holds this output now.
+   * @details Desktop Duplication captures an output once per process, so another
+   * session can't capture an output a worker holds until that worker ends.
+   * @param output_name The output's capture name, such as `\\.\DISPLAY2` (any case).
+   */
+  bool output_is_captured(const std::string &output_name);
+
+  /**
+   * @brief The capture name (\\.\DISPLAYn) an active display has now, by its device id.
+   * @return std::nullopt when no active display has that id, and on other platforms than Windows.
+   */
+  std::optional<std::string> display_name_for_device(const std::string &device_id);
 
   // Several NTSC standard refresh rates are hardcoded here, because their
   // true rate requires a denominator of 1001. ffmpeg's av_d2q() would assume it could
