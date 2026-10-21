@@ -3990,9 +3990,19 @@ namespace stream {
           session->config.monitor.capture_output = name;
         }
       };
+      // A display another stream captures already (a Mac watching the same monitor) stays as it
+      // is: its HDR and resolution are that stream's picture too. This stream scales it instead.
+      const bool display_shared =
+        session->config.monitor.capture_device_id && session->config.monitor.capture_output &&
+        video::output_is_captured(*session->config.monitor.capture_output);
+      if (display_shared) {
+        BOOST_LOG(info) << "Frametop display: " << *session->config.monitor.capture_output
+                        << " streams to another client too; its HDR and resolution stay as they are.";
+      }
       // HDR first: Windows re-applies a display's saved mode when its HDR changes, which undid a
       // resolution set just before (the stream captured the old size, letterboxed; 2026-10-13).
-      if (remote_session::display_stream_turns_hdr_off(
+      if (!display_shared &&
+          remote_session::display_stream_turns_hdr_off(
             launch_session.role,
             session->config.monitor.dynamicRange != 0,
             config::video.dd.hdr_option == config::video_t::dd_t::hdr_option_e::automatic
@@ -4001,7 +4011,8 @@ namespace stream {
         session->frametop_display_hdr = platf::frametop_display_hdr::hold_sdr(*session->config.monitor.capture_output);
         refresh_capture_output();
       }
-      if (remote_session::display_stream_sets_resolution(
+      if (!display_shared &&
+          remote_session::display_stream_sets_resolution(
             launch_session.role,
             config::video.dd.resolution_option == config::video_t::dd_t::resolution_option_e::automatic
           ) &&
