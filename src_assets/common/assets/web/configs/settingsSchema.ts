@@ -925,8 +925,10 @@ export const settingsCategories: SettingsCategory[] = [
           extendedField('locale'),
           extendedField('update_check_interval'),
           text('sunshine_name', { placeholderKey: 'ui.settings.placeholders.host_name' }),
-          boolean('system_tray'),
-          boolean('hide_tray_controls'),
+          // Linux packages run the host as a system service with no tray (vibepollo-machine-host
+          // forces system_tray=disabled), so these do nothing there.
+          boolean('system_tray', { platform: ['windows', 'macos'] }),
+          boolean('hide_tray_controls', { platform: ['windows', 'macos'] }),
           boolean('envvar_compatibility_mode'),
           boolean('notify_pre_releases'),
           select('min_log_level', [
