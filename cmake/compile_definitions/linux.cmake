@@ -370,6 +370,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             "${CMAKE_SOURCE_DIR}/src/platform/linux/routed_link.h"
             "${CMAKE_SOURCE_DIR}/src/platform/linux/routed_link.cpp"
             "${CMAKE_SOURCE_DIR}/src/platform/linux/display_power.cpp"
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/frametop_mic.cpp"
             "${CMAKE_SOURCE_DIR}/src/platform/linux/frame_limiter.cpp"
             "${CMAKE_SOURCE_DIR}/src/platform/linux/private_display.h"
             "${CMAKE_SOURCE_DIR}/src/platform/linux/display_backend.cpp"

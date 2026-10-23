@@ -42,6 +42,7 @@ extern "C" {
 #include "crypto.h"
 #include "display_device.h"
 #include "display_helper_integration.h"
+#include "frametop_mic.h"
 #include "globals.h"
 #include "host_stats.h"
 #include "input.h"
@@ -102,6 +103,7 @@ extern "C" {
 #define IDX_SET_CLIPBOARD 16
 #define IDX_FILE_TRANSFER_NONCE_REQUEST 17
 #define IDX_SET_ADAPTIVE_TRIGGERS 18
+#define IDX_FRAMETOP_MIC 19
 
 static const short packetTypes[] = {
   0x0305,  // Start A
@@ -123,6 +125,7 @@ static const short packetTypes[] = {
   0x3001,  // Set Clipboard (Apollo protocol extension)
   0x3002,  // File transfer nonce request (Apollo protocol extension)
   0x5503,  // Set Adaptive triggers (Sunshine protocol extension)
+  frametop_mic::policy::PACKET_TYPE,  // Frametop: the client's microphone (Apollo protocol extension range)
 };
 
 namespace asio = boost::asio;
@@ -675,6 +678,9 @@ namespace stream {
     std::uint32_t launch_session_id;
     std::mutex metadata_mutex;
     std::string device_name;
+    // Frametop: the microphone this client sends, made by its first packet. Used on the control
+    // stream thread only, until join() drops it.
+    std::unique_ptr<frametop_mic::receiver_t> frametop_mic;
     std::string history_device_name;
     std::string device_uuid;
     // Per-stream identifier used by the session_history subsystem. Distinct
@@ -1598,6 +1604,27 @@ namespace stream {
       if (!(session->permission & crypto::PERM::file_upload)) {
         BOOST_LOG(debug) << "Permission File Upload deined for [" << session->device_name << "]";
         return;
+      }
+    });
+
+    server->map(packetTypes[IDX_FRAMETOP_MIC], [](session_t *session, const std::string_view &payload) {
+      if (!session->frametop_mic) {
+        std::string client;
+        {
+          std::lock_guard lg {session->metadata_mutex};
+          client = session->device_name;
+        }
+        session->frametop_mic = std::make_unique<frametop_mic::receiver_t>(std::move(client));
+      }
+
+      // Only an encrypted control stream gets here as type 13: call() drops anything that
+      // arrived in plaintext.
+      if (session->config.controlProtocolType != 13) {
+        session->frametop_mic->refuse("its control stream isn't encrypted");
+      } else if (!(session->permission & crypto::PERM::input_kbd)) {
+        session->frametop_mic->refuse("it isn't allowed keyboard input");
+      } else {
+        session->frametop_mic->receive(payload);
       }
     });
 
@@ -3469,6 +3496,8 @@ namespace stream {
         BOOST_LOG(debug) << "Waiting for control to end..."sv;
         session.controlEnd.view();
       }
+      // The control stream no longer calls into this session, so its microphone can stop.
+      session.frametop_mic.reset();
       // Watchdog coverage ends with the thread joins, which are the unbounded and
       // unrecoverable part. Everything below waits on the process-wide lifecycle
       // gate, which other threads legitimately hold for much longer than
@@ -3935,6 +3964,7 @@ namespace stream {
         case remote_session::capture_source_e::exact_output:
           session->config.monitor.capture_source = video::capture_source_e::exact_output;
           session->config.monitor.capture_output = capture_plan.output;
+          session->config.monitor.capture_device_id = launch_session.remote_capture_device_id;
           break;
         case remote_session::capture_source_e::invalid:
           throw std::runtime_error("Remote Monitor launch is missing its exact capture output");
@@ -3947,17 +3977,42 @@ namespace stream {
                       << " source=" << static_cast<int>(session->config.monitor.capture_source)
                       << " output='" << session->config.monitor.capture_output.value_or(std::string {}) << "'.";
 #ifdef _WIN32
+      // Windows can give the displays other \\.\DISPLAYn names when one's HDR or mode changes
+      // (the LC34G55T got the name the MPG491CX had: the next step switched and streamed the
+      // wrong display, 2026-10-21), so each step goes by the display's name after the last one.
+      const auto refresh_capture_output = [&session]() {
+        const auto &device_id = session->config.monitor.capture_device_id;
+        if (!device_id || !session->config.monitor.capture_output) return;
+        const auto name = video::display_name_for_device(*device_id);
+        if (name && !boost::iequals(*name, *session->config.monitor.capture_output)) {
+          BOOST_LOG(info) << "Frametop display: " << *device_id << " is " << *name << " now (was "
+                          << *session->config.monitor.capture_output << ").";
+          session->config.monitor.capture_output = name;
+        }
+      };
+      // A display another stream captures already (a Mac watching the same monitor) stays as it
+      // is: its HDR and resolution are that stream's picture too. This stream scales it instead.
+      const bool display_shared =
+        session->config.monitor.capture_device_id && session->config.monitor.capture_output &&
+        video::output_is_captured(*session->config.monitor.capture_output);
+      if (display_shared) {
+        BOOST_LOG(info) << "Frametop display: " << *session->config.monitor.capture_output
+                        << " streams to another client too; its HDR and resolution stay as they are.";
+      }
       // HDR first: Windows re-applies a display's saved mode when its HDR changes, which undid a
       // resolution set just before (the stream captured the old size, letterboxed; 2026-10-13).
-      if (remote_session::display_stream_turns_hdr_off(
+      if (!display_shared &&
+          remote_session::display_stream_turns_hdr_off(
             launch_session.role,
             session->config.monitor.dynamicRange != 0,
             config::video.dd.hdr_option == config::video_t::dd_t::hdr_option_e::automatic
           ) &&
           session->config.monitor.capture_output) {
         session->frametop_display_hdr = platf::frametop_display_hdr::hold_sdr(*session->config.monitor.capture_output);
+        refresh_capture_output();
       }
-      if (remote_session::display_stream_sets_resolution(
+      if (!display_shared &&
+          remote_session::display_stream_sets_resolution(
             launch_session.role,
             config::video.dd.resolution_option == config::video_t::dd_t::resolution_option_e::automatic
           ) &&
@@ -3967,6 +4022,7 @@ namespace stream {
           session->config.monitor.width,
           session->config.monitor.height
         );
+        refresh_capture_output();
       }
 #endif
 

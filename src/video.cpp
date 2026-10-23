@@ -3082,6 +3082,84 @@ namespace video {
     refresh_displays(dev_type, display_names, current_display_index, empty_str, std::nullopt);
   }
 
+  namespace {
+    std::mutex captured_outputs_mutex;
+    std::map<std::string, int> captured_outputs;  // lower-case capture name -> workers holding it
+
+    std::string captured_output_key(std::string name) {
+      std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+      });
+      return name;
+    }
+
+    // The output a capture worker captures, counted in captured_outputs while it does.
+    class captured_output_claim_t {
+    public:
+      captured_output_claim_t() = default;
+      captured_output_claim_t(const captured_output_claim_t &) = delete;
+      captured_output_claim_t &operator=(const captured_output_claim_t &) = delete;
+
+      ~captured_output_claim_t() {
+        set({});
+      }
+
+      void set(const std::string &output_name) {
+        auto key = captured_output_key(output_name);
+        std::lock_guard lock {captured_outputs_mutex};
+        if (key == held) {
+          return;
+        }
+        if (!held.empty() && --captured_outputs[held] <= 0) {
+          captured_outputs.erase(held);
+        }
+        held = std::move(key);
+        if (!held.empty()) {
+          ++captured_outputs[held];
+        }
+      }
+
+    private:
+      std::string held;
+    };
+  }  // namespace
+
+  bool output_is_captured(const std::string &output_name) {
+    std::lock_guard lock {captured_outputs_mutex};
+    return captured_outputs.contains(captured_output_key(output_name));
+  }
+
+  std::optional<std::string> display_name_for_device(const std::string &device_id) {
+#ifdef _WIN32
+    if (device_id.empty()) return std::nullopt;
+    const auto devices = display_helper_integration::enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
+    if (!devices) return std::nullopt;
+    for (const auto &device : *devices) {
+      if (device.m_info && !device.m_display_name.empty() && boost::iequals(device.m_device_id, device_id)) {
+        return device.m_display_name;
+      }
+    }
+#endif
+    return std::nullopt;
+  }
+
+  namespace {
+    // The exact output a capture config asks for, by its display's current name when it has a
+    // device id (see config_t::capture_device_id).
+    std::optional<std::string> exact_capture_output(const config_t &config) {
+      if (config.capture_device_id) {
+        if (auto name = display_name_for_device(*config.capture_device_id)) {
+          if (!config.capture_output || !boost::iequals(*name, *config.capture_output)) {
+            BOOST_LOG(info) << "Capture: display " << *config.capture_device_id << " is " << *name << " now (was "
+                            << config.capture_output.value_or("none") << ").";
+          }
+          return name;
+        }
+      }
+      return config.capture_output;
+    }
+  }  // namespace
+
   void captureThread(
     std::shared_ptr<safe::queue_t<capture_ctx_t>> capture_ctx_queue,
     sync_util::sync_t<std::weak_ptr<platf::display_t>> &display_wp,
@@ -3121,6 +3199,7 @@ namespace video {
     int display_p = -1;
     std::shared_ptr<platf::display_t> disp;
     std::size_t display_retry_failures = 0;
+    captured_output_claim_t output_claim;  // the output disp captures, for output_is_captured()
 
     while (capture_ctx_queue->running()) {
       const auto &capture_config = capture_ctxs.front().config;
@@ -3132,7 +3211,7 @@ namespace video {
       }
 
       const auto exact_output = capture_config.capture_source == capture_source_e::exact_output;
-      const auto required_output = exact_output ? capture_config.capture_output : std::nullopt;
+      const auto required_output = exact_output ? exact_capture_output(capture_config) : std::nullopt;
       const bool log_display_retry = policy::should_log_display_retry(display_retry_failures);
       refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, required_output, exact_output, log_display_retry);
 
@@ -3166,6 +3245,7 @@ namespace video {
       }
       disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
       if (disp) {
+        output_claim.set(display_names[display_p]);
         break;
       }
 
@@ -3500,7 +3580,7 @@ namespace video {
 
               // Refresh display names since a display removal might have caused the reinitialization
               const auto exact_output = capture_ctxs.front().config.capture_source == capture_source_e::exact_output;
-              const auto required_output = exact_output ? capture_ctxs.front().config.capture_output : std::nullopt;
+              const auto required_output = exact_output ? exact_capture_output(capture_ctxs.front().config) : std::nullopt;
               refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, proc::proc.display_name, required_output, exact_output, policy::should_log_display_retry(display_retry_failures));
 
               const bool allow_process_display_preference = video::policy::may_apply_process_display_preference(
@@ -3532,6 +3612,7 @@ namespace video {
               // reset_display() will sleep between retries
               reset_display(disp, encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
               if (disp) {
+                output_claim.set(display_names[display_p]);
                 if (!exact_output) {
                   proc::proc.display_name = display_names[display_p];
                 }
