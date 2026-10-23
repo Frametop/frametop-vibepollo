@@ -1,5 +1,5 @@
 ---
-# Frametop's build of Vibepollo 2.0.0 (https://github.com/DeeJanuz/frametop): sunshine.exe, which
+# Frametop's build of Vibepollo 2.0.1 (https://github.com/DeeJanuz/frametop): sunshine.exe, which
 # Frametop's Windows host setup swaps in over the stock one, and the Arch Linux package, on
 # Depot's runners (the Frametop org's Depot GitHub app). It runs when started by hand (Actions
 # -> Frametop build -> Run workflow), which keeps the files as artifacts, and on a frametop-*
@@ -29,7 +29,7 @@ jobs:
     permissions:
       contents: read
     env:
-      BUILD_VERSION: 2.0.0
+      BUILD_VERSION: 2.0.1
       NODE_VERSION: 22.22.2
       CMAKE_BUILD_PARALLEL_LEVEL: 8
       WEBRTC_ROOT: ${{ github.workspace }}\.vibepollo-deps\libwebrtc\out
@@ -164,7 +164,7 @@ jobs:
           ctest --test-dir build --output-on-failure \
             -R '^test_component_(remote_display_topology|remote_session|rtsp_pending_policy)$'
 
-      # The exe goes into an existing Vibepollo 2.0.0 install, so it may only load DLLs that
+      # The exe goes into an existing Vibepollo 2.0.1 install, so it may only load DLLs that
       # Windows or that install has.
       - name: Check DLLs and package
         run: |
@@ -201,7 +201,7 @@ jobs:
       runner: depot-ubuntu-24.04-8
       artifact_retention_days: 14
       release_commit: ${{ github.sha }}
-      release_version: 2.0.0
+      release_version: 2.0.1
 
   release:
     name: Publish the release
