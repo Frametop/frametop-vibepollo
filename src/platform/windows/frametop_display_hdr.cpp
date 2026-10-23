@@ -5,6 +5,7 @@
   #include "src/logging.h"
   #include "src/platform/windows/display.h"
   #include "src/platform/windows/impersonating_display_device.h"
+  #include "src/platform/windows/utf_utils.h"
   #include "src/state_storage.h"
 
   #include <boost/algorithm/string/predicate.hpp>
@@ -27,6 +28,36 @@ namespace platf::frametop_display_hdr {
   namespace {
     std::mutex g_mutex;
     std::map<std::string, int> g_holds;  // device id -> streams holding its HDR off
+
+    // Whether an attached output (GDI name, e.g. \\.\DISPLAY1) is in the HDR10 colour
+    // space, without opening a capture device. Upstream dropped its own copy of this in 2.0.1.
+    bool hdr_active_for_output(const std::string &output_name) {
+      dxgi::factory1_t factory;
+      if (FAILED(CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &factory))) {
+        return false;
+      }
+      dxgi::adapter_t::pointer adapter_p {};
+      for (int x = 0; factory->EnumAdapters1(x, &adapter_p) != DXGI_ERROR_NOT_FOUND; ++x) {
+        dxgi::adapter_t adapter {adapter_p};
+        dxgi::output_t::pointer output_p {};
+        for (int y = 0; adapter->EnumOutputs(y, &output_p) != DXGI_ERROR_NOT_FOUND; ++y) {
+          dxgi::output_t output {output_p};
+          DXGI_OUTPUT_DESC desc;
+          if (FAILED(output->GetDesc(&desc)) || !desc.AttachedToDesktop || utf_utils::to_utf8(desc.DeviceName) != output_name) {
+            continue;
+          }
+          dxgi::output6_t output6 {};
+          DXGI_OUTPUT_DESC1 desc1;
+          if (FAILED(output->QueryInterface(IID_IDXGIOutput6, (void **) &output6)) || FAILED(output6->GetDesc1(&desc1))) {
+            continue;
+          }
+          if (desc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
 
     std::shared_ptr<display_device::WinDisplayDeviceInterface> make_display_device() {
       auto api = std::make_shared<display_device::WinApiLayer>();
@@ -174,7 +205,7 @@ namespace platf::frametop_display_hdr {
 
     // Capture starts in SDR rather than switching formats mid-stream.
     const auto deadline = std::chrono::steady_clock::now() + 3s;
-    while (platf::dxgi::is_hdr_active_for_output(output_name) && std::chrono::steady_clock::now() < deadline) {
+    while (hdr_active_for_output(output_name) && std::chrono::steady_clock::now() < deadline) {
       std::this_thread::sleep_for(100ms);
     }
     BOOST_LOG(info) << "Frametop display: HDR off for " << output_name << " while it streams in SDR.";

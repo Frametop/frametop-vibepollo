@@ -129,7 +129,7 @@ struct capture_thread_async_ctx_t {
 #define _WIN32
 // END
 #undef _WIN32
-struct session_t{std::thread videoThread,audioThread;safe::signal_t controlEnd;};
+struct session_t{std::thread videoThread,audioThread;safe::signal_t controlEnd;std::shared_ptr<void> frametop_mic;};
 void join_session(session_t& session){
 // JOIN
 }
