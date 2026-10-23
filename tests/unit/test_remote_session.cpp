@@ -528,11 +528,15 @@ TEST(RemoteSession, MonitorHooksRejectWithoutTopologyAndPreserveGeneration) {
 
   std::uint64_t released_generation {};
   remote_session::register_monitor_runtime_hooks({
-    .explicit_release = [&released_generation](std::string_view, std::uint64_t generation, std::string_view) { released_generation = generation; },
+    .explicit_release = [&released_generation](std::string_view, std::uint64_t generation, std::string_view) {
+      released_generation = generation;
+      return true;
+    },
   });
-  remote_session::release_monitor("client", 7, "disconnect");
+  EXPECT_TRUE(remote_session::release_monitor("client", 7, "disconnect"));
   EXPECT_EQ(released_generation, 7u);
   remote_session::register_monitor_runtime_hooks({});
+  EXPECT_FALSE(remote_session::release_monitor("client", 8, "unavailable"));
 }
 
 TEST(RemoteSession, MonitorRuntimeTransportsHdrRequest) {
@@ -598,4 +602,16 @@ TEST(RemoteSession, FrametopDisplaySetsTheStreamResolutionWhenResolutionFollowsT
   EXPECT_FALSE(remote_session::display_stream_sets_resolution(remote_session::role_e::display, false));
   EXPECT_FALSE(remote_session::display_stream_sets_resolution(remote_session::role_e::monitor, true));
   EXPECT_FALSE(remote_session::display_stream_sets_resolution(remote_session::role_e::game, true));
+}
+
+TEST(RemoteSession, PendingRegistrySupportsEightClientsAndKeepsItsBound) {
+  remote_session::pending_registry_t registry;
+  const auto expiry = std::chrono::steady_clock::now() + std::chrono::minutes(1);
+  for (std::uint32_t id = 1; id <= 16; ++id) {
+    EXPECT_TRUE(registry.add({.launch_id = id, .client_uuid = std::to_string((id - 1) / 2), .crypto_binding = std::to_string(id), .encrypted = true, .role = remote_session::role_e::monitor, .expires_at = expiry}));
+  }
+  EXPECT_FALSE(registry.add({.launch_id = 17, .client_uuid = "ninth", .crypto_binding = "new", .encrypted = true, .expires_at = expiry}));
+  EXPECT_TRUE(registry.match_encrypted("7", "16", std::chrono::steady_clock::now()));
+  registry.erase(16);
+  EXPECT_TRUE(registry.add({.launch_id = 17, .client_uuid = "replacement", .crypto_binding = "new", .encrypted = true, .expires_at = expiry}));
 }
