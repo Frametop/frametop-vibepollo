@@ -476,3 +476,58 @@ TEST(OutputLayout, RejectsTheWholeReplyForAnyMalformedLine) {
   EXPECT_FALSE(parse("L\tDP-1\t0\t0\t2560\t1440\nL\tDP-1\t2560\t0\t2560\t1440\n"));
   EXPECT_FALSE(parse(std::string(platf::linux_display::layout::max_reply_bytes + 1, '\n')));
 }
+
+TEST(OutputLayout, EnforcesItsLimits) {
+  using namespace platf::linux_display::layout;
+  EXPECT_FALSE(parse("L\t" + std::string(max_name_length + 1, 'A') + "\t0\t0\t1\t1\n"));
+  EXPECT_TRUE(parse("L\t" + std::string(max_name_length, 'A') + "\t0\t0\t1\t1\n"));
+  EXPECT_FALSE(parse("L\tDP-1\t0\t0\t" + std::to_string(max_extent + 1) + "\t1\n"));
+  EXPECT_FALSE(parse("L\tDP-1\t0\t-2000000\t1\t1\n"));
+  EXPECT_FALSE(parse("L\tDP-1\t0\t0\t1\t1\r\n"));
+  EXPECT_FALSE(parse("\n"));
+  std::string outputs;
+  for (std::size_t index = 0; index <= max_outputs; ++index) {
+    outputs += "L\tDP-" + std::to_string(index) + "\t0\t0\t1\t1\n";
+  }
+  EXPECT_FALSE(parse(outputs));
+}
+
+namespace {
+  struct fake_viewport_t {
+    int offset_x = 0, offset_y = 0, width = 0, height = 0, logical_width = 0, logical_height = 0;
+    std::string output_name;
+  };
+
+  fake_viewport_t scanout(int width, int height) {
+    fake_viewport_t viewport;
+    viewport.width = width;
+    viewport.height = height;
+    return viewport;
+  }
+}  // namespace
+
+TEST(OutputLayout, PlacesEachUniquelyNamedUnrotatedOutput) {
+  using namespace platf::linux_display::layout;
+  const auto layout = parse(
+    "L\teDP-2\t1536\t2880\t2048\t1280\nL\tDP-2\t0\t1440\t5120\t1440\n"
+    "L\tHDMI-A-1\t5120\t1440\t1440\t2560\nL\tDP-1\t6560\t1440\t1\t1\nL\tHEADLESS-1\t6561\t1440\t1\t1\n"
+  );
+  ASSERT_TRUE(layout);
+  auto panel = scanout(2560, 1600), wide = scanout(5120, 1440), rotated = scanout(2560, 1440);
+  auto first_gpu = scanout(1, 1), second_gpu = scanout(1, 1);
+  const std::vector<capture_output_t<fake_viewport_t>> capture {
+    {"eDP-2", &panel}, {"DP-2", &wide}, {"HDMI-A-1", &rotated}, {"DP-1", &first_gpu}, {"DP-1", &second_gpu}
+  };
+  EXPECT_EQ(place(*layout, capture), (std::vector<std::string> {"HDMI-A-1", "DP-1", "HEADLESS-1"}));
+  EXPECT_EQ(panel.output_name, "eDP-2");
+  EXPECT_EQ(panel.offset_x, 1536);
+  EXPECT_EQ(panel.offset_y, 1440);
+  EXPECT_EQ(panel.logical_width, 2048);
+  EXPECT_EQ(panel.logical_height, 1280);
+  EXPECT_EQ(wide.offset_y, 0);
+  EXPECT_EQ(wide.logical_width, 5120);
+  EXPECT_TRUE(rotated.output_name.empty());  // portrait layout over a landscape scanout
+  EXPECT_EQ(rotated.logical_width, 0);
+  EXPECT_TRUE(first_gpu.output_name.empty());
+  EXPECT_TRUE(second_gpu.output_name.empty());
+}

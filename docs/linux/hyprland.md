@@ -67,12 +67,15 @@ launch can stream one of these physical outputs, named by the connector that
 display enumeration lists. Enumeration gives each output with an active scanout
 its KMS size and refresh rate; its layout position, scale and primary display
 aren't listed. The machine service has no Wayland connection, so for absolute
-mouse and touch input the session broker's read-only `display-layout` request
-reports each output's logical position and size (xdg-output). Input then lands
-on the right spot with any arrangement or fractional scale. The display role
-takes no display power guard here, so the display must already be on: if
-Hyprland's idle handling turns it off, capture fails. HDR outputs fail closed
-as above.
+mouse input the session broker's read-only `display-layout` request reports
+each output's logical position and size (xdg-output), matched to its KMS output
+by exact connector name. The pointer then lands on the right spot with any
+arrangement or fractional scale. If the layout can't be read, the host logs a
+warning and treats each display as if it sat at the top left, unscaled. Rotated
+outputs aren't placed. Touch devices aren't mapped to an output here. The
+display role takes no display power guard here, so the display must already be
+on: if Hyprland's idle handling turns it off, capture fails. HDR outputs fail
+closed as above.
 
 On a hybrid laptop, the encoder must run on the GPU the displays are wired to.
 KMS capture for NVENC skips a GPU it can't import framebuffers from, so an

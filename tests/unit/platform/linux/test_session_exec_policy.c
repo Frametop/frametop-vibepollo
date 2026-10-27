@@ -295,6 +295,7 @@ int main(void) {
   char *layout_request[] = {"broker", "display-layout", NULL};
   CHECK(display_request_uses_bounded_reply(2, layout_request));
   CHECK(!display_request_is_mutating(layout_request[1]));
+  CHECK(!display_request_uses_bounded_reply(3, layout_request));
   char *focus_request[] = {"broker", "managed-focus", "steam", "42", "3", "15", "0", NULL};
   CHECK(managed_focus_arguments_are_safe(7, focus_request));
   CHECK(!managed_focus_arguments_are_safe(6, focus_request));

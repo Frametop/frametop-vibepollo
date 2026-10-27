@@ -99,4 +99,42 @@ namespace platf::linux_display::layout {
     }
     return result;
   }
+
+  // A capture output the layout can place. Viewport is platf::touch_port_t.
+  template<class Viewport>
+  struct capture_output_t {
+    std::string_view connector_name;
+    Viewport *viewport;
+  };
+
+  /**
+   * Give each capture output its layout position and logical size, matched by exact connector
+   * name. A name shared by two capture outputs (one per GPU) can't be placed, and neither can an
+   * output whose logical size is turned against its scanout, since that needs a rotation the
+   * touch port can't express. Returns the layout outputs left unplaced.
+   */
+  template<class Viewport>
+  std::vector<std::string> place(const layout_t &layout, const std::vector<capture_output_t<Viewport>> &capture_outputs) {
+    std::vector<std::string> unplaced;
+    for (const auto &output : layout.outputs) {
+      Viewport *viewport = nullptr;
+      std::size_t matches = 0;
+      for (const auto &capture_output : capture_outputs) {
+        if (capture_output.connector_name == output.name) {
+          viewport = capture_output.viewport;
+          ++matches;
+        }
+      }
+      if (matches != 1 || (viewport->width > viewport->height) != (output.width > output.height)) {
+        unplaced.push_back(output.name);
+        continue;
+      }
+      viewport->output_name = output.name;
+      viewport->offset_x = output.x;
+      viewport->offset_y = output.y;
+      viewport->logical_width = output.width;
+      viewport->logical_height = output.height;
+    }
+    return unplaced;
+  }
 }  // namespace platf::linux_display::layout

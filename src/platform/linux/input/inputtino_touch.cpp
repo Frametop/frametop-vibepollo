@@ -19,6 +19,7 @@
 #include "inputtino_touch.h"
 #include "inputtino_touch_mapping.h"
 #include "inputtino_touch_wait.h"
+#include "src/platform/linux/session_backend.h"
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
@@ -119,7 +120,10 @@ namespace platf::touch {
       // The machine host has no compositor credentials. Its broker enters the
       // authoritative Wayland session before running the mapping helper.
       const bool machine_host = std::getenv("VIBEPOLLO_MACHINE_HOST") != nullptr;
-      if (!mapping_retry.begin(port.output_name, machine_host || std::getenv("WAYLAND_DISPLAY") != nullptr)) {
+      // Hyprland's broker refuses touch-map, and the output name there only places absolute input.
+      const bool can_map = !linux_display::hyprland_kms_session() &&
+                           (machine_host || std::getenv("WAYLAND_DISPLAY") != nullptr);
+      if (!mapping_retry.begin(port.output_name, can_map)) {
         return;
       }
       if (output_changed) {

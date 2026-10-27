@@ -78,8 +78,16 @@ int main(void) {
   struct observer layout = {.layout = true};
   wl_list_init(&layout.outputs);
   struct observed_output panel = {.observer = &layout}, unnamed = {.observer = &layout};
+  struct observed_output unsized = {.observer = &layout}, empty = {.observer = &layout};
   wl_list_insert(layout.outputs.prev, &panel.link);
   wl_list_insert(layout.outputs.prev, &unnamed.link);
+  wl_list_insert(layout.outputs.prev, &unsized.link);
+  wl_list_insert(layout.outputs.prev, &empty.link);
+  output_name(&unsized, NULL, "DP-3");
+  xdg_logical_position(&unsized, NULL, 0, 0);
+  output_name(&empty, NULL, "DP-4");
+  xdg_logical_position(&empty, NULL, 0, 0);
+  xdg_logical_size(&empty, NULL, 0, 1440);
   output_name(&panel, NULL, "eDP-2");
   dpms_supported(&panel, NULL, 1);
   dpms_mode(&panel, NULL, 0);
@@ -94,6 +102,8 @@ int main(void) {
   assert(fread(layout_content, 1, sizeof(layout_content) - 1, layout_capture) > 0);
   assert(!strcmp(layout_content, "L\teDP-2\t1536\t2880\t2048\t1280\n"));
   free(panel.name);
+  free(unsized.name);
+  free(empty.name);
   fclose(layout_capture);
   return 0;
 }

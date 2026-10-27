@@ -2616,7 +2616,8 @@ namespace platf {
     }
     warned = !layout;
     cached = std::move(layout);
-    cached_at = now;
+    // Measured after the query, so a hung broker can't hold display_mutex on every enumeration.
+    cached_at = std::chrono::steady_clock::now();
     return cached;
   }
 
@@ -2625,24 +2626,23 @@ namespace platf {
   static std::optional<std::pair<int, int>> correlate_to_hyprland_layout(std::vector<kms::card_descriptor_t> &cds) {
     const auto layout = hyprland_layout();
     if (!layout) return std::nullopt;
-    for (const auto &output : layout->outputs) {
-      std::vector<kms::monitor_t *> candidates;
-      for (auto &card_descriptor : cds) {
-        for (auto &[_, monitor_descriptor] : card_descriptor.crtc_to_monitor) {
-          if (monitor_descriptor.monitor_index && monitor_descriptor.connector_name == output.name) {
-            candidates.emplace_back(&monitor_descriptor);
-          }
+    std::vector<linux_display::layout::capture_output_t<platf::touch_port_t>> capture_outputs;
+    for (auto &card_descriptor : cds) {
+      for (auto &[_, monitor_descriptor] : card_descriptor.crtc_to_monitor) {
+        if (monitor_descriptor.monitor_index) {
+          capture_outputs.push_back({monitor_descriptor.connector_name, &monitor_descriptor.viewport});
         }
       }
-      // The same connector name on two GPUs can't be told apart here.
-      if (candidates.size() != 1) continue;
-      auto &viewport = candidates.front()->viewport;
-      viewport.output_name = output.name;
-      viewport.offset_x = output.x;
-      viewport.offset_y = output.y;
-      viewport.logical_width = output.width;
-      viewport.logical_height = output.height;
     }
+    const auto unplaced = linux_display::layout::place(*layout, capture_outputs);
+    static std::vector<std::string> logged_unplaced;
+    if (unplaced != logged_unplaced) {
+      for (const auto &name : unplaced) {
+        BOOST_LOG(warning) << "Couldn't place Hyprland output ["sv << name << "] on a unique, unrotated KMS output"sv;
+      }
+      logged_unplaced = unplaced;
+    }
+    if (unplaced.size() == layout->outputs.size()) return std::nullopt;
     return std::pair {layout->width, layout->height};
   }
 

@@ -24,6 +24,7 @@ while depth:
 method = source[start:end]
 program = r'''
 #include "src/platform/linux/input/inputtino_touch_mapping.h"
+#include "src/platform/linux/session_backend.h"
 #include <cassert>
 #include <cstdlib>
 #include <filesystem>
@@ -123,7 +124,15 @@ int main() {
   empty_target.associate_output({""});
   assert(launches.empty()); // Broker mode still requires a captured target.
   assert(empty_target.released == 0);
-  std::cout << "Production native-touch mapping caller: machine-host/standalone/retry/output-change checks passed\n";
+
+  // Hyprland's broker refuses touch-map; its output name only places absolute input.
+  setenv("VIBEPOLLO_SESSION_BACKEND", "hyprland-kms", 1);
+  worker_t hyprland {&raw};
+  hyprland.associate_output({"eDP-2"});
+  assert(launches.empty());
+  assert(hyprland.released == 0);
+  unsetenv("VIBEPOLLO_SESSION_BACKEND");
+  std::cout << "Production native-touch mapping caller: machine-host/standalone/retry/output-change/Hyprland checks passed\n";
 }
 '''
 with tempfile.TemporaryDirectory(prefix='touch-mapping-environment-') as temporary:
