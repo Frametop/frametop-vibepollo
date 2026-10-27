@@ -71,18 +71,26 @@ display role takes no display power guard here, so the display must already be
 on: if Hyprland's idle handling turns it off, capture fails. HDR outputs fail
 closed as above.
 
-The application environment is Wayland-only: `DISPLAY` and `XAUTHORITY` are not
-imported, and inherited user-manager values are removed from launched services.
-Hyprland's Xwayland server does not publish KWin's generated Xauthority contract;
-Steam/Big Picture, Steam-direct, Lutris, HDR compatibility and other X11-oriented
-broker operations therefore return an explicit unsupported error. Launch native
-Wayland games through authorized application commands or capture the already
-running desktop. This subset does not promise stock Steam/Proton game launching.
+Hyprland's Xwayland runs without an Xauthority file, and the controller's
+private `/tmp` cannot see `/tmp/.X11-unix`. The controller treats UWSM's
+published `DISPLAY` as a candidate only: it connects to that socket through the
+bound compositor's `/proc/PID/root` and records `xdisplay=:N` only when the
+listening peer is the compositor PID and start time already bound to the
+session. `XAUTHORITY` is never imported, and inherited user-manager values are
+removed from launched services; only the recorded display is set. A retryable
+probe failure keeps a display already bound to the same compositor, so it does
+not restart the host. Without a bound display the session stays Wayland-only.
+
+With a bound display, Steam/Big Picture, Steam-direct and Lutris launches use the
+same broker operations as KDE; Proton games then run on Hyprland's Xwayland. HDR
+compatibility launches and the external Proton stream policy remain
+unsupported.
 
 Before promoting support, test physical KMS/NVENC or VAAPI capture, audio/input,
 a native Wayland application, logout/login and greeter transitions, compositor
 restart with a reused socket, suspend/resume and upgrade cleanup. Verify that
-private/HDR/Steam requests fail without changing outputs, that old compositor
+private/HDR requests fail without changing outputs, that Steam/Lutris launches
+are refused without a bound Xwayland display, that old compositor
 applications are cancelled, and that switching the policy back to `kwin`
 preserves the existing Plasma behavior. No live compositor test is implied by
 the component fixtures.
