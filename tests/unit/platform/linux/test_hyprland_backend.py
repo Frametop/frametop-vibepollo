@@ -23,10 +23,19 @@ program = r'''
 #include <utility>
 #include <vector>
 #include <iostream>
+#include <variant>
 #include "src/hdr_stream_policy.h"
+#define SUNSHINE_BUILD_DRM
 namespace display_device {
 enum class DeviceEnumerationDetail { Full };
-struct EnumeratedDevice { std::string m_device_id, m_display_name, m_friendly_name; };
+struct Resolution { unsigned int m_width{}, m_height{}; };
+struct Rational { unsigned int m_numerator{}, m_denominator{}; };
+using FloatingPoint = std::variant<double, Rational>;
+struct EnumeratedDevice {
+ struct Info { Resolution m_resolution{}; FloatingPoint m_resolution_scale{}; FloatingPoint m_refresh_rate{}; bool m_primary{}; };
+ std::string m_device_id, m_display_name, m_friendly_name;
+ std::optional<Info> m_info;
+};
 using EnumeratedDeviceList = std::vector<EnumeratedDevice>;
 std::string toJson(const EnumeratedDeviceList&, std::nullopt_t) { return "[]"; }
 }
@@ -63,6 +72,9 @@ bool hdr_capture_required(const launch_session_t& session, const config::video_t
 namespace platf {
 std::vector<std::string> outputs={"/dev/dri/card0:Virtual-1", "DP-1", "Reserved-1", "DP-2"};
 std::vector<std::string> display_names() { return outputs; }
+struct kms_output_t { std::string name; int width{}, height{}; std::uint32_t refresh_millihz{}; };
+std::vector<kms_output_t> scanout={{"DP-1",5120,1440,239999},{"DP-2",0,0,0},{"Reserved-1",1920,1080,60000}};
+std::vector<kms_output_t> kms_outputs() { return scanout; }
 namespace linux_private_display {
 int mutations=0;
 struct prepared { bool active; std::string output_name, error; };
@@ -93,6 +105,13 @@ int main() {
  assert(std::string(backend.capabilities().backend_name)=="hyprland-kms-physical-sdr");
  const auto devices=backend.enumerate_devices(display_device::DeviceEnumerationDetail::Full);
  assert(devices && devices->size()==2 && devices->front().m_device_id=="DP-1");
+ // An active scanout's size and refresh are its display info; nothing else is claimed.
+ const auto& info=devices->front().m_info;
+ assert(info && info->m_resolution.m_width==5120 && info->m_resolution.m_height==1440 && !info->m_primary);
+ assert(std::get<double>(info->m_resolution_scale)==1.0);
+ const auto refresh=std::get<display_device::Rational>(info->m_refresh_rate);
+ assert(refresh.m_numerator==239999 && refresh.m_denominator==1000);
+ assert(!devices->back().m_info);
  assert(backend.capture_target("")=="__unsupported-hyprland-output__");
  assert(backend.capture_target("DP-2")=="DP-2");
  for(const auto& name : {"0","Virtual-1","/dev/dri/card0:Virtual-1","Reserved-1","missing"})

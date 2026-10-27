@@ -6,11 +6,24 @@
 
 #include <cstddef>
 #include <limits>
+#include <src/platform/linux/kms_outputs.h>
 #include <src/platform/linux/kmsgrab_pacing.h>
 #include <src/platform/linux/kmsgrab_selection.h>
 #include <vibeshine_drm_uapi.h>
 
 namespace selection = platf::kms::selection;
+
+TEST(KmsgrabSelection, DerivesModeRefreshFromPixelClock) {
+  using platf::kms::refresh_millihz;
+
+  EXPECT_EQ(refresh_millihz(148500, 2200, 1125, false, false), 60000U);  // 1080p60
+  EXPECT_EQ(refresh_millihz(148352, 2200, 1125, false, false), 59940U);  // 1080p59.94
+  EXPECT_EQ(refresh_millihz(74250, 2200, 1125, true, false), 60000U);  // 1080i: two fields per frame
+  EXPECT_EQ(refresh_millihz(50350, 800, 525, false, true), 59940U);  // double scan halves it
+  EXPECT_EQ(refresh_millihz(0, 2200, 1125, false, false), 0U);
+  EXPECT_EQ(refresh_millihz(148500, 0, 1125, false, false), 0U);
+  EXPECT_EQ(refresh_millihz(148500, 2200, 0, false, false), 0U);
+}
 
 TEST(KmsgrabSelection, RejectsInconsistentPresentationResponses) {
   using platf::kms::pacing::classify_response;

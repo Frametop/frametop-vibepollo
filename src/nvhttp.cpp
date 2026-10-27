@@ -94,6 +94,7 @@
   #include "src/platform/linux/display_backend.h"
   #include "platform/linux/display_power.h"
   #include "platform/linux/private_display_resume_policy.h"
+  #include "platform/linux/session_backend.h"
 #endif
 
 #include "process.h"
@@ -5165,8 +5166,10 @@ namespace nvhttp {
           const auto requested_display = get_arg(args, std::string {remote_session::display_launch_arg}.c_str(), "");
 #ifdef __linux__
           // An idle desktop may have blanked the display; wake it as a Remote Monitor does.
-          launch_session->display_power_guard = platf::display_power::acquire();
-          if (!launch_session->display_power_guard) {
+          // A Hyprland session has no display power control (its broker refuses
+          // display-power), so there the display must already be on.
+          if (!platf::linux_display::hyprland_kms_session()) launch_session->display_power_guard = platf::display_power::acquire();
+          if (!platf::linux_display::hyprland_kms_session() && !launch_session->display_power_guard) {
             tree.put("root.resume", 0);
             tree.put("root.<xmlattr>.status_code", 503);
             tree.put("root.<xmlattr>.status_message", "The desktop display could not be woken for streaming");

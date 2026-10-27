@@ -31,6 +31,7 @@
 #include "kmsgrab_hdr.h"
 #include "kmsgrab_pacing.h"
 #include "kmsgrab_selection.h"
+#include "kms_outputs.h"
 #include "scoped_capability.h"
 #include "session_backend.h"
 #include "src/config.h"
@@ -207,6 +208,9 @@ namespace platf {
       std::optional<std::uint32_t> monitor_index;
 
       platf::touch_port_t viewport;
+
+      // The CRTC mode's refresh rate, zero when unknown
+      std::uint32_t refresh_millihz {};
     };
 
     struct card_descriptor_t {
@@ -2672,6 +2676,10 @@ namespace platf {
             (int) crtc->width,
             (int) crtc->height,
           };
+          it->second.refresh_millihz = crtc->mode_valid ?
+                                         kms::refresh_millihz(crtc->mode.clock, crtc->mode.htotal, crtc->mode.vtotal,
+                                                              crtc->mode.flags & DRM_MODE_FLAG_INTERLACE, crtc->mode.flags & DRM_MODE_FLAG_DBLSCAN) :
+                                         0;
           if (!it->second.monitor_index) {
             it->second.monitor_index = count;
           }
@@ -2767,6 +2775,21 @@ namespace platf {
   std::vector<std::string> kms_display_names(mem_type_e hwdevice_type) {
     std::lock_guard lock {kms::display_mutex};
     return kms_display_names_unlocked(hwdevice_type);
+  }
+
+  std::vector<kms_output_t> kms_outputs() {
+    std::lock_guard lock {kms::display_mutex};
+    (void) kms_display_names_unlocked(mem_type_e::unknown);
+    std::vector<kms_output_t> outputs;
+    outputs.reserve(kms::named_monitors.size());
+    for (const auto &named : kms::named_monitors) {
+      const auto card = std::ranges::find(kms::card_descriptors, named.monitor.card_path, &kms::card_descriptor_t::path);
+      if (card == kms::card_descriptors.end()) continue;
+      const auto monitor = card->crtc_to_monitor.find(named.monitor.crtc_id);
+      if (monitor == card->crtc_to_monitor.end()) continue;
+      outputs.push_back({named.display_name, monitor->second.viewport.width, monitor->second.viewport.height, monitor->second.refresh_millihz});
+    }
+    return outputs;
   }
 
 }  // namespace platf

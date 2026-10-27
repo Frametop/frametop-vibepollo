@@ -3,6 +3,7 @@
  * @brief Linux display backend selection and managed desktop implementation.
  */
 #include "display_backend.h"
+#include "kms_outputs.h"
 #include "private_display.h"
 #include "session_backend.h"
 #include "src/platform/common.h"
@@ -64,12 +65,30 @@ namespace platf::linux_display {
 
       std::optional<display_device::EnumeratedDeviceList> enumerate_devices(display_device::DeviceEnumerationDetail) const override {
         display_device::EnumeratedDeviceList result;
+#ifdef SUNSHINE_BUILD_DRM
+        const auto scanout = platf::kms_outputs();
+#endif
         for (const auto &name : platf::display_names()) {
           if (!physical_output(name)) continue;
           display_device::EnumeratedDevice device;
           device.m_device_id = name;
           device.m_display_name = name;
           device.m_friendly_name = name;
+#ifdef SUNSHINE_BUILD_DRM
+          // Frametop's display role and display list need an active display's
+          // size. Only the scanout is known: Hyprland's layout position, scale
+          // and primary display aren't visible to the machine service.
+          const auto output = std::ranges::find(scanout, name, &platf::kms_output_t::name);
+          if (output != scanout.end() && output->width > 0 && output->height > 0) {
+            display_device::EnumeratedDevice::Info info;
+            info.m_resolution = {static_cast<unsigned int>(output->width), static_cast<unsigned int>(output->height)};
+            info.m_resolution_scale = 1.0;
+            if (output->refresh_millihz) {
+              info.m_refresh_rate = display_device::Rational {output->refresh_millihz, 1000};
+            }
+            device.m_info = info;
+          }
+#endif
           result.push_back(std::move(device));
         }
         return result;
