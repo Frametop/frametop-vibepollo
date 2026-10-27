@@ -122,6 +122,9 @@ namespace video {
     std::optional<std::string> capture_output;
     std::function<bool()> capture_target_valid;
   };
+  // Frametop's capture bookkeeping. Off Windows the exact output is the configured one.
+  struct captured_output_claim_t { void set(const std::string &) {} };
+  std::optional<std::string> exact_capture_output(const config_t &config) { return config.capture_output; }
 @@COLOR_FUNCTIONS@@
 }
 namespace platf {

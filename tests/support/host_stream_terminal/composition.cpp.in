@@ -91,7 +91,7 @@ namespace protocol {constexpr int BITSTREAM_FORMAT=99;constexpr std::string_view
 namespace policy {struct framing_e {static constexpr int records=1;};int select_framing(bool,std::optional<std::uint32_t>){return 0;}}
 namespace bandwidth {std::uint64_t pacing_link_bps(std::uint64_t,std::uint64_t){return 0;}}
 }
-namespace remote_session {enum class role_e {game,input,monitor};}
+namespace remote_session {enum class role_e {game,input,monitor,display};}
 namespace pending_policy {
 bool disconnect_scope_matches(remote_session::role_e actual,remote_session::role_e expected,bool same,bool all) {return actual==expected && (same||all);}
 struct pending_owner_t {remote_session::role_e role;std::string client_uuid;std::uint64_t generation;};
@@ -107,6 +107,7 @@ struct launch_session_t {
  std::shared_ptr<void> exact_target_hold;
  std::array<std::uint8_t,16> virtual_display_guid_bytes{};
  std::shared_ptr<void> audio_context_guard,display_power_guard;
+ std::optional<std::string> remote_capture_device_id;
  std::string remote_capture_output,rtsp_source_address,av_ping_payload,client_name,device_name,normal_vdd_owner_uuid;
  int gcm_key=0,iv=0,control_connect_data=0,secondary_game_client=0,client_display_mode_override=0,client_display_refresh_millihz=0,prefer_sdr_10bit=0,virtual_display=0,normal_vdd_identity_token=0,framegen_refresh_rate=0,framegen_refresh_millihz=0,framegen_refresh_multiplier=0,framegen_fixed_refresh=0;
  bool host_audio=false,client_vrr_requested=false,continuous_audio=false,force_sdr=false,enable_hdr=false;

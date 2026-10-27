@@ -22,6 +22,10 @@
 #if __has_include("host_stream_control.h")
 #include "host_stream_control.h"
 #endif
+// Frametop's packet type table names the microphone packet.
+#if __has_include("frametop_mic_policy.h")
+#include "frametop_mic_policy.h"
+#endif
 
 using namespace std::string_view_literals;
 using std::uint8_t;
