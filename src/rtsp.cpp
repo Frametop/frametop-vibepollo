@@ -1176,6 +1176,8 @@ namespace rtsp_stream {
         release_pending_runtime_holds(launch_session);
         if (launch_session->role == remote_session::role_e::input) {
           nvhttp::notify_remote_input_transport_lost(launch_session->client_uuid, launch_session->role_generation);
+        } else if (launch_session->role == remote_session::role_e::display) {
+          nvhttp::notify_remote_display_ended(launch_session->client_uuid, launch_session->role_generation);
         }
       }
       raised_timer.cancel();
@@ -1566,7 +1568,12 @@ namespace rtsp_stream {
     ) {
       for (const auto &pending : expired_sessions) release_pending_runtime_holds(pending);
       for (const auto &owner : pending_policy::expired_remote_input_owners(expired_owners)) {
-        nvhttp::notify_remote_input_transport_lost(owner.client_uuid, owner.generation);
+        // A Frametop display launch whose setup never came has no session to end it.
+        if (owner.role == remote_session::role_e::display) {
+          nvhttp::notify_remote_display_ended(owner.client_uuid, owner.generation);
+        } else {
+          nvhttp::notify_remote_input_transport_lost(owner.client_uuid, owner.generation);
+        }
       }
       if (expired_guids.empty()) {
         return;

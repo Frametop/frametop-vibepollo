@@ -5168,8 +5168,9 @@ namespace nvhttp {
           // An idle desktop may have blanked the display; wake it as a Remote Monitor does.
           // A Hyprland session has no display power control (its broker refuses
           // display-power), so there the display must already be on.
-          if (!platf::linux_display::hyprland_kms_session()) launch_session->display_power_guard = platf::display_power::acquire();
-          if (!platf::linux_display::hyprland_kms_session() && !launch_session->display_power_guard) {
+          const bool display_power_managed = !platf::linux_display::hyprland_kms_session();
+          if (display_power_managed) launch_session->display_power_guard = platf::display_power::acquire();
+          if (display_power_managed && !launch_session->display_power_guard) {
             tree.put("root.resume", 0);
             tree.put("root.<xmlattr>.status_code", 503);
             tree.put("root.<xmlattr>.status_message", "The desktop display could not be woken for streaming");

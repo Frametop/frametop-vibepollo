@@ -62,6 +62,15 @@ fail with an explanation. The backend advertises no independent-output capabilit
 KScreen and managed-connector operations are fenced even if called outside the
 normal backend route.
 
+Frametop's build adds its display role to this slice. A `frametopDisplay`
+launch can stream one of these physical outputs, named by the connector that
+display enumeration lists. Enumeration gives each output with an active scanout
+its KMS size and refresh rate. Its layout position, scale and primary display
+stay unknown, because the machine service can't see Hyprland's layout. The
+display role takes no display power guard here, so the display must already be
+on: if Hyprland's idle handling turns it off, capture fails. HDR outputs fail
+closed as above.
+
 The application environment is Wayland-only: `DISPLAY` and `XAUTHORITY` are not
 imported, and inherited user-manager values are removed from launched services.
 Hyprland's Xwayland server does not publish KWin's generated Xauthority contract;

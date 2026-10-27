@@ -642,6 +642,12 @@ require(pending_handoff, "snapshot->display_power_guard = entry.session->display
 require(stream, "session->display_power_guard = launch_session.display_power_guard", "active capture power ownership")
 require(stream, "session.display_power_guard.reset()", "capture teardown releases display power")
 forbid(linux_misc, "display_power::acquire()", "retained shared runtime must not inhibit sleep")
+# Frametop's display role: Hyprland's broker refuses display-power, so a display
+# launch there must not depend on the power guard.
+display_role = nvhttp.split("if (launch_session->role == remote_session::role_e::display) {", 1)[1].split("existing_display_capture_output(requested_display)", 1)[0]
+require(display_role, "const bool display_power_managed = !platf::linux_display::hyprland_kms_session();", "Hyprland display role power policy")
+require(display_role, "if (display_power_managed) launch_session->display_power_guard = platf::display_power::acquire();", "Hyprland display role skips the power guard")
+require(display_role, "if (display_power_managed && !launch_session->display_power_guard) {", "Hyprland display role power failure")
 # Idle screen-off of a private-only topology wedged NVIDIA GSP with no client
 # left. Its hold blocks only screen changes and ends with the restore.
 require(broker, '!strcmp(argv[1], "display-retain") && argc == 2', "fixed retained screen operation")

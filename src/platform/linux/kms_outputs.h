@@ -21,6 +21,7 @@ namespace platf {
 
   namespace kms {
     /// A DRM mode's refresh rate in millihertz, from its pixel clock in kHz and its totals.
+    /// It truncates, and ignores vscan, which modern modes leave at 0 or 1.
     constexpr std::uint32_t refresh_millihz(std::uint32_t clock_khz, std::uint32_t htotal, std::uint32_t vtotal, bool interlaced, bool double_scan) {
       if (!clock_khz || !htotal || !vtotal) return 0;
       auto millihz = static_cast<std::uint64_t>(clock_khz) * 1000000ULL / (static_cast<std::uint64_t>(htotal) * vtotal);

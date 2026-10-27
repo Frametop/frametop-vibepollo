@@ -25,6 +25,7 @@ program = r'''
 #include <iostream>
 #include <variant>
 #include "src/hdr_stream_policy.h"
+#include "src/platform/linux/kms_outputs.h"
 #define SUNSHINE_BUILD_DRM
 namespace display_device {
 enum class DeviceEnumerationDetail { Full };
@@ -70,11 +71,19 @@ bool hdr_capture_required(const launch_session_t& session, const config::video_t
 }
 }
 namespace platf {
-std::vector<std::string> outputs={"/dev/dri/card0:Virtual-1", "DP-1", "Reserved-1", "DP-2"};
+std::vector<std::string> outputs={"/dev/dri/card0:Virtual-1", "DP-1", "Reserved-1", "DP-2", "DP-3"};
 std::vector<std::string> display_names() { return outputs; }
-struct kms_output_t { std::string name; int width{}, height{}; std::uint32_t refresh_millihz{}; };
-std::vector<kms_output_t> scanout={{"DP-1",5120,1440,239999},{"DP-2",0,0,0},{"Reserved-1",1920,1080,60000}};
-std::vector<kms_output_t> kms_outputs() { return scanout; }
+// KMS lists only outputs with an active plane, so a real output always has a
+// size; the zero size here checks the backend doesn't claim info without one.
+std::vector<kms_output_t> scanout={{"DP-1",5120,1440,239999},{"DP-2",0,0,0},{"Reserved-1",1920,1080,60000},{"DP-3",1920,1080,0}};
+std::vector<kms_output_t> kms_outputs() {
+ std::vector<kms_output_t> result;
+ for(const auto& name : outputs) {
+  const auto found=std::ranges::find(scanout,name,&kms_output_t::name);
+  result.push_back(found==scanout.end() ? kms_output_t{name} : *found);
+ }
+ return result;
+}
 namespace linux_private_display {
 int mutations=0;
 struct prepared { bool active; std::string output_name, error; };
@@ -104,14 +113,17 @@ int main() {
  assert(!backend.capabilities().independent_outputs);
  assert(std::string(backend.capabilities().backend_name)=="hyprland-kms-physical-sdr");
  const auto devices=backend.enumerate_devices(display_device::DeviceEnumerationDetail::Full);
- assert(devices && devices->size()==2 && devices->front().m_device_id=="DP-1");
+ assert(devices && devices->size()==3 && devices->front().m_device_id=="DP-1");
  // An active scanout's size and refresh are its display info; nothing else is claimed.
  const auto& info=devices->front().m_info;
  assert(info && info->m_resolution.m_width==5120 && info->m_resolution.m_height==1440 && !info->m_primary);
  assert(std::get<double>(info->m_resolution_scale)==1.0);
  const auto refresh=std::get<display_device::Rational>(info->m_refresh_rate);
  assert(refresh.m_numerator==239999 && refresh.m_denominator==1000);
- assert(!devices->back().m_info);
+ assert(!(*devices)[1].m_info);
+ // A mode with no valid refresh still gives the display's size.
+ const auto& unknown_refresh=devices->back().m_info;
+ assert(unknown_refresh && unknown_refresh->m_resolution.m_width==1920 && std::get<double>(unknown_refresh->m_refresh_rate)==0.0);
  assert(backend.capture_target("")=="__unsupported-hyprland-output__");
  assert(backend.capture_target("DP-2")=="DP-2");
  for(const auto& name : {"0","Virtual-1","/dev/dri/card0:Virtual-1","Reserved-1","missing"})
