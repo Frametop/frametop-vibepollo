@@ -28,8 +28,9 @@ import urllib.request
 CONTROLLER = "vibepollo-session-controller.service"
 HOST = "vibepollo.service"
 SCOPES = {"/api/session/status": "GET", "/api/apps/close": "POST"}
-RELEASES_API = "https://api.github.com/repos/Nonary/Vibepollo/releases"
-RELEASES_PAGE = "https://github.com/Nonary/Vibepollo/releases"
+# Frametop's build takes updates from its own releases, never Nonary's.
+RELEASES_API = "https://api.github.com/repos/Frametop/frametop-vibepollo/releases"
+RELEASES_PAGE = "https://github.com/Frametop/frametop-vibepollo/releases"
 
 
 class CertificateChanged(Exception):

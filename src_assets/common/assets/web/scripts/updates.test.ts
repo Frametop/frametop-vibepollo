@@ -272,7 +272,8 @@ test('daily availability uses only release API requests and embedded validated i
     }) as typeof fetch;
     const releases = await fetchUpdateReleases(new AbortController().signal);
     assert.equal(calls.length, 1);
-    assert.match(calls[0]!, /^https:\/\/api.github.com\/repos\//);
+    // Frametop's build never offers Nonary's releases: they would replace its changes.
+    assert.equal(calls[0], 'https://api.github.com/repos/Frametop/frametop-vibepollo/releases?per_page=100&page=1');
     assert.equal(selectWireUpdate('2.0.0', releases, true)?.tag, next.tag_name);
     assert.equal(selectWireUpdate('2.0.0', releases, false), null);
     assert.equal(selectWireUpdate('2.0.1', releases, true), null);

@@ -19,6 +19,9 @@ Don't build it yourself. Frametop's host kits install the release:
 - The HTTPS thread never waits on a client's TLS close, so the Web UI doesn't stall after a client disconnects.
 - A client can send its microphone on the encrypted control stream (packet type 0x3003, Opus), and apps on the host record it. Windows: from "Microphone (Steam Streaming Microphone)", Steam's virtual microphone, installed from Steam's drivers if it's missing; the level Windows adds to it above 0 dB is taken back off, so apps hear the client's own level. Linux: from "Frametop Microphone", a PulseAudio or PipeWire source that's there while a client sends, only when Sunshine runs as the desktop user; the system service (`vibepollo.service`) reaches the desktop's sound through its session broker, which can't add a microphone yet. Only clients allowed keyboard input can send it, one at a time, and never in the clear.
 
+- Linux on Hyprland: with Vibepollo's experimental Hyprland session (`desktop_backend=hyprland-kms`), the Frametop display streams an SDR monitor that's already on. Its size and refresh rate are known, its position and scale aren't. See [docs/linux/hyprland.md](docs/linux/hyprland.md).
+- Update checks, release notes and the Linux tray's "Check for updates" use this fork's releases, never Nonary's, whose install would replace this build. They only offer a release whose tag is a version number, which `frametop-*` tags aren't. On Windows only `sunshine.exe` is replaced, so the stock Web UI still checks Nonary's releases: don't install an update from it.
+
 Frametop's own settings for Vibepollo (sound on Remote Monitors, and when they go away) are set by the Windows kit; see its README.
 
 ---

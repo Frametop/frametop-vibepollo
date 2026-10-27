@@ -291,7 +291,7 @@ class TrayTests(unittest.TestCase):
         with self.assertRaises(tray.ApiError):
             tray.select_releases({"message": "rate limited"})
         self.assertEqual(tray.release_url("tag/with space"),
-                         "https://github.com/Nonary/Vibepollo/releases/tag/tag%2Fwith%20space")
+                         "https://github.com/Frametop/frametop-vibepollo/releases/tag/tag%2Fwith%20space")
 
     def test_update_metadata_request_does_not_carry_local_credentials(self):
         response = unittest.mock.MagicMock()

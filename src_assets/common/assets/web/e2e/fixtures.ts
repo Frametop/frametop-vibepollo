@@ -1,5 +1,6 @@
 import { test as base, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { RELEASES_API_URL } from '../utils/updates.ts';
 
 export { expect } from '@playwright/test';
 export type { Locator, Page } from '@playwright/test';
@@ -47,7 +48,7 @@ export const test = base.extend<{ updaterNetworkAudit: UpdaterNetworkAudit }>({
     const localOrigins = testOrigins(testInfo.project.use.baseURL);
     const releaseRequest = (url: URL) => url.protocol === 'https:' &&
       url.hostname === 'api.github.com' &&
-      url.pathname.toLowerCase() === '/repos/nonary/vibepollo/releases';
+      url.pathname.toLowerCase() === new URL(RELEASES_API_URL).pathname.toLowerCase();
     context.on('request', (request) => {
       const url = new URL(request.url());
       if (/^https?:$/.test(url.protocol) && !localOrigins.has(url.origin))

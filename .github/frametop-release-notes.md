@@ -7,6 +7,7 @@ The changes:
 
 - Windows: a Remote Monitor is released before the display topology is recomposed, and the host's own monitor layout is never reset.
 - A Frametop display role streams one of the host's existing displays, on Windows and Linux.
+- Update checks, release notes and the Linux tray use Frametop's releases, never Nonary's, whose install would replace this build. On Windows only `sunshine.exe` is replaced, so the stock Web UI still checks Nonary's releases: don't install an update from it.
 - Linux on Hyprland: Vibepollo's experimental Hyprland session (`desktop_backend=hyprland-kms`, a UWSM-managed Hyprland started by SDDM) can stream its SDR physical displays to Frametop with the display role. The display must already be on, and its position and scale aren't known. Virtual displays and HDR aren't supported there. Steps: `docs/linux/hyprland.md`.
 - The HTTPS thread never blocks waiting for a client's TLS close.
 - Windows: a Frametop display stream that asks for SDR turns the display's HDR off while it captures it, and back on when the stream ends (with `dd_hdr_option` automatic, the default). An HDR desktop in an SDR stream looked washed out.

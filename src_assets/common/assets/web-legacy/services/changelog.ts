@@ -18,7 +18,8 @@ export interface LoadChangelogResult {
 }
 
 const CHANGELOG_ASSET_URL = './assets/changelog.json';
-const GITHUB_RELEASES_URL = 'https://api.github.com/repos/Nonary/Vibepollo/releases';
+// Frametop's build takes updates from its own releases (see web/utils/updates.ts).
+const GITHUB_RELEASES_URL = 'https://api.github.com/repos/Frametop/frametop-vibepollo/releases';
 
 function isChangelogEntry(value: unknown): value is ChangelogEntry {
   return !!value && typeof value === 'object' && typeof (value as ChangelogEntry).tag === 'string';

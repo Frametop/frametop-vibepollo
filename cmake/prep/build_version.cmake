@@ -26,7 +26,7 @@ endif()
 
 # Allow forks / CI to override which GitHub repo is used for update checks.
 # Cache variables can be provided via -DSUNSHINE_REPO_OWNER=... or -DSUNSHINE_REPO_NAME=...
-# Frametop's build checks its own releases: an upstream install would replace Frametop's changes.
+# Frametop's build defaults to its own releases: an upstream install would replace Frametop's changes.
 set(SUNSHINE_REPO_OWNER "Frametop" CACHE STRING "GitHub repo owner for update checks")
 set(SUNSHINE_REPO_NAME "frametop-vibepollo" CACHE STRING "GitHub repo name for update checks")
 
@@ -39,7 +39,7 @@ if(DEFINED ENV{SUNSHINE_REPO_NAME})
 endif()
 
 # Try to infer owner/name from the clone URL when available and the defaults are still in use
-if(DEFINED GITHUB_CLONE_URL AND (SUNSHINE_REPO_OWNER STREQUAL "Nonary" OR SUNSHINE_REPO_NAME STREQUAL "vibepollo"))
+if(DEFINED GITHUB_CLONE_URL AND (SUNSHINE_REPO_OWNER STREQUAL "Frametop" OR SUNSHINE_REPO_NAME STREQUAL "frametop-vibepollo"))
     string(REGEX MATCH "github.com[:/]+([^/]+)/([^/]+)(\\.git)?$" _match "${GITHUB_CLONE_URL}")
     if(_match)
         set(SUNSHINE_REPO_OWNER "${CMAKE_MATCH_1}")

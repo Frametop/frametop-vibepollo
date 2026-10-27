@@ -1,5 +1,6 @@
 ---
-# Frametop's build of Vibepollo 2.0.2 (upstream nightly 2.0.2-nightly.d20261026) (https://github.com/DeeJanuz/frametop): sunshine.exe, which
+# Frametop's build of Vibepollo 2.0.2 (https://github.com/DeeJanuz/frametop), on upstream's
+# 2.0.2-nightly.d20261026: sunshine.exe, which
 # Frametop's Windows host setup swaps in over the stock one, and the Arch Linux package, on
 # Depot's runners (the Frametop org's Depot GitHub app). It runs when started by hand (Actions
 # -> Frametop build -> Run workflow), which keeps the files as artifacts, and on a frametop-*
