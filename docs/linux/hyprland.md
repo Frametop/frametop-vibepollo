@@ -71,6 +71,16 @@ display role takes no display power guard here, so the display must already be
 on: if Hyprland's idle handling turns it off, capture fails. HDR outputs fail
 closed as above.
 
+On a hybrid laptop, the encoder must run on the GPU the displays are wired to.
+KMS capture for NVENC skips a GPU it can't import framebuffers from, so an
+Intel- or AMD-wired display would stream no video. With no `encoder` set, the
+host skips NVENC when no display is on a GPU it can capture from, and probes
+the other encoders on the first physical display. For Intel this needs
+`intel-media-driver`. A `frametopDisplay` launch for a display the chosen
+encoder can't capture fails with status 503 and names the display. To choose
+the GPU yourself, set `encoder = vaapi` and `adapter_name` to that GPU's render
+node (see `/dev/dri/by-path`).
+
 Hyprland's Xwayland runs without an Xauthority file, and the controller's
 private `/tmp` cannot see `/tmp/.X11-unix`. The controller treats UWSM's
 published `DISPLAY` as a candidate only: it connects to that socket through the

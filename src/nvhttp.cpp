@@ -607,6 +607,16 @@ namespace nvhttp {
       return requested;
     }
 
+    // Whether the chosen encoder can capture this output. KMS capture for NVENC skips GPUs
+    // without CUDA framebuffer import, so on a hybrid laptop a display wired to the other
+    // GPU would stream no video at all. Without a probe yet, the stream's own probe decides.
+    bool existing_display_capturable_by_encoder(const std::string &output) {
+      const auto mem_type = video::chosen_capture_mem_type();
+      if (!mem_type) return true;
+      const auto capture_outputs = platf::display_names(*mem_type);
+      return std::find(capture_outputs.begin(), capture_outputs.end(), output) != capture_outputs.end();
+    }
+
     void refresh_remote_monitor_baseline(const bool extend_active_stream) {
       const auto devices = display_helper_integration::enumerate_devices(
         display_device::DeviceEnumerationDetail::Full
@@ -5202,6 +5212,18 @@ namespace nvhttp {
             );
             return;
           }
+#ifdef __linux__
+          if (!existing_display_capturable_by_encoder(*output)) {
+            BOOST_LOG(warning) << "Frametop display '" << *output << "' is on a GPU the selected encoder can't capture from.";
+            tree.put("root.resume", 0);
+            tree.put("root.<xmlattr>.status_code", 503);
+            tree.put(
+              "root.<xmlattr>.status_message",
+              *output + " is on a GPU the host's encoder can't capture from; set the encoder and adapter_name to that GPU"
+            );
+            return;
+          }
+#endif
           launch_session->remote_capture_output = *output;
 #ifdef _WIN32
           launch_session->remote_capture_device_id = existing_display_device_id(requested_display);

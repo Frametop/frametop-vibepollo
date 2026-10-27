@@ -472,6 +472,8 @@ namespace video {
   bool has_attempted_encoder_probe();
   bool has_successful_encoder_probe();
   bool last_encoder_probe_failed();
+  /// The memory type the chosen encoder captures into, once an encoder probe has succeeded.
+  std::optional<platf::mem_type_e> chosen_capture_mem_type();
 
   struct advertised_encoder_capabilities_t {
     int hevc_mode = 0;

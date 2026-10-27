@@ -78,6 +78,7 @@ stream = (root / "src/stream.cpp").read_text()
 kmsgrab = (root / "src/platform/linux/kmsgrab.cpp").read_text()
 audio = (root / "src/platform/linux/audio.cpp").read_text()
 nvhttp = (root / "src/nvhttp.cpp").read_text()
+video_source = (root / "src/video.cpp").read_text()
 tls_identity = (root / "src/tls_client_identity.h").read_text() + (root / "src/tls_client_identity.cpp").read_text()
 tls_identity_native = (root / "src/tls_client_identity_native.cpp").read_text()
 state_storage = (root / "src/state_storage.cpp").read_text()
@@ -648,6 +649,19 @@ display_role = nvhttp.split("if (launch_session->role == remote_session::role_e:
 require(display_role, "const bool display_power_managed = !platf::linux_display::hyprland_kms_session();", "Hyprland display role power policy")
 require(display_role, "if (display_power_managed) launch_session->display_power_guard = platf::display_power::acquire();", "Hyprland display role skips the power guard")
 require(display_role, "if (display_power_managed && !launch_session->display_power_guard) {", "Hyprland display role power failure")
+# A display wired to a GPU the encoder can't import from (NVENC on a hybrid laptop)
+# streams no video, so the launch must refuse it with a reason instead.
+display_capture = nvhttp.split("existing_display_capture_output(requested_display)", 1)[1].split("launch_session->remote_capture_output = *output;", 1)[0]
+require(display_capture, "if (!existing_display_capturable_by_encoder(*output)) {", "display role rejects an uncapturable display")
+require(display_capture, 'tree.put("root.<xmlattr>.status_code", 503);', "uncapturable display launch status")
+capturable = nvhttp.split("bool existing_display_capturable_by_encoder(", 1)[1].split("\n    }\n", 1)[0]
+require(capturable, "video::chosen_capture_mem_type()", "capturability uses the chosen encoder")
+require(capturable, "platf::display_names(*mem_type)", "capturability uses the encoder's capture list")
+probe = video_source.split("int probe_encoders() {", 1)[1].split("BOOST_LOG(info) << \"// Testing for available encoders", 1)[0]
+require(probe, "platf::display_names(platf::mem_type_e::cuda).empty() && !platf::display_names().empty()", "Hyprland skips NVENC without a CUDA-capturable display")
+require(probe, "config::video.encoder.empty() && platf::linux_display::hyprland_kms_session()", "only automatic Hyprland selection skips NVENC")
+require(probe, "if (probe_display_name.empty() && platf::linux_display::hyprland_kms_session()) {", "Hyprland probe names a physical display")
+require(probe, "!platf::linux_private_display::is_private_output(name)", "Hyprland probe never opens a private display")
 # Idle screen-off of a private-only topology wedged NVIDIA GSP with no client
 # left. Its hold blocks only screen changes and ends with the restore.
 require(broker, '!strcmp(argv[1], "display-retain") && argc == 2', "fixed retained screen operation")
