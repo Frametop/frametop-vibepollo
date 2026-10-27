@@ -7,6 +7,7 @@
 #include <chrono>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <filesystem>
 #include <mutex>
 #include <optional>
@@ -16,6 +17,8 @@
 
 // platform includes
 #include <drm_fourcc.h>
+#include <gio/gio.h>
+#include <gio/gunixinputstream.h>
 #include <linux/dma-buf.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -27,7 +30,6 @@
 // local includes
 #include "capture_status.h"
 #include "cuda.h"
-#include "display_helper_process.h"
 #include "graphics.h"
 #include "hdr_policy.h"
 #include "kms_capture_client.h"
@@ -2589,6 +2591,45 @@ namespace platf {
     BOOST_LOG(info) << "--------- End of KMS monitor list ---------"sv;
   }
 
+  // A session helper's stdout, read only up to max_bytes and the deadline. The reply comes from the
+  // desktop user's side, so a longer, later or failed one is no reply and is never buffered whole.
+  static std::optional<std::string> bounded_helper_reply(
+    const gchar *const *arguments, std::chrono::steady_clock::time_point deadline, std::size_t max_bytes
+  ) {
+    GError *error = nullptr;
+    auto *process = g_subprocess_newv(arguments,
+      static_cast<GSubprocessFlags>(G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_SILENCE), &error);
+    if (!process) {
+      if (error) g_error_free(error);
+      return std::nullopt;
+    }
+    const int output = g_unix_input_stream_get_fd(G_UNIX_INPUT_STREAM(g_subprocess_get_stdout_pipe(process)));
+    std::string reply;
+    bool complete = false;
+    while (true) {
+      const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+      if (remaining <= 0) break;
+      pollfd watched {output, POLLIN, 0};
+      const int ready = poll(&watched, 1, static_cast<int>(remaining));
+      if (ready < 0 && errno == EINTR) continue;
+      if (ready <= 0) break;
+      char buffer[4096];
+      const auto count = read(output, buffer, sizeof(buffer));
+      if (count < 0 && errno == EINTR) continue;
+      if (count <= 0) {
+        complete = count == 0;
+        break;
+      }
+      if (reply.size() + static_cast<std::size_t>(count) > max_bytes) break;
+      reply.append(buffer, static_cast<std::size_t>(count));
+    }
+    // Disconnecting the client makes the broker cancel and reap its worker.
+    if (!complete) g_subprocess_force_exit(process);
+    const bool succeeded = g_subprocess_wait(process, nullptr, nullptr) && complete && g_subprocess_get_successful(process);
+    g_object_unref(process);
+    return succeeded ? std::optional {std::move(reply)} : std::nullopt;
+  }
+
   // The machine host has no Wayland connection on Hyprland, so the session broker reports the
   // layout. Enumeration runs often, so a reply serves for two seconds. Called under display_mutex.
   static std::optional<linux_display::layout::layout_t> hyprland_layout() {
@@ -2600,16 +2641,9 @@ namespace platf {
     if (cached_at.time_since_epoch().count() && now - cached_at < 2s) return cached;
 
     const gchar *arguments[] = {"/usr/libexec/vibeshine/vibepollo-session-exec", "display-layout", nullptr};
-    GError *error = nullptr;
-    auto *process = g_subprocess_newv(arguments,
-      static_cast<GSubprocessFlags>(G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_SILENCE), &error);
     std::optional<linux_display::layout::layout_t> layout;
-    if (process) {
-      const auto reply = linux_private_display::helper_process::communicate_until(process, now + 1s, true);
-      g_object_unref(process);
-      if (reply.success) layout = linux_display::layout::parse(reply.stdout_text);
-    } else if (error) {
-      g_error_free(error);
+    if (const auto reply = bounded_helper_reply(arguments, now + 1s, linux_display::layout::max_reply_bytes)) {
+      layout = linux_display::layout::parse(*reply);
     }
     if (!layout && !warned) {
       BOOST_LOG(warning) << "Couldn't read the Hyprland output layout; absolute mouse and touch input may land in the wrong place"sv;
