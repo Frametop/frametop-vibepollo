@@ -19,6 +19,7 @@ import type { SessionStatus } from '@/types/sessions';
 import { useSystemStore } from '@/stores/system';
 import { formatBytes } from '@/utils/format';
 import { displayRecoverySupported } from '@/utils/displayRecovery';
+import { RELEASES_URL } from '@/utils/updates';
 
 interface OverviewWarning {
   key: string;
@@ -535,7 +536,7 @@ onBeforeUnmount(() => {
             >{{ t('ui.overview.actions.reportBug') }}<UiIcon name="external-link" :size="14"
           /></a>
           <a
-            href="https://github.com/Nonary/Vibepollo/releases/latest"
+            :href="`${RELEASES_URL}/latest`"
             target="_blank"
             rel="noopener noreferrer"
             >{{ t('ui.overview.actions.checkUpdates') }}<UiIcon name="external-link" :size="14"

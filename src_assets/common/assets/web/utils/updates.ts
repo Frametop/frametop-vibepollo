@@ -6,6 +6,12 @@ import {
   type GitHubReleaseLike,
 } from './changelog.ts';
 
+// Frametop's build takes updates from its own releases, never Nonary's: an
+// upstream install would replace Frametop's changes.
+export const RELEASE_REPOSITORY = 'Frametop/frametop-vibepollo';
+export const RELEASES_URL = `https://github.com/${RELEASE_REPOSITORY}/releases`;
+export const RELEASES_API_URL = `https://api.github.com/repos/${RELEASE_REPOSITORY}/releases`;
+
 export interface UpdateRelease extends GitHubReleaseLike {
   assets?: { name?: string; state?: string; size?: number }[];
   nightly_metadata?: Record<string, unknown>;
@@ -234,7 +240,7 @@ export async function fetchUpdateReleases(
   let complete = false;
   for (let page = 1; page <= 10; page++) {
     const response = await fetch(
-      `https://api.github.com/repos/Nonary/Vibepollo/releases?per_page=100&page=${page}`,
+      `${RELEASES_API_URL}?per_page=100&page=${page}`,
       { headers: { Accept: 'application/vnd.github+json' }, credentials: 'omit', signal },
     );
     if (!response.ok) throw new Error('releases-unavailable');

@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { AppButton, InlineAlert } from '@/components/ui';
+import { RELEASES_API_URL, RELEASES_URL } from '@/utils/updates';
 import {
   githubReleaseToChangelogEntry,
   mergeChangelogEntries,
@@ -19,7 +20,7 @@ async function load(remote = false) {
   failed.value = false;
   try {
     const response = await fetch(
-      remote ? 'https://api.github.com/repos/Nonary/Vibepollo/releases' : '/assets/changelog.json',
+      remote ? RELEASES_API_URL : '/assets/changelog.json',
       { headers: { Accept: 'application/json' }, credentials: 'omit' },
     );
     if (!response.ok) throw new Error('releases-unavailable');
@@ -62,7 +63,7 @@ onMounted(() => void load());
       <summary>{{ release.name || release.tag }} · {{ release.date }}</summary>
       <p class="release-notes__body">{{ release.body }}</p>
       <a
-        v-if="release.url?.startsWith('https://github.com/Nonary/Vibepollo/releases/')"
+        v-if="release.url?.startsWith(`${RELEASES_URL}/`)"
         :href="release.url"
         target="_blank"
         rel="noopener noreferrer"
