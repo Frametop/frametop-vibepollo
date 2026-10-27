@@ -109,6 +109,7 @@ TEST(CapturePolicy, PersistentDisplayFailureBacksOffWithoutDelayingInitialRecove
 TEST(CapturePolicy, MissingCaptureOutputWarnsOnlyAfterANewDisplayHadTimeToAppear) {
   EXPECT_FALSE(video::policy::should_warn_missing_capture_output(0));
   EXPECT_FALSE(video::policy::should_warn_missing_capture_output(2));
+  EXPECT_FALSE(video::policy::should_warn_missing_capture_output(3));
   EXPECT_TRUE(video::policy::should_warn_missing_capture_output(4));
   EXPECT_FALSE(video::policy::should_warn_missing_capture_output(5));
   EXPECT_TRUE(video::policy::should_warn_missing_capture_output(8));

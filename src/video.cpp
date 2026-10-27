@@ -3255,8 +3255,7 @@ namespace video {
           video::policy::capture_selection_e::exact_output
       );
       if (!ensure_virtual_display_ready(display_names, display_p, allow_process_display_preference)) {
-        // A new private display can take a moment to appear, so stay quiet for the first ~750 ms.
-        // After that the stream is sending no video, and the client will give up on it.
+        // Past the warning threshold the stream is sending no video, and the client will give up on it.
         if (exact_output && required_output && policy::should_warn_missing_capture_output(display_retry_failures)) {
           BOOST_LOG(warning) << "Capture output [" << *required_output << "] is not available to the "
                              << encoder.name << " encoder's capture device; this stream has no video yet.";

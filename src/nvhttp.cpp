@@ -5215,11 +5215,9 @@ namespace nvhttp {
             return;
           }
 #ifdef __linux__
-          // The cached encoder may predate a display moving between GPUs, so probe once more
-          // (a cache hit unless the displays changed). A failed probe gets its own 503 below.
-          if (!existing_display_capturable_by_encoder(*output)) {
-            (void) video::probe_encoders();
-          }
+          // Probe first (a cache hit unless displays moved between GPUs), so the check sees the
+          // encoder this launch will stream with. A failed probe gets its own 503 below.
+          (void) video::probe_encoders();
           if (!existing_display_capturable_by_encoder(*output)) {
             BOOST_LOG(warning) << "Frametop display '" << *output << "' is on a GPU the selected encoder can't capture from.";
             tree.put("root.resume", 0);
