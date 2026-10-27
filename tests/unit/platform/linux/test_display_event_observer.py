@@ -71,6 +71,30 @@ int main(void) {
   assert(fread(content, 1, sizeof(content) - 1, capture) > 0);
   assert(!strcmp(content, "S\tHDMI-A-1\t1\t3\nREADY\nT\tHDMI-A-1\nS\tHDMI-A-1\t1\t0\nT\tHDMI-A-1\n"));
   fclose(capture);
+
+  // Layout mode reports each named output's logical rectangle and nothing else, even DPMS.
+  FILE *layout_capture = tmpfile();
+  assert(layout_capture && dup2(fileno(layout_capture), STDOUT_FILENO) >= 0);
+  struct observer layout = {.layout = true};
+  wl_list_init(&layout.outputs);
+  struct observed_output panel = {.observer = &layout}, unnamed = {.observer = &layout};
+  wl_list_insert(layout.outputs.prev, &panel.link);
+  wl_list_insert(layout.outputs.prev, &unnamed.link);
+  output_name(&panel, NULL, "eDP-2");
+  dpms_supported(&panel, NULL, 1);
+  dpms_mode(&panel, NULL, 0);
+  dpms_done(&panel, NULL);
+  xdg_logical_position(&panel, NULL, 1536, 2880);
+  xdg_logical_size(&panel, NULL, 2048, 1280);
+  xdg_logical_position(&unnamed, NULL, 0, 0);
+  xdg_logical_size(&unnamed, NULL, 5120, 1440);
+  emit_layout(&layout);
+  rewind(layout_capture);
+  char layout_content[256] = {0};
+  assert(fread(layout_content, 1, sizeof(layout_content) - 1, layout_capture) > 0);
+  assert(!strcmp(layout_content, "L\teDP-2\t1536\t2880\t2048\t1280\n"));
+  free(panel.name);
+  fclose(layout_capture);
   return 0;
 }
 '''
@@ -304,7 +328,7 @@ with tempfile.TemporaryDirectory(prefix="linux-display-events-") as temporary:
     c_source.write_text(c_program)
     flags = shlex.split(subprocess.check_output(["pkg-config", "--cflags", "--libs", "wayland-client"], text=True))
     subprocess.run([c_compiler, "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-I", str(root),
-                    "-I", str(generated), str(c_source), str(generated / "dpms.c"), *flags,
+                    "-I", str(generated), str(c_source), str(generated / "dpms.c"), str(generated / "xdg-output-unstable-v1.c"), *flags,
                     "-o", str(c_binary)], check=True)
     subprocess.run([str(c_binary)], check=True)
     cpp_source, cpp_binary = temporary / "subscription.cpp", temporary / "subscription"

@@ -9,6 +9,7 @@
 #include <src/platform/linux/kms_outputs.h>
 #include <src/platform/linux/kmsgrab_pacing.h>
 #include <src/platform/linux/kmsgrab_selection.h>
+#include <src/platform/linux/output_layout.h>
 #include <vibeshine_drm_uapi.h>
 
 namespace selection = platf::kms::selection;
@@ -440,4 +441,38 @@ TEST(KmsgrabSelection, QualifiesCrossGpuCollisionsAndRejectsAmbiguousRawName) {
   ASSERT_TRUE(match);
   EXPECT_EQ(match->card_path, "card1");
   EXPECT_EQ(match->crtc_id, 20u);
+}
+
+TEST(OutputLayout, MovesTheLayoutToItsBoundingBoxOrigin) {
+  // A laptop panel at 1.25 scale below an ultrawide, as Hyprland lays them out.
+  const auto layout = platf::linux_display::layout::parse("L\teDP-2\t1536\t2880\t2048\t1280\nL\tDP-2\t0\t1440\t5120\t1440\n");
+  ASSERT_TRUE(layout);
+  EXPECT_EQ(layout->width, 5120);
+  EXPECT_EQ(layout->height, 2720);
+  ASSERT_EQ(layout->outputs.size(), 2U);
+  EXPECT_EQ(layout->outputs[0], (platf::linux_display::layout::output_rect_t {"eDP-2", 1536, 1440, 2048, 1280}));
+  EXPECT_EQ(layout->outputs[1], (platf::linux_display::layout::output_rect_t {"DP-2", 0, 0, 5120, 1440}));
+}
+
+TEST(OutputLayout, AcceptsNegativePositions) {
+  const auto layout = platf::linux_display::layout::parse("L\tHDMI-A-1\t-1920\t0\t1920\t1080\nL\tDP-1\t0\t0\t2560\t1440\n");
+  ASSERT_TRUE(layout);
+  EXPECT_EQ(layout->width, 4480);
+  EXPECT_EQ(layout->height, 1440);
+  EXPECT_EQ(layout->outputs[0].x, 0);
+  EXPECT_EQ(layout->outputs[1].x, 1920);
+}
+
+TEST(OutputLayout, RejectsTheWholeReplyForAnyMalformedLine) {
+  using platf::linux_display::layout::parse;
+  EXPECT_FALSE(parse(""));
+  EXPECT_FALSE(parse("L\tDP-1\t0\t0\t2560\t1440"));  // unterminated
+  EXPECT_FALSE(parse("L\tDP-1\t0\t0\t2560\t1440\nS\tDP-2\t0\t0\t1\t1\n"));
+  EXPECT_FALSE(parse("L\tDP 1\t0\t0\t2560\t1440\n"));
+  EXPECT_FALSE(parse("L\tDP-1\t0\t0\t0\t1440\n"));
+  EXPECT_FALSE(parse("L\tDP-1\t0\t0\t2560\t1440\t7\n"));
+  EXPECT_FALSE(parse("L\tDP-1\t0x10\t0\t2560\t1440\n"));
+  EXPECT_FALSE(parse("L\tDP-1\t2000000\t0\t2560\t1440\n"));
+  EXPECT_FALSE(parse("L\tDP-1\t0\t0\t2560\t1440\nL\tDP-1\t2560\t0\t2560\t1440\n"));
+  EXPECT_FALSE(parse(std::string(platf::linux_display::layout::max_reply_bytes + 1, '\n')));
 }

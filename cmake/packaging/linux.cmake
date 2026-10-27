@@ -130,7 +130,8 @@ else()
             target_link_libraries(vibepollo_touch_map PRIVATE ${WAYLAND_LIBRARIES})
             add_executable(vibepollo_display_observer
                     "${CMAKE_SOURCE_DIR}/packaging/linux/vibepollo-display-observer.c"
-                    "${CMAKE_BINARY_DIR}/generated-src/dpms.c")
+                    "${CMAKE_BINARY_DIR}/generated-src/dpms.c"
+                    "${CMAKE_BINARY_DIR}/generated-src/xdg-output-unstable-v1.c")
             set_target_properties(vibepollo_display_observer PROPERTIES OUTPUT_NAME "vibepollo-display-observer")
             target_include_directories(vibepollo_display_observer PRIVATE
                     "${CMAKE_BINARY_DIR}/generated-src" ${WAYLAND_INCLUDE_DIRS})

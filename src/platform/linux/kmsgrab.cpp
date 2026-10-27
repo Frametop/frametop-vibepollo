@@ -4,11 +4,14 @@
  */
 // standard includes
 #include <array>
+#include <chrono>
 #include <errno.h>
 #include <fcntl.h>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <thread>
+#include <tuple>
 #include <unistd.h>
 
 // platform includes
@@ -24,6 +27,7 @@
 // local includes
 #include "capture_status.h"
 #include "cuda.h"
+#include "display_helper_process.h"
 #include "graphics.h"
 #include "hdr_policy.h"
 #include "kms_capture_client.h"
@@ -32,6 +36,7 @@
 #include "kmsgrab_hdr.h"
 #include "kmsgrab_pacing.h"
 #include "kmsgrab_selection.h"
+#include "output_layout.h"
 #include "scoped_capability.h"
 #include "session_backend.h"
 #include "src/config.h"
@@ -2584,6 +2589,63 @@ namespace platf {
     BOOST_LOG(info) << "--------- End of KMS monitor list ---------"sv;
   }
 
+  // The machine host has no Wayland connection on Hyprland, so the session broker reports the
+  // layout. Enumeration runs often, so a reply serves for two seconds. Called under display_mutex.
+  static std::optional<linux_display::layout::layout_t> hyprland_layout() {
+    using namespace std::chrono_literals;
+    static std::optional<linux_display::layout::layout_t> cached;
+    static std::chrono::steady_clock::time_point cached_at;
+    static bool warned = false;
+    const auto now = std::chrono::steady_clock::now();
+    if (cached_at.time_since_epoch().count() && now - cached_at < 2s) return cached;
+
+    const gchar *arguments[] = {"/usr/libexec/vibeshine/vibepollo-session-exec", "display-layout", nullptr};
+    GError *error = nullptr;
+    auto *process = g_subprocess_newv(arguments,
+      static_cast<GSubprocessFlags>(G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_SILENCE), &error);
+    std::optional<linux_display::layout::layout_t> layout;
+    if (process) {
+      const auto reply = linux_private_display::helper_process::communicate_until(process, now + 1s, true);
+      g_object_unref(process);
+      if (reply.success) layout = linux_display::layout::parse(reply.stdout_text);
+    } else if (error) {
+      g_error_free(error);
+    }
+    if (!layout && !warned) {
+      BOOST_LOG(warning) << "Couldn't read the Hyprland output layout; absolute mouse and touch input may land in the wrong place"sv;
+    }
+    warned = !layout;
+    cached = std::move(layout);
+    cached_at = now;
+    return cached;
+  }
+
+  // Place each KMS output where Hyprland lays it out, in the logical coordinates Hyprland maps
+  // absolute input onto. Returns the layout's bounding box when it was applied.
+  static std::optional<std::pair<int, int>> correlate_to_hyprland_layout(std::vector<kms::card_descriptor_t> &cds) {
+    const auto layout = hyprland_layout();
+    if (!layout) return std::nullopt;
+    for (const auto &output : layout->outputs) {
+      std::vector<kms::monitor_t *> candidates;
+      for (auto &card_descriptor : cds) {
+        for (auto &[_, monitor_descriptor] : card_descriptor.crtc_to_monitor) {
+          if (monitor_descriptor.monitor_index && monitor_descriptor.connector_name == output.name) {
+            candidates.emplace_back(&monitor_descriptor);
+          }
+        }
+      }
+      // The same connector name on two GPUs can't be told apart here.
+      if (candidates.size() != 1) continue;
+      auto &viewport = candidates.front()->viewport;
+      viewport.output_name = output.name;
+      viewport.offset_x = output.x;
+      viewport.offset_y = output.y;
+      viewport.logical_width = output.width;
+      viewport.logical_height = output.height;
+    }
+    return std::pair {layout->width, layout->height};
+  }
+
   // Called only while kms::display_mutex protects the shared enumeration state.
   static std::vector<std::string> kms_display_names_unlocked(mem_type_e hwdevice_type) {
     std::uint32_t count = 0;
@@ -2699,8 +2761,11 @@ namespace platf {
       });
     }
 
+    std::optional<std::pair<int, int>> hyprland_layout_size;
     if (!wl::init()) {
       correlate_to_wayland(cds);
+    } else if (linux_display::hyprland_kms_session()) {
+      hyprland_layout_size = correlate_to_hyprland_layout(cds);
     }
 
     // Deduce the full virtual desktop size
@@ -2725,6 +2790,10 @@ namespace platf {
         kms::env_logical_height = std::max(kms::env_logical_height, (int) (monitor_descriptor.viewport.offset_y + monitor_descriptor.viewport.logical_height));
         kms::env_logical_width = std::max(kms::env_logical_width, (int) (monitor_descriptor.viewport.offset_x + monitor_descriptor.viewport.logical_width));
       }
+    }
+    // Hyprland maps absolute input onto every output it lays out, including any KMS can't see.
+    if (hyprland_layout_size) {
+      std::tie(kms::env_logical_width, kms::env_logical_height) = *hyprland_layout_size;
     }
 
     BOOST_LOG(debug) << "Desktop resolution: "sv << kms::env_width << 'x' << kms::env_height;

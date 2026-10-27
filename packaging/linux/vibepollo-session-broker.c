@@ -1302,7 +1302,7 @@ static bool display_observe_arguments_are_safe(int argc, char **argv) {
 static bool display_request_uses_bounded_reply(int argc, char **argv) {
   return argc >= 2 && (!strcmp(argv[1], "display-query") ||
                        !strcmp(argv[1], "display-apply") ||
-                       (argc == 2 && !strcmp(argv[1], "display-observe")));
+                       (argc == 2 && (!strcmp(argv[1], "display-observe") || !strcmp(argv[1], "display-layout"))));
 }
 
 static bool display_request_is_mutating(const char *operation) {
@@ -1329,6 +1329,7 @@ static bool steam_big_picture_request(const char *operation, const char *command
 
 static bool hyprland_request_supported(const struct session_identity *identity, const char *operation) {
   return !strcmp(operation, "display-observe") || !strcmp(operation, "display-observe-events") ||
+         !strcmp(operation, "display-layout") ||
          !strncmp(operation, "audio-", 6) || !strncmp(operation, "provider-", 9) ||
          !strcmp(operation, "app") ||
          // X11/Proton launches need the bound Xwayland display.
@@ -1341,7 +1342,7 @@ static int execute_request(int argc, char **argv,
                            gid_t service_gid) {
   if (argc < 2) return 2;
   enum operation {
-    DISPLAY_QUERY, DISPLAY_APPLY, DISPLAY_OBSERVE, DISPLAY_POWER, DISPLAY_WAKE, DISPLAY_INHIBIT, DISPLAY_RETAIN, TOUCH_MAP, AUDIO_GET_DEFAULT, AUDIO_LIST_SINKS, AUDIO_SET_DEFAULT,
+    DISPLAY_QUERY, DISPLAY_APPLY, DISPLAY_OBSERVE, DISPLAY_LAYOUT, DISPLAY_POWER, DISPLAY_WAKE, DISPLAY_INHIBIT, DISPLAY_RETAIN, TOUCH_MAP, AUDIO_GET_DEFAULT, AUDIO_LIST_SINKS, AUDIO_SET_DEFAULT,
     AUDIO_CREATE_NULL, AUDIO_REMOVE_NULL, AUDIO_CAPTURE, STEAM, STEAM_BIG_PICTURE, STEAM_DIRECT, GLOBAL_LIMITER, LUTRIS, LUTRIS_WAYLAND_HDR, MANAGED_FOCUS,
     PROVIDER_STEAM_SCAN, PROVIDER_LUTRIS_SCAN, PROVIDER_STEAM_ARTWORK, PROVIDER_LUTRIS_ARTWORK, RTX_HDR_FOREGROUND, APP, APP_WAYLAND_HDR
   } operation;
@@ -1362,6 +1363,7 @@ static int execute_request(int argc, char **argv,
   if (!strcmp(argv[1], "display-query") && argc == 2) operation = DISPLAY_QUERY;
 #ifdef VIBEPOLLO_HAVE_WAYLAND_OBSERVER
   else if (display_observe_arguments_are_safe(argc, argv)) operation = DISPLAY_OBSERVE;
+  else if (!strcmp(argv[1], "display-layout") && argc == 2) operation = DISPLAY_LAYOUT;
 #endif
   else if (display_borrow_request(argc,argv) && !strcmp(identity->role,"desktop")) operation = DISPLAY_INHIBIT;
   else if (!strcmp(argv[1], "display-power") && argc == 2) operation = DISPLAY_POWER;
@@ -1468,6 +1470,16 @@ static int execute_request(int argc, char **argv,
       {
         char *const arguments[] = {"vibepollo-display-observer",
           !strcmp(argv[1], "display-observe-events") ? "--watch" : NULL, NULL};
+        execv("/usr/libexec/vibeshine/vibepollo-display-observer", arguments);
+        break;
+      }
+#else
+      break;
+#endif
+    case DISPLAY_LAYOUT:
+#ifdef VIBEPOLLO_HAVE_WAYLAND_OBSERVER
+      {
+        char *const arguments[] = {"vibepollo-display-observer", "--layout", NULL};
         execv("/usr/libexec/vibeshine/vibepollo-display-observer", arguments);
         break;
       }

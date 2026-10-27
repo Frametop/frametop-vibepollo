@@ -11,6 +11,7 @@
 #include <wayland-client.h>
 
 #include "dpms.h"
+#include "xdg-output-unstable-v1.h"
 
 #define MAX_OUTPUTS 64
 #define MAX_OUTPUT_NAME 127
@@ -21,6 +22,7 @@ struct observed_output {
   struct wl_list link;
   struct wl_output *output;
   struct org_kde_kwin_dpms *dpms;
+  struct zxdg_output_v1 *xdg_output;
   char *name;
   unsigned mode;
   bool mode_known;
@@ -28,16 +30,21 @@ struct observed_output {
   bool support_known;
   bool layout_changed;
   int32_t x, y, width, height, refresh, scale, transform;
+  // The compositor-space rectangle (xdg-output), after scale and transform.
+  int32_t logical_x, logical_y, logical_width, logical_height;
+  bool logical_position_known, logical_size_known;
 };
 
 struct observer {
   struct wl_display *display;
   struct wl_registry *registry;
   struct org_kde_kwin_dpms_manager *manager;
+  struct zxdg_output_manager_v1 *xdg_manager;
   struct wl_list outputs;
   unsigned output_count;
   bool failed;
   bool watch;
+  bool layout;
   bool ready;
 };
 
@@ -56,7 +63,7 @@ static void dpms_mode(void *data, struct org_kde_kwin_dpms *dpms, uint32_t mode)
 }
 
 static void emit_if_known(struct observed_output *output) {
-  if (!output->name || !output->support_known || !output->mode_known) return;
+  if (output->observer->layout || !output->name || !output->support_known || !output->mode_known) return;
   if (printf("%s%s\t%u\t%u\n", output->observer->watch ? "S\t" : "", output->name,
              output->supported ? 1u : 0u, output->mode) < 0 || fflush(stdout)) {
     // A closed consumer is an ordinary cancellation path.
@@ -118,6 +125,56 @@ static void attach_dpms(struct observer *observer, struct observed_output *outpu
   }
 }
 
+static void xdg_logical_position(void *data, struct zxdg_output_v1 *xdg_output, int32_t x, int32_t y) {
+  (void) xdg_output;
+  struct observed_output *observed = data;
+  observed->logical_x = x; observed->logical_y = y;
+  observed->logical_position_known = true;
+}
+
+static void xdg_logical_size(void *data, struct zxdg_output_v1 *xdg_output, int32_t width, int32_t height) {
+  (void) xdg_output;
+  struct observed_output *observed = data;
+  observed->logical_width = width; observed->logical_height = height;
+  observed->logical_size_known = true;
+}
+
+static void xdg_done(void *data, struct zxdg_output_v1 *xdg_output) { (void) data; (void) xdg_output; }
+static void xdg_name(void *data, struct zxdg_output_v1 *xdg_output, const char *name) {
+  (void) data; (void) xdg_output; (void) name;
+}
+static void xdg_description(void *data, struct zxdg_output_v1 *xdg_output, const char *description) {
+  (void) data; (void) xdg_output; (void) description;
+}
+
+static const struct zxdg_output_v1_listener xdg_output_listener = {
+  .logical_position = xdg_logical_position,
+  .logical_size = xdg_logical_size,
+  .done = xdg_done,
+  .name = xdg_name,
+  .description = xdg_description,
+};
+
+static void attach_xdg_output(struct observer *observer, struct observed_output *output) {
+  if (!observer->xdg_manager || !output->output || output->xdg_output) return;
+  output->xdg_output = zxdg_output_manager_v1_get_xdg_output(observer->xdg_manager, output->output);
+  if (!output->xdg_output || zxdg_output_v1_add_listener(output->xdg_output, &xdg_output_listener, output)) {
+    observer->failed = true;
+  }
+}
+
+// One line per named output: L, name, then its compositor-space x, y, width and height.
+static void emit_layout(struct observer *observer) {
+  struct observed_output *output;
+  wl_list_for_each(output, &observer->outputs, link) {
+    if (!output->name || !output->logical_position_known || !output->logical_size_known ||
+        output->logical_width <= 0 || output->logical_height <= 0) continue;
+    if (printf("L\t%s\t%d\t%d\t%d\t%d\n", output->name, output->logical_x, output->logical_y,
+               output->logical_width, output->logical_height) < 0) _exit(0);
+  }
+  if (fflush(stdout)) _exit(0);
+}
+
 static void output_name(void *data, struct wl_output *output, const char *name) {
   (void) output;
   struct observed_output *observed = data;
@@ -156,6 +213,14 @@ static void registry_global(void *data, struct wl_registry *registry, uint32_t n
     wl_list_for_each(output, &observer->outputs, link) attach_dpms(observer, output);
     return;
   }
+  if (observer->layout && !strcmp(interface, zxdg_output_manager_v1_interface.name) && !observer->xdg_manager) {
+    // The second roundtrip delivers each output's logical position and size.
+    observer->xdg_manager = wl_registry_bind(registry, name, &zxdg_output_manager_v1_interface, version < 3 ? version : 3);
+    if (!observer->xdg_manager) observer->failed = true;
+    struct observed_output *output;
+    wl_list_for_each(output, &observer->outputs, link) attach_xdg_output(observer, output);
+    return;
+  }
   if (strcmp(interface, wl_output_interface.name) || version < 4) return;
   if (observer->output_count >= MAX_OUTPUTS) {
     observer->failed = true;
@@ -177,6 +242,7 @@ static void registry_global(void *data, struct wl_registry *registry, uint32_t n
     return;
   }
   attach_dpms(observer, output);
+  attach_xdg_output(observer, output);
 }
 
 static void registry_remove(void *data, struct wl_registry *registry, uint32_t name) {
@@ -190,6 +256,7 @@ static void registry_remove(void *data, struct wl_registry *registry, uint32_t n
     }
     wl_list_remove(&output->link);
     if (output->dpms) org_kde_kwin_dpms_release(output->dpms);
+    if (output->xdg_output) zxdg_output_v1_destroy(output->xdg_output);
     if (output->output) wl_output_destroy(output->output);
     free(output->name);
     free(output);
@@ -207,10 +274,12 @@ static void destroy_observer(struct observer *observer) {
   wl_list_for_each_safe(output, temporary, &observer->outputs, link) {
     wl_list_remove(&output->link);
     if (output->dpms) org_kde_kwin_dpms_release(output->dpms);
+    if (output->xdg_output) zxdg_output_v1_destroy(output->xdg_output);
     if (output->output) wl_output_destroy(output->output);
     free(output->name);
     free(output);
   }
+  if (observer->xdg_manager) zxdg_output_manager_v1_destroy(observer->xdg_manager);
   if (observer->manager) wl_proxy_destroy((struct wl_proxy *) observer->manager);
   if (observer->registry) wl_registry_destroy(observer->registry);
   if (observer->display) wl_display_disconnect(observer->display);
@@ -218,17 +287,19 @@ static void destroy_observer(struct observer *observer) {
 
 int main(int argc, char **argv) {
   const bool watch = argc == 2 && !strcmp(argv[1], "--watch");
-  if ((argc != 1 && !watch) || getuid() == 0 || geteuid() != getuid() || getegid() != getgid() ||
+  const bool layout = argc == 2 && !strcmp(argv[1], "--layout");
+  if ((argc != 1 && !watch && !layout) || getuid() == 0 || geteuid() != getuid() || getegid() != getgid() ||
       prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) ||
       prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1) return 126;
   alarm(4);
-  struct observer observer = {.watch = watch};
+  struct observer observer = {.watch = watch, .layout = layout};
   wl_list_init(&observer.outputs);
   observer.display = wl_display_connect(NULL);
   if (!observer.display) return 0; // Unsupported/unavailable session: caller treats it as unknown.
   observer.registry = wl_display_get_registry(observer.display);
   if (!observer.registry || wl_registry_add_listener(observer.registry, &registry_listener, &observer) ||
-      wl_display_roundtrip(observer.display) < 0 || observer.failed || (!observer.manager && !watch)) {
+      wl_display_roundtrip(observer.display) < 0 || observer.failed ||
+      (layout ? !observer.xdg_manager : !observer.manager && !watch)) {
     destroy_observer(&observer);
     return 0;
   }
@@ -239,6 +310,7 @@ int main(int argc, char **argv) {
     return 0;
   }
   alarm(0);
+  if (layout) emit_layout(&observer);
   // One subscription remains idle between compositor events. Its initial
   // state only seeds the host baseline; it is not a monitor wake.
   if (watch) {

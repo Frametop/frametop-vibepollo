@@ -55,6 +55,8 @@ int main(void) {
   assert(hyprland_request_supported(&identity, "app"));
   assert(hyprland_request_supported(&identity, "audio-capture"));
   assert(hyprland_request_supported(&identity, "display-observe"));
+  // The host has no Wayland connection there, so absolute input needs the layout.
+  assert(hyprland_request_supported(&identity, "display-layout"));
   assert(hyprland_request_supported(&identity, "provider-steam-scan"));
   // Steam and Lutris launches need the bound Xwayland display.
   char *steam[] = {"broker", "steam", "3259780", NULL};
