@@ -106,6 +106,32 @@ TEST(CapturePolicy, PersistentDisplayFailureBacksOffWithoutDelayingInitialRecove
   EXPECT_FALSE(video::policy::should_log_display_retry(17));
 }
 
+TEST(CapturePolicy, MissingCaptureOutputWarnsOnlyAfterANewDisplayHadTimeToAppear) {
+  EXPECT_FALSE(video::policy::should_warn_missing_capture_output(0));
+  EXPECT_FALSE(video::policy::should_warn_missing_capture_output(2));
+  EXPECT_TRUE(video::policy::should_warn_missing_capture_output(4));
+  EXPECT_FALSE(video::policy::should_warn_missing_capture_output(5));
+  EXPECT_TRUE(video::policy::should_warn_missing_capture_output(8));
+}
+
+TEST(CapturePolicy, AllowedCaptureNamesKeepCaptureOrderAndDropUnlistedOutputs) {
+  const std::array<std::string, 4> capture {"Virtual-1", "eDP-2", "DP-2", "eDP-1"};
+  const std::array<std::string, 3> physical {"DP-2", "eDP-2", "DP-1"};
+  EXPECT_EQ(
+    video::policy::allowed_capture_names(capture, physical),
+    (std::vector<std::string> {"eDP-2", "DP-2"})
+  );
+  EXPECT_TRUE(video::policy::allowed_capture_names(capture, std::array<std::string, 1> {"edp-2"}).empty());
+}
+
+TEST(EncoderPolicy, DemotesCudaEncodersOnlyWhenTheyCaptureFewerDisplays) {
+  EXPECT_TRUE(video::policy::demote_cuda_encoders(0, 2));
+  EXPECT_TRUE(video::policy::demote_cuda_encoders(1, 2));
+  EXPECT_FALSE(video::policy::demote_cuda_encoders(1, 1));
+  EXPECT_FALSE(video::policy::demote_cuda_encoders(0, 0));
+  EXPECT_FALSE(video::policy::demote_cuda_encoders(2, 1));
+}
+
 TEST(EncoderPolicy, SelectsFirstAvailableCapableEncoderWithoutHardwareProbe) {
   FakeEncoderProvider provider;
   provider.values["nvenc"] = {false, true, true};

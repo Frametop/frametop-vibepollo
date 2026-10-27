@@ -590,6 +590,11 @@ namespace nvhttp {
       return static_cast<int>(std::lround(pixels / std::max(factor, 0.01)));
     }
 
+    bool output_in_capture_list(const std::string &output, const platf::mem_type_e mem_type) {
+      const auto capture_outputs = platf::display_names(mem_type);
+      return std::find(capture_outputs.begin(), capture_outputs.end(), output) != capture_outputs.end();
+    }
+
     // Frametop display role: the capture output of an existing, enabled display
     // that Vibepollo did not create, named by its connector (the device id
     // /api/display-devices lists, such as DP-1).
@@ -602,8 +607,7 @@ namespace nvhttp {
         return candidate.m_device_id == requested;
       });
       if (device == devices->end() || !device->m_info) return std::nullopt;
-      const auto capture_outputs = platf::display_names(platf::mem_type_e::unknown);
-      if (std::find(capture_outputs.begin(), capture_outputs.end(), requested) == capture_outputs.end()) return std::nullopt;
+      if (!output_in_capture_list(requested, platf::mem_type_e::unknown)) return std::nullopt;
       return requested;
     }
 
@@ -612,9 +616,7 @@ namespace nvhttp {
     // GPU would stream no video at all. Without a probe yet, the stream's own probe decides.
     bool existing_display_capturable_by_encoder(const std::string &output) {
       const auto mem_type = video::chosen_capture_mem_type();
-      if (!mem_type) return true;
-      const auto capture_outputs = platf::display_names(*mem_type);
-      return std::find(capture_outputs.begin(), capture_outputs.end(), output) != capture_outputs.end();
+      return !mem_type || output_in_capture_list(output, *mem_type);
     }
 
     void refresh_remote_monitor_baseline(const bool extend_active_stream) {
@@ -5213,6 +5215,11 @@ namespace nvhttp {
             return;
           }
 #ifdef __linux__
+          // The cached encoder may predate a display moving between GPUs, so probe once more
+          // (a cache hit unless the displays changed). A failed probe gets its own 503 below.
+          if (!existing_display_capturable_by_encoder(*output)) {
+            (void) video::probe_encoders();
+          }
           if (!existing_display_capturable_by_encoder(*output)) {
             BOOST_LOG(warning) << "Frametop display '" << *output << "' is on a GPU the selected encoder can't capture from.";
             tree.put("root.resume", 0);

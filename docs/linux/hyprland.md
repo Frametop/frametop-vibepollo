@@ -74,12 +74,14 @@ closed as above.
 On a hybrid laptop, the encoder must run on the GPU the displays are wired to.
 KMS capture for NVENC skips a GPU it can't import framebuffers from, so an
 Intel- or AMD-wired display would stream no video. With no `encoder` set, the
-host skips NVENC when no display is on a GPU it can capture from, and probes
-the other encoders on the first physical display. For Intel this needs
-`intel-media-driver`. A `frametopDisplay` launch for a display the chosen
-encoder can't capture fails with status 503 and names the display. To choose
-the GPU yourself, set `encoder = vaapi` and `adapter_name` to that GPU's render
-node (see `/dev/dri/by-path`).
+host tries NVENC after VA-API (but still before software encoding) when NVENC
+can capture fewer physical displays than VA-API can. Each encoder probes on a
+physical display it can capture. For Intel this needs `intel-media-driver`.
+The host probes again when a display moves between GPUs, such as at a dock. A
+`frametopDisplay` launch for a display the chosen encoder can't capture fails
+with status 503 and names the display. To choose the GPU yourself, set
+`encoder = vaapi` and `adapter_name` to that GPU's render node (see
+`/dev/dri/by-path`).
 
 Hyprland's Xwayland runs without an Xauthority file, and the controller's
 private `/tmp` cannot see `/tmp/.X11-unix`. The controller treats UWSM's

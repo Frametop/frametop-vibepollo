@@ -63,6 +63,26 @@ namespace video::policy {
     return consecutive_failures == 0 || (consecutive_failures & (consecutive_failures - 1)) == 0;
   }
 
+  bool should_warn_missing_capture_output(const std::size_t consecutive_failures) {
+    // Retries 0-3 wait 50 + 100 + 200 + 400 ms (display_retry_delay).
+    return consecutive_failures >= 4 && should_log_display_retry(consecutive_failures);
+  }
+
+  std::vector<std::string> allowed_capture_names(
+    const std::span<const std::string> capture_names,
+    const std::span<const std::string> allowed_outputs
+  ) {
+    std::vector<std::string> names;
+    for (const auto &name : capture_names) {
+      if (std::ranges::find(allowed_outputs, name) != allowed_outputs.end()) names.push_back(name);
+    }
+    return names;
+  }
+
+  bool demote_cuda_encoders(const std::size_t cuda_capturable_displays, const std::size_t vaapi_capturable_displays) {
+    return cuda_capturable_displays < vaapi_capturable_displays;
+  }
+
   rational_t framerate_x100_to_rational(std::int32_t value) {
     if (value % 2997 == 0) return {(value / 2997) * 30000, 1001};
     if (value == 2397 || value == 2398) return {24000, 1001};

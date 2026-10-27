@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace video::policy {
   /**
@@ -88,6 +89,24 @@ namespace video::policy {
 
   /** Log the first failure and exponentially sparse reminders for a persistent retry loop. */
   [[nodiscard]] bool should_log_display_retry(std::size_t consecutive_failures);
+
+  /**
+   * Warn that an exact capture output is missing once the retries pass ~750 ms, which a new
+   * private display needs at most, then as sparsely as should_log_display_retry().
+   */
+  [[nodiscard]] bool should_warn_missing_capture_output(std::size_t consecutive_failures);
+
+  /** The capture names that are also allowed outputs, in capture order. */
+  [[nodiscard]] std::vector<std::string> allowed_capture_names(
+    std::span<const std::string> capture_names,
+    std::span<const std::string> allowed_outputs
+  );
+
+  /**
+   * Try CUDA encoders after VA-API when they can capture fewer displays. Each GPU's
+   * encoder can capture only the displays wired to it, so prefer the one that covers more.
+   */
+  [[nodiscard]] bool demote_cuda_encoders(std::size_t cuda_capturable_displays, std::size_t vaapi_capturable_displays);
 
   struct rational_t {
     int numerator;

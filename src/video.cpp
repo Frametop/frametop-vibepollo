@@ -60,7 +60,7 @@ extern "C" {
   #include "platform/linux/cuda.h"
 #endif
 #ifdef __linux__
-  #include "platform/linux/private_display.h"
+  #include "platform/linux/display_backend.h"
   #include "platform/linux/rtx_hdr_runtime.h"
   #include "platform/linux/session_backend.h"
 #endif
@@ -2764,8 +2764,10 @@ namespace video {
   }
 
   std::optional<platf::mem_type_e> chosen_capture_mem_type() {
-    if (!has_successful_encoder_probe()) return std::nullopt;
-    return chosen_encoder->platform_formats->dev_type;
+    // A probe that just succeeded caches its result before it publishes the encoder.
+    const auto *encoder = chosen_encoder;
+    if (!encoder || !has_successful_encoder_probe()) return std::nullopt;
+    return encoder->platform_formats->dev_type;
   }
 
   bool last_encoder_probe_failed() {
@@ -3255,7 +3257,7 @@ namespace video {
       if (!ensure_virtual_display_ready(display_names, display_p, allow_process_display_preference)) {
         // A new private display can take a moment to appear, so stay quiet for the first ~750 ms.
         // After that the stream is sending no video, and the client will give up on it.
-        if (exact_output && required_output && log_display_retry && display_retry_failures >= 4) {
+        if (exact_output && required_output && policy::should_warn_missing_capture_output(display_retry_failures)) {
           BOOST_LOG(warning) << "Capture output [" << *required_output << "] is not available to the "
                              << encoder.name << " encoder's capture device; this stream has no video yet.";
         }
@@ -7489,6 +7491,38 @@ namespace video {
     return 1;
   }
 
+#ifdef __linux__
+  namespace {
+    // Hyprland's physical outputs: KMS capture names without private or virtual connectors.
+    std::vector<std::string> hyprland_physical_outputs() {
+      std::vector<std::string> outputs;
+      if (const auto devices = platf::linux_display::backend().enumerate_devices(display_device::DeviceEnumerationDetail::Full)) {
+        for (const auto &device : *devices) outputs.push_back(device.m_device_id);
+      }
+      return outputs;
+    }
+
+    std::vector<std::string> hyprland_capture_outputs(const platf::mem_type_e mem_type, const std::vector<std::string> &physical) {
+      return video::policy::allowed_capture_names(platf::display_names(mem_type), physical);
+    }
+
+    // Hyprland streams capture through KMS, which for CUDA encoders skips GPUs without CUDA
+    // framebuffer import. NVENC's probe uses a synthetic source, so on a hybrid laptop it would
+    // pass and then stream no video from the other GPU's displays. Automatic selection only.
+    std::optional<bool> hyprland_cuda_demotion() {
+      if (!config::video.encoder.empty() || !platf::linux_display::hyprland_kms_session()) return std::nullopt;
+      const auto physical = hyprland_physical_outputs();
+      return video::policy::demote_cuda_encoders(
+        hyprland_capture_outputs(platf::mem_type_e::cuda, physical).size(),
+        hyprland_capture_outputs(platf::mem_type_e::vaapi, physical).size()
+      );
+    }
+
+    // The demotion the cached probe result was chosen under. Guarded by encoder_probe_mutex.
+    std::optional<bool> probed_cuda_demotion;
+  }  // namespace
+#endif
+
   int probe_encoders() {
     std::lock_guard<std::mutex> lock(encoder_probe_mutex);
     const auto probe_target = resolve_probe_target();
@@ -7537,9 +7571,19 @@ namespace video {
     const bool wants_av1 = config::video.av1_mode >= 2 || av1_mode_auto;
     const bool wants_av1_hdr = config::video.av1_mode == 3 || av1_mode_auto;
 
+    bool capture_split_unchanged = true;
+#ifdef __linux__
+    // The cache key doesn't cover which GPU drives each display, so a display that moves
+    // between GPUs (a dock, a lid, an external monitor) needs a fresh probe.
+    const auto cuda_demotion = hyprland_cuda_demotion();
+    capture_split_unchanged = cuda_demotion == probed_cuda_demotion;
+#endif
     if (probe_cache_matches(cache_key, wants_hdr, wants_hevc, wants_hevc_hdr, wants_av1, wants_av1_hdr)) {
-      BOOST_LOG(debug) << "Encoder probe skipped (cached success).";
-      return 0;
+      if (capture_split_unchanged) {
+        BOOST_LOG(debug) << "Encoder probe skipped (cached success).";
+        return 0;
+      }
+      BOOST_LOG(info) << "Displays moved between GPUs; probing encoders again."sv;
     }
 
     if (!allow_encoder_probing()) {
@@ -7568,14 +7612,14 @@ namespace video {
     if (!nvenc_selection_policy.include_native) {
       encoder_list.erase(std::remove(encoder_list.begin(), encoder_list.end(), &nvenc), encoder_list.end());
     }
-    // Hyprland streams always capture through KMS, which skips cards without CUDA framebuffer
-    // import unless NVENC was chosen explicitly. NVENC's probe uses a synthetic source, so on a
-    // hybrid laptop with every display on the other GPU it would pass and then stream no video.
-    if (config::video.encoder.empty() && platf::linux_display::hyprland_kms_session() &&
-        platf::display_names(platf::mem_type_e::cuda).empty() && !platf::display_names().empty()) {
-      BOOST_LOG(warning) << "No display is on a GPU that NVENC can capture from; trying the other encoders"sv;
-      std::erase_if(encoder_list, [](const encoder_t *encoder) {
-        return encoder->platform_formats->dev_type == platf::mem_type_e::cuda;
+#endif
+#ifdef __linux__
+    // Try CUDA encoders after the others but before software, so a broken VA-API driver still
+    // falls back to NVENC rather than to software encoding.
+    if (cuda_demotion.value_or(false)) {
+      BOOST_LOG(warning) << "Fewer displays are on a GPU that NVENC can capture from; trying the other encoders first"sv;
+      std::stable_partition(encoder_list.begin(), encoder_list.end(), [](const encoder_t *encoder) {
+        return encoder->platform_formats->dev_type != platf::mem_type_e::cuda && encoder != &software;
       });
     }
 #endif
@@ -7592,21 +7636,24 @@ namespace video {
     encoder_t *new_encoder = nullptr;
     std::optional<platf::adapter_id_t> candidate_probe_adapter;
     std::optional<platf::adapter_id_t> successful_probe_adapter;
-    auto probe_display_name = probe_target.display_name;
 #ifdef __linux__
     // Hyprland refuses to capture an empty output name, so without output_name every encoder
     // probed through real capture (all but NVENC) would fail. A probe sends no frames anywhere,
-    // so any physical display will do.
-    if (probe_display_name.empty() && platf::linux_display::hyprland_kms_session()) {
-      const auto names = platf::display_names();
-      const auto physical = std::ranges::find_if(names, [](const auto &name) {
-        return !platf::linux_private_display::is_private_output(name);
-      });
-      if (physical != names.end()) probe_display_name = *physical;
+    // so any physical display the encoder can capture will do.
+    std::vector<std::string> probe_physical_outputs;
+    if (probe_target.display_name.empty() && platf::linux_display::hyprland_kms_session()) {
+      probe_physical_outputs = hyprland_physical_outputs();
     }
 #endif
     const auto validate_probe_encoder = [&](encoder_t &encoder, const bool expect_failure) {
       candidate_probe_adapter.reset();
+      auto probe_display_name = probe_target.display_name;
+#ifdef __linux__
+      if (!probe_physical_outputs.empty()) {
+        const auto outputs = hyprland_capture_outputs(encoder.platform_formats->dev_type, probe_physical_outputs);
+        probe_display_name = outputs.empty() ? probe_physical_outputs.front() : outputs.front();
+      }
+#endif
       return validate_encoder(
         encoder,
         expect_failure,
@@ -7894,6 +7941,9 @@ namespace video {
     // Publish the new encoder only after the probe has fully succeeded,
     // so concurrent capture threads never observe a null chosen_encoder.
     chosen_encoder = new_encoder;
+#ifdef __linux__
+    probed_cuda_demotion = cuda_demotion;
+#endif
     restore_previous_probe_state.disable();
     return 0;
   }

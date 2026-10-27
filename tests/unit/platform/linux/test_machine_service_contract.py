@@ -652,16 +652,27 @@ require(display_role, "if (display_power_managed && !launch_session->display_pow
 # A display wired to a GPU the encoder can't import from (NVENC on a hybrid laptop)
 # streams no video, so the launch must refuse it with a reason instead.
 display_capture = nvhttp.split("existing_display_capture_output(requested_display)", 1)[1].split("launch_session->remote_capture_output = *output;", 1)[0]
-require(display_capture, "if (!existing_display_capturable_by_encoder(*output)) {", "display role rejects an uncapturable display")
-require(display_capture, 'tree.put("root.<xmlattr>.status_code", 503);', "uncapturable display launch status")
+reprobe = display_capture.index("(void) video::probe_encoders();")
+require(display_capture[reprobe:], "if (!existing_display_capturable_by_encoder(*output)) {", "display role re-checks after a fresh probe")
+require(display_capture[reprobe:], 'tree.put("root.<xmlattr>.status_code", 503);', "uncapturable display launch status")
 capturable = nvhttp.split("bool existing_display_capturable_by_encoder(", 1)[1].split("\n    }\n", 1)[0]
 require(capturable, "video::chosen_capture_mem_type()", "capturability uses the chosen encoder")
-require(capturable, "platf::display_names(*mem_type)", "capturability uses the encoder's capture list")
+require(capturable, "output_in_capture_list(output, *mem_type)", "capturability uses the encoder's capture list")
+demotion = video_source.split("std::optional<bool> hyprland_cuda_demotion() {", 1)[1].split("\n    }\n", 1)[0]
+require(demotion, "!config::video.encoder.empty() || !platf::linux_display::hyprland_kms_session()", "only automatic Hyprland selection demotes NVENC")
+require(demotion, "video::policy::demote_cuda_encoders(", "demotion uses the tested policy")
+physical = video_source.split("std::vector<std::string> hyprland_physical_outputs() {", 1)[1].split("\n    }\n", 1)[0]
+require(physical, "platf::linux_display::backend().enumerate_devices(", "demotion and probes count only the backend's physical outputs")
 probe = video_source.split("int probe_encoders() {", 1)[1].split("BOOST_LOG(info) << \"// Testing for available encoders", 1)[0]
-require(probe, "platf::display_names(platf::mem_type_e::cuda).empty() && !platf::display_names().empty()", "Hyprland skips NVENC without a CUDA-capturable display")
-require(probe, "config::video.encoder.empty() && platf::linux_display::hyprland_kms_session()", "only automatic Hyprland selection skips NVENC")
-require(probe, "if (probe_display_name.empty() && platf::linux_display::hyprland_kms_session()) {", "Hyprland probe names a physical display")
-require(probe, "!platf::linux_private_display::is_private_output(name)", "Hyprland probe never opens a private display")
+cached = probe.index("if (probe_cache_matches(")
+require(probe[:cached], "capture_split_unchanged = cuda_demotion == probed_cuda_demotion;", "a display moving between GPUs bypasses the probe cache")
+require(probe[cached:], "if (capture_split_unchanged) {", "cached success needs an unchanged GPU split")
+require(probe, "encoder->platform_formats->dev_type != platf::mem_type_e::cuda && encoder != &software", "demoted NVENC stays ahead of software")
+validate = probe.split("const auto validate_probe_encoder = [&](", 1)[1].split("\n    };\n", 1)[0]
+require(validate, "hyprland_capture_outputs(encoder.platform_formats->dev_type, probe_physical_outputs)", "each encoder probes a display it can capture")
+require(validate, "        probe_display_name\n      );", "the probe display reaches validate_encoder")
+success = video_source.split("int probe_encoders() {", 1)[1]
+require(success, "chosen_encoder = new_encoder;\n#ifdef __linux__\n    probed_cuda_demotion = cuda_demotion;", "a successful probe records its GPU split")
 # Idle screen-off of a private-only topology wedged NVIDIA GSP with no client
 # left. Its hold blocks only screen changes and ends with the restore.
 require(broker, '!strcmp(argv[1], "display-retain") && argc == 2', "fixed retained screen operation")
