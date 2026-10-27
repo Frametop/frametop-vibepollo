@@ -229,6 +229,7 @@ namespace video {
   struct encoder_platform_formats_amf: formats_t {};
   struct encoder_t {
     std::shared_ptr<formats_t> platform_formats=std::make_shared<encoder_platform_formats_avcodec>();
+    const char *name="mock";
     unsigned flags{};
     struct codec_t { const char *name="mock"; };
     codec_t codec_from_config(const config_t&) const { return {}; }
@@ -265,6 +266,7 @@ namespace video {
   namespace policy {
     enum class capture_selection_e { process_preferred, exact_output };
     bool should_log_display_retry(size_t) { return false; }
+    bool should_warn_missing_capture_output(size_t) { return false; }
     bool may_apply_process_display_preference(capture_selection_e) { return false; }
     std::optional<std::string> select_manual_display_output(capture_selection_e,int,const std::vector<std::string>&) { return {}; }
     std::optional<int> resolve_display_output(const std::string&, const std::vector<std::string>&) { return {}; }
