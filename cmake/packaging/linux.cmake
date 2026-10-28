@@ -119,6 +119,10 @@ else()
         set_target_properties(vibepollo_touch_map PROPERTIES OUTPUT_NAME "vibepollo-touch-map")
         target_include_directories(vibepollo_touch_map PRIVATE ${GIO_INCLUDE_DIRS})
         target_link_libraries(vibepollo_touch_map PRIVATE ${GIO_LIBRARIES})
+        # Frametop host input: lends this computer's keyboards and mice to a Frametop client.
+        add_executable(vibepollo_host_input
+                "${CMAKE_SOURCE_DIR}/packaging/linux/vibepollo-host-input.c")
+        set_target_properties(vibepollo_host_input PROPERTIES OUTPUT_NAME "vibepollo-host-input")
         add_executable(vibepollo_display_power
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibepollo-display-power.c")
         set_target_properties(vibepollo_display_power PROPERTIES OUTPUT_NAME "vibepollo-display-power")
@@ -215,6 +219,7 @@ else()
         install(TARGETS vibepollo_session_exec vibepollo_app_supervisor
                 vibepollo_profile_import vibepollo_kwin_session_environment
                 vibepollo_provider_scan vibepollo_steam_launch vibepollo_display_power vibepollo_app_focus vibepollo_touch_map
+                vibepollo_host_input
                 RUNTIME DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}")
         if(TARGET vibepollo_display_observer)
             install(TARGETS vibepollo_display_observer
@@ -302,6 +307,8 @@ else()
                     "${CMAKE_CURRENT_BINARY_DIR}/vibeshine-vkms-control@.service"
                     "${CMAKE_SOURCE_DIR}/packaging/linux/vibepollo-session-exec.socket"
                     "${CMAKE_SOURCE_DIR}/packaging/linux/vibepollo-session-exec@.service"
+                    "${CMAKE_SOURCE_DIR}/packaging/linux/vibepollo-host-input.socket"
+                    "${CMAKE_SOURCE_DIR}/packaging/linux/vibepollo-host-input.service"
                     "${CMAKE_SOURCE_DIR}/packaging/linux/vibepollo-session-controller.service"
                     "${CMAKE_SOURCE_DIR}/packaging/linux/vibepollo.service"
                     DESTINATION "${VIBESHINE_SYSTEM_UNIT_INSTALL_DIR}")
@@ -356,6 +363,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             "%attr(0700,root,root) %caps(cap_kill,cap_setgid,cap_setuid+p) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibepollo-session-broker"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibepollo-app-supervisor"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibepollo-touch-map"
+            "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibepollo-host-input"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibepollo-steam-launch"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibepollo-app-focus"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibepollo-kwin-session-environment"

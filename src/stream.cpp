@@ -46,6 +46,8 @@ extern "C" {
 #include "deferred_stream_start_policy.h"
 #include "display_device.h"
 #include "display_helper_integration.h"
+#include "frametop_hostin.h"
+#include "frametop_hostin_policy.h"
 #include "frametop_mic.h"
 #include "globals.h"
 #include "hardware_metrics_session.h"
@@ -121,6 +123,8 @@ extern "C" {
 #define IDX_STEAM_HAPTIC 19
 #define IDX_STEAM_SETTINGS 20
 #define IDX_FRAMETOP_MIC 21
+#define IDX_FRAMETOP_HOST_INPUT 22
+#define IDX_FRAMETOP_HOST_INPUT_LEASE 23
 
 static const short packetTypes[] = {
   0x0305,  // Start A
@@ -145,6 +149,8 @@ static const short packetTypes[] = {
   STEAM_HAPTIC_PACKET_TYPE,  // 0x5504: Steam Controller haptic report (Vibepollo protocol extension)
   STEAM_SETTINGS_PACKET_TYPE,  // 0x5505: Steam Controller settings write (Vibepollo protocol extension)
   frametop_mic::policy::PACKET_TYPE,  // Frametop: the client's microphone (Apollo protocol extension range)
+  frametop_hostin::policy::HOST_INPUT_PACKET_TYPE,  // Frametop: this computer's keyboard and mouse, to the client
+  frametop_hostin::policy::LEASE_PACKET_TYPE,  // Frametop: the client's lease on them
 };
 
 namespace asio = boost::asio;
@@ -1605,6 +1611,30 @@ namespace stream {
     return 0;
   }
 
+  /// A Frametop host input record (frametop_hostin_policy.h). Encrypted streams only: the
+  /// manager answers nothing else.
+  int send_frametop_host_input(session_t *session, const std::string &record) {
+    if (!session->control.peer || session->config.controlProtocolType != 13 ||
+        record.size() > frametop_hostin::policy::MAX_PAYLOAD) {
+      return -1;
+    }
+
+    std::string plaintext(sizeof(control_header_v2), '\0');
+    auto *header = reinterpret_cast<control_header_v2 *>(plaintext.data());
+    header->type = packetTypes[IDX_FRAMETOP_HOST_INPUT];
+    header->payloadLength = static_cast<std::uint16_t>(record.size());
+    plaintext += record;
+
+    std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(sizeof(control_header_v2) + frametop_hostin::policy::MAX_PAYLOAD) + crypto::cipher::tag_size>
+      encrypted_payload;
+
+    auto payload = encode_control(session, plaintext, encrypted_payload);
+    if (payload.empty() || session->broadcast_ref->control_server.send(payload, session->control.peer)) {
+      return -1;
+    }
+    return 0;
+  }
+
   int send_hdr_mode(session_t *session, video::hdr_info_t hdr_info) {
     if (!session->control.peer) {
       BOOST_LOG(warning) << "Couldn't send HDR mode, still waiting for PING from Moonlight"sv;
@@ -1977,6 +2007,14 @@ namespace stream {
       }
     });
 
+    server->map(packetTypes[IDX_FRAMETOP_HOST_INPUT_LEASE], [](session_t *session, const std::string_view &payload) {
+      // As with the microphone, only an encrypted control stream gets here as type 13.
+      const bool permitted = session->config.controlProtocolType == 13 &&
+                             (session->permission & crypto::PERM::input_kbd) &&
+                             (session->permission & crypto::PERM::input_mouse);
+      frametop_hostin::on_lease(session, permitted, payload);
+    });
+
     server->map(packetTypes[IDX_ENCRYPTED], [server](session_t *session, const std::string_view &payload) {
       BOOST_LOG(verbose) << "type [IDX_ENCRYPTED]"sv;
 
@@ -2242,6 +2280,10 @@ namespace stream {
               send_hdr_mode(session, std::move(hdr_info));
             }
 
+            for (const auto &record : frametop_hostin::take(session)) {
+              send_frametop_host_input(session, record);
+            }
+
             // The sample period (500 ms) is longer than this loop's ENet wait.
             tick_adaptive_pacing(session, now);
           }
@@ -2271,7 +2313,8 @@ namespace stream {
 
       // Haptic samples and gamepad feedback must keep flowing even when the player
       // is not moving.
-      server->iterate(haptics_client ? 5ms : 150ms);
+      // So must this computer's keyboard and mouse while a Frametop client holds them.
+      server->iterate((haptics_client || frametop_hostin::active()) ? 5ms : 150ms);
     }
 
     // Let all remaining connections know the server is shutting down
@@ -4085,6 +4128,8 @@ namespace stream {
       );
       // The control stream no longer calls into this session, so its microphone can stop.
       session.frametop_mic.reset();
+      // And its hold on this computer's keyboard and mouse ends.
+      frametop_hostin::on_session_end(&session);
       // Watchdog coverage ends with the thread joins, which are the unbounded and
       // unrecoverable part. Everything below waits on the process-wide lifecycle
       // gate, which other threads legitimately hold for much longer than

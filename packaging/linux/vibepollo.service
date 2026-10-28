@@ -6,7 +6,10 @@ Documentation=https://github.com/Nonary/Vibepollo
 # close-admission, drain-host, drain-broker sequence.
 Requires=vibepollo-session-exec.socket
 Wants=vibeshine-vkms.service
+# Frametop host input: a Frametop client may borrow this computer's keyboards and mice.
+Wants=vibepollo-host-input.socket
 After=vibepollo-session-controller.service vibepollo-session-exec.socket vibeshine-vkms.service
+After=vibepollo-host-input.socket
 ConditionPathExists=/run/vibepollo/session.env
 StartLimitIntervalSec=0
 

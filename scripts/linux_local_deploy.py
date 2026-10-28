@@ -38,13 +38,15 @@ CONTROLLER = 'vibepollo-session-controller.service'
 SOCKET = 'vibepollo-session-exec.socket'
 HELPERS = (
     'app-supervisor', 'app-focus', 'display-power', 'display-observer', 'global-limiter.py', 'host',
+    'host-input',
     'package-preflight',
     'kwin-session-environment', 'machine-host', 'profile-import', 'provider-scan',
     'session-broker', 'session-controller', 'session-exec', 'steam-launch', 'touch-map',
 )
 UNITS = (HOST, CONTROLLER, SOCKET, 'vibepollo-session-exec@.service',
          'vibeshine-drm-setup.service', 'vibeshine-vkms.service',
-         'vibeshine-vkms-control.socket', 'vibeshine-vkms-control@.service')
+         'vibeshine-vkms-control.socket', 'vibeshine-vkms-control@.service',
+         'vibepollo-host-input.socket', 'vibepollo-host-input.service')
 FIXED = {
     'usr/bin/vibepollo', 'usr/bin/vibepollo-mangohud',
     'usr/libexec/vibeshine/vibepollo-package-preflight',

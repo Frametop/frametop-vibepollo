@@ -676,6 +676,11 @@ sunshine_register_component(NAME test_component_pyrowave_policy TEST_SOURCE unit
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/pyrowave_policy.cpp")
 sunshine_register_component(NAME test_component_frametop_mic_policy TEST_SOURCE unit/test_frametop_mic_policy.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/frametop_mic_policy.cpp")
+sunshine_register_component(NAME test_component_frametop_hostin_policy TEST_SOURCE unit/test_frametop_hostin_policy.cpp
+    PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/frametop_hostin_policy.cpp")
+sunshine_register_component(NAME test_component_frametop_hostin_manager TEST_SOURCE unit/test_frametop_hostin_manager.cpp
+    PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/frametop_hostin_manager.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/frametop_hostin_policy.cpp")
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     sunshine_register_component(NAME test_component_linux_routed_link
         TEST_SOURCE unit/platform/linux/test_routed_link.cpp
@@ -1458,6 +1463,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND SUNSHINE_TEST_ENABLE_COMPONENT)
     target_link_libraries(test_linux_session_exec_client PRIVATE "${LIBCAP_LIBRARIES}")
     add_test(NAME test_component_linux_session_exec_client COMMAND test_linux_session_exec_client)
     set_tests_properties(test_component_linux_session_exec_client PROPERTIES LABELS "component")
+
+    add_executable(test_linux_host_input_policy
+        "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_host_input_policy.c")
+    add_test(NAME test_component_linux_host_input_policy COMMAND test_linux_host_input_policy)
+    set_tests_properties(test_component_linux_host_input_policy PROPERTIES LABELS "component" TIMEOUT 5)
 
     add_executable(test_linux_hyprland_broker
         "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_hyprland_broker.c")

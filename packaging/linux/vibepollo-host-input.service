@@ -1,0 +1,47 @@
+[Unit]
+Description=Vibepollo host input: this computer's keyboards and mice for a Frametop client
+Documentation=https://github.com/Frametop/frametop-vibepollo
+Requires=vibepollo-host-input.socket
+After=vibepollo-host-input.socket
+
+[Service]
+Type=exec
+ExecStart=/usr/libexec/vibeshine/vibepollo-host-input
+# It serves one connection from the machine host (checked by its peer uid), then exits; the
+# socket starts it again for the next one.
+Restart=no
+DynamicUser=yes
+# Read the keyboards and mice; type a taken keyboard's volume and media keys again.
+SupplementaryGroups=input vibepollo-uinput
+DevicePolicy=closed
+DeviceAllow=char-input r
+DeviceAllow=/dev/uinput w
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+PrivateNetwork=yes
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+UMask=0077
+MemoryMax=32M
+TasksMax=4
+TimeoutStopSec=5s

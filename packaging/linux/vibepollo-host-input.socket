@@ -1,0 +1,15 @@
+[Unit]
+Description=Vibepollo host input socket (Frametop)
+Documentation=https://github.com/Frametop/frametop-vibepollo
+# The machine host pulls this in (vibepollo.service Wants=).
+PartOf=vibepollo.service
+
+[Socket]
+ListenSequentialPacket=/run/vibepollo/host-input.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=vibepollo
+DirectoryMode=0755
+Accept=no
+RemoveOnStop=yes
+Backlog=4

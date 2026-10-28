@@ -77,6 +77,29 @@ display role takes no display power guard here, so the display must already be
 on: if Hyprland's idle handling turns it off, capture fails. HDR outputs fail
 closed as above.
 
+Frametop's build can also lend this computer's keyboards and mice to one
+Frametop client (Frametop's host input). The client renews a 1.5 s lease on
+the encrypted control stream (packet `0x3005`) while its headset is worn, and
+only a client allowed both keyboard and mouse input gets one. While a lease
+holds, `vibepollo-host-input.service` grabs every keyboard and mouse
+(`EVIOCGRAB`), so the desktop here sees nothing from them, and sends their key,
+button, motion and wheel events to the client (`0x3004`). Touchpads' multitouch
+nodes, touchscreens, gamepads and uinput devices (the host's own passthrough
+devices among them) are never taken. A device is grabbed only once no key is
+held on it. Volume, media and brightness keys stay here: they are typed again
+on a uinput device of the service's own. Both Shifts and Escape take the
+keyboard and mouse back at once; then no lease takes them until the client
+releases its own (its headset comes off, or its switch goes off). A lapsed
+lease, the stream ending or the machine host stopping gives them back too.
+Keys and buttons that were down on the client come up there. One client at a
+time holds them; another is told it's busy.
+
+The service is socket-activated (`vibepollo-host-input.socket`,
+`/run/vibepollo/host-input.sock`, group `vibepollo`) and serves only the
+machine host's uid. It runs as a dynamic user in the `input` and
+`vibepollo-uinput` groups, with no capabilities, no network and access only to
+input devices and `/dev/uinput`. Key codes are never logged.
+
 On a hybrid laptop, the encoder must run on the GPU the displays are wired to.
 KMS capture for NVENC skips a GPU it can't import framebuffers from, so an
 Intel- or AMD-wired display would stream no video. With no `encoder` set, the
