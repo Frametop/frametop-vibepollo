@@ -151,8 +151,35 @@ TEST_F(FrametopHostInputManager, AnotherClientMayTakeALapsedLease) {
   manager.lease(b, true, engage(), t0 + 600ms);
   EXPECT_EQ(service.sent, (std::vector<std::string> {"engage", "drop", "engage"}));
   EXPECT_EQ(manager.take(a, true, t0 + 600ms), std::vector<std::string> {state(false, "lease")});
+  manager.service_message(1, "done");  // the drop's
   manager.service_message(1, "state engaged");
   EXPECT_EQ(manager.take(b, true, t0 + 600ms), (std::vector<std::string> {state(true), hello}));
+}
+
+TEST_F(FrametopHostInputManager, TheLastLeasesKeysNeverReachTheNextOwner) {
+  manager.lease(a, true, engage(), t0);
+  manager.service_message(1, "state engaged");
+  manager.take(a, true, t0);
+  manager.lease(a, true, release, t0 + 100ms);
+  manager.lease(b, true, engage(), t0 + 200ms);
+  // Still in flight from a's lease when the service read the release.
+  manager.service_message(1, "ev k 1 30 1 0 0 0");
+  manager.service_message(1, "state engaged");
+  EXPECT_TRUE(manager.take(b, true, t0 + 200ms).empty());
+  manager.service_message(1, "state released host");
+  manager.service_message(1, "done");
+  manager.service_message(1, "state engaged");  // b's engage
+  manager.service_message(1, "ev k 1 31 1 0 0 0");
+  EXPECT_EQ(manager.take(b, true, t0 + 200ms), (std::vector<std::string> {state(true), hello, *policy::events_payload("ev k 1 31 1 0 0 0")}));
+}
+
+TEST_F(FrametopHostInputManager, ANewConnectionOwesNoAnswers) {
+  manager.lease(a, true, engage(), t0);
+  manager.lease(a, true, drop, t0 + 100ms);  // unanswered when the service goes
+  service.id = 2;
+  manager.lease(a, true, engage(), t0 + 200ms);
+  manager.service_message(2, "state engaged");
+  EXPECT_EQ(manager.take(a, true, t0 + 200ms), (std::vector<std::string> {state(false, "host"), state(true), hello}));
 }
 
 TEST_F(FrametopHostInputManager, ALapsedLeaseGivesTheInputBack) {

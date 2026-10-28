@@ -13,7 +13,7 @@
  *     A keyboard record carries keys outside the mouse buttons; a mouse record those buttons
  *     (BTN_MOUSE to BTN_TASK) and relative motion.
  *   - state (2): engaged (0 or 1), then the reason it isn't, ASCII (lease, host, escape, busy,
- *     permission, overflow, stalled, closed, off, service, unsupported).
+ *     permission, overflow, dropped, stalled, closed, off, service, unsupported).
  *   - hello (3): the kinds it lends (bit 1 keyboard, bit 2 mouse), then this host's name.
  * - Client -> host, 0x3005: version (1), then engage (1) with a u32 sequence and a u16 lease
  *   in milliseconds; release (2), which also lifts the host's escape; or drop (3), which gives the

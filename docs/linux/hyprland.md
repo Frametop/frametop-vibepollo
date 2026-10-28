@@ -97,11 +97,11 @@ never taken. A device is grabbed only once no key is held on it. Volume, media
 and brightness keys stay here: they are typed again on a uinput device of the
 service's own.
 
-Both Shifts and Escape take the keyboard and mouse back at once. Then no lease
+Both Shifts and Escape take the keyboard and mouse back at once (the Shifts may be on different keyboards). Then no lease
 takes them until the client releases its own: its headset comes off or its
 switch goes off. A paused Frametop or a dropped stream keeps the escape. A
 lapsed lease, the stream ending, the client's permission going, its control
-stream falling behind, or the machine host stopping also gives them back.
+stream falling behind, the kernel dropping a device's events, or the machine host stopping also gives them back.
 Keys and buttons that were down on the client come up there. One client at a
 time holds them; another is told it's busy.
 

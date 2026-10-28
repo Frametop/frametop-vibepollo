@@ -50,7 +50,14 @@ namespace frametop_hostin {
   }
 
   void manager_t::give_back(const char *request, std::string reason) {
-    service_.send(request);
+    if (!service_.send(request)) return reset_owner(std::move(reason));
+    // A connection that went with requests unanswered answers none of them.
+    if (unanswered_on_ != service_.connection()) unanswered_ = 0, unanswered_on_ = service_.connection();
+    ++unanswered_;
+    reset_owner(std::move(reason));
+  }
+
+  void manager_t::reset_owner(std::string reason) {
     owner_ = nullptr;
     engaged_ = false;
     reason_ = std::move(reason);
@@ -115,6 +122,12 @@ namespace frametop_hostin {
   void manager_t::service_message(std::uint64_t connection, std::string_view message) {
     std::lock_guard lock {mutex_};
     if (connection != service_.connection()) return;
+    if (unanswered_on_ != connection) unanswered_ = 0;
+    if (message == "done") {
+      if (unanswered_) --unanswered_;
+      return;
+    }
+    if (unanswered_) return;  // the last lease's
     if (const auto state = policy::parse_service_state(message)) {
       // The service answers every engage while escaped: tell the owner only what changed.
       const bool changed = state->engaged != engaged_ || (!state->engaged && state->reason != reason_);

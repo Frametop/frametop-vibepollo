@@ -75,7 +75,7 @@ namespace frametop_hostin {
         }
         if (!connection_ && !connect_service()) return false;
         if (::send(connection_->fd, request.data(), request.size(), MSG_DONTWAIT | MSG_NOSIGNAL) >= 0) return true;
-        if (errno == EAGAIN) return true;  // the next lease's engage comes soon
+        // Full too: the service isn't reading. Ending the connection gives the input back there.
         log_line("the capture service's connection failed: "s + std::strerror(errno));
         shutdown(connection_->fd, SHUT_RDWR);  // its reader sees the end and lets go
         connection_.reset();

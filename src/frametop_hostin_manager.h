@@ -25,7 +25,8 @@ namespace frametop_hostin {
     struct service_t {
       virtual ~service_t() = default;
       /// "engage", "release" (also lifts an escape) or "drop" (gives the input back, keeps
-      /// an escape). False when there's no service now.
+      /// an escape). The service answers each release and drop with "done". False when there's
+      /// no service now, or the request may not have reached it.
       virtual bool send(std::string_view request) = 0;
       /// Why there's none: "service" (it couldn't be reached) or "unsupported".
       virtual const char *unavailable() const = 0;
@@ -61,6 +62,7 @@ namespace frametop_hostin {
     void expire();
     /// Give the input back with request ("drop" or "release") and forget the owner.
     void give_back(const char *request, std::string reason);
+    void reset_owner(std::string reason);
     /// The owner may no longer have the input: give it back, with nothing more queued.
     void lose_permission(const void *session);
     void log(const std::string &line) const;
@@ -73,6 +75,10 @@ namespace frametop_hostin {
     clock::time_point until_ {};
     bool engaged_ = false;
     std::string reason_ = "lease";
+    /// Releases and drops sent and not yet answered "done": until then, what the service says
+    /// belongs to a lease that ended, never to the owner now.
+    unsigned unanswered_ = 0;
+    std::uint64_t unanswered_on_ = 0;  ///< the connection they went on
     clock::time_point next_report_ {};
     std::map<const void *, std::deque<std::string>> queues_;
     struct refusal_t {

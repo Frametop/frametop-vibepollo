@@ -10,13 +10,16 @@
 //   drop      give them back now, but keep an escape (the client went, or its lease lapsed)
 // To the host:
 //   state engaged | state released REASON     on every change
+//   done                                       after each release and drop, so the host knows
+//                                              everything before it belongs to the lease that ended
 //   ev k|m T C V [T C V]...                   events of one device report for the Frame's host
 //                                              keyboard (k) or mouse (m), ending with 0 0 0
 //
 // While engaged, every keyboard and mouse that isn't a uinput device or a touch surface is
 // grabbed (EVIOCGRAB), so the desktop sees nothing from it, and only once no key is held on it.
 // Release reasons: lease (no engage in time), host (release or drop), escape (both Shifts and Escape on
-// this computer), stalled (the host stopped reading), closed. After escape, engage is refused until the host sends release (the
+// this computer, the Shifts on any keyboards), dropped (the kernel dropped a device's events, so
+// which keys are down is unknown), stalled (the host stopped reading), closed. After escape, engage is refused until the host sends release (the
 // Frame's headset came off, or its switch went off). Keys and buttons that went to the Frame come
 // up there when the devices go back. Volume, media and brightness keys stay here: a taken
 // keyboard's are typed again on a uinput device of our own. Key codes are never logged.
@@ -55,6 +58,7 @@ struct device {
   bool grabbed;
   char name[64];
   unsigned long held[BITS(KEY_CNT)];  // keys and buttons that went down to the Frame from here
+  struct vibepollo_host_input_escape escape;  // its Shifts
 };
 
 static struct device devices[VIBEPOLLO_HOST_INPUT_MAX_DEVICES];
@@ -63,7 +67,6 @@ static int host = -1;
 static int keep = -1;  // our uinput device for the kept keys
 static struct vibepollo_host_input_lease lease;
 static int64_t rescan_at;
-static struct vibepollo_host_input_escape escape;
 static unsigned long kept_held[BITS(KEY_CNT)];  // kept keys down on our own device
 static bool stalled;  // a message couldn't go: the host stopped reading
 
@@ -160,8 +163,15 @@ static void close_device(size_t index) {
   if (device->grabbed) (void) ioctl(device->fd, EVIOCGRAB, 0);
   close(device->fd);
   devices[index] = devices[--device_count];
-  // Its Shift may have gone down without coming up here.
-  memset(&escape, 0, sizeof escape);
+}
+
+// The escape hotkey from this device's key: both Shifts down, on any taken keyboards, and Escape.
+static bool escape_pressed(struct device *device, const struct input_event *event) {
+  if (vibepollo_host_input_escape_step(&device->escape, event->type, event->code, event->value)) return true;
+  if (event->type != EV_KEY || event->code != KEY_ESC || event->value != 1) return false;
+  bool left = false, right = false;
+  for (size_t i = 0; i < device_count; ++i) left |= devices[i].escape.left_shift, right |= devices[i].escape.right_shift;
+  return left && right;
 }
 
 static void type_kept(uint16_t code, int32_t value);
@@ -311,7 +321,14 @@ static bool read_device(struct device *device) {
         batch_send(&mouse);
         continue;
       }
-      if (vibepollo_host_input_escape_step(&escape, event->type, event->code, event->value)) {
+      if (event->type == EV_SYN && event->code == SYN_DROPPED) {
+        // A key-up may be among what was lost: give everything back, so every key comes up on
+        // the Frame, and take them again at the next engage, once no key is held.
+        lease.engaged = false;
+        give_back("dropped");
+        return true;
+      }
+      if (escape_pressed(device, event)) {
         batch_send(&keys);
         batch_send(&mouse);
         vibepollo_host_input_lease_escape(&lease);
@@ -369,6 +386,7 @@ static bool serve_request(void) {
     case VIBEPOLLO_HOST_INPUT_STAY:
       break;
   }
+  if (parsed != VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE) send_text("done");
   return true;
 }
 
