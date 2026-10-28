@@ -77,7 +77,8 @@ namespace frametop_hostin {
     std::string reason_ = "lease";
     /// Releases and drops sent and not yet answered "done": until then, what the service says
     /// belongs to a lease that ended, never to the owner now.
-    unsigned unanswered_ = 0;
+    /// Oldest first, true for a release.
+    std::deque<bool> unanswered_;
     std::uint64_t unanswered_on_ = 0;  ///< the connection they went on
     /// The service said "escape", and no client has released since.
     bool escaped_ = false;

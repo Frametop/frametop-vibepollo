@@ -6,6 +6,8 @@
 
 #include "frametop_hostin_policy.h"
 
+#include <algorithm>
+
 namespace frametop_hostin {
   manager_t::manager_t(service_t &service, std::string host_name, std::function<void(const std::string &)> log):
       service_ {service},
@@ -52,8 +54,8 @@ namespace frametop_hostin {
   void manager_t::give_back(const char *request, std::string reason) {
     if (!service_.send(request)) return reset_owner(std::move(reason));
     // A connection that went with requests unanswered answers none of them.
-    if (unanswered_on_ != service_.connection()) unanswered_ = 0, unanswered_on_ = service_.connection();
-    ++unanswered_;
+    if (unanswered_on_ != service_.connection()) unanswered_.clear(), unanswered_on_ = service_.connection();
+    unanswered_.push_back(std::string_view {request} == "release");
     reset_owner(std::move(reason));
   }
 
@@ -130,14 +132,18 @@ namespace frametop_hostin {
   void manager_t::service_message(std::uint64_t connection, std::string_view message) {
     std::lock_guard lock {mutex_};
     if (connection != service_.connection()) return;
-    if (unanswered_on_ != connection) unanswered_ = 0;
+    if (unanswered_on_ != connection) unanswered_.clear();
     if (message == "done") {
-      if (unanswered_) --unanswered_;
+      if (!unanswered_.empty()) unanswered_.pop_front();
       return;
     }
-    if (unanswered_) {
-      // The last lease's, but an escape is kept whenever it was pressed.
-      if (const auto state = policy::parse_service_state(message); state && !state->engaged && state->reason == "escape") escaped_ = true;
+    if (!unanswered_.empty()) {
+      // The last lease's, but an escape is kept whenever it was pressed, unless a release the
+      // service hadn't read yet lifts it.
+      const auto state = policy::parse_service_state(message);
+      if (state && !state->engaged && state->reason == "escape" && std::ranges::find(unanswered_, true) == unanswered_.end()) {
+        escaped_ = true;
+      }
       return;
     }
     if (const auto state = policy::parse_service_state(message)) {

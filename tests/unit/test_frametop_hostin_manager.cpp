@@ -271,6 +271,17 @@ TEST_F(FrametopHostInputManager, AnEscapeBehindAFenceIsStillKept) {
   EXPECT_EQ(manager.take(b, true, t0 + 100ms), std::vector<std::string> {state(false, "escape")});
 }
 
+TEST_F(FrametopHostInputManager, AReleaseLiftsAnEscapeSaidBeforeIt) {
+  manager.lease(a, true, engage(), t0);
+  manager.service_message(1, "state engaged");
+  manager.lease(a, true, release, t0 + 100ms);  // the headset came off as the escape was pressed
+  manager.service_message(1, "state released escape");
+  manager.service_message(1, "state released host");
+  manager.service_message(1, "done");
+  manager.lease(a, true, engage(), t0 + 200ms);
+  EXPECT_EQ(service.sent, (std::vector<std::string> {"engage", "release", "engage"}));
+}
+
 TEST_F(FrametopHostInputManager, AnEscapeOutlivesTheService) {
   manager.lease(a, true, engage(), t0);
   manager.service_message(1, "state engaged");
