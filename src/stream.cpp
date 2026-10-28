@@ -1615,8 +1615,8 @@ namespace stream {
   /// encrypted control stream is type 13.
   bool frametop_host_input_permitted(const session_t *session) {
     return session->config.controlProtocolType == 13 &&
-           (session->permission & crypto::PERM::input_kbd) &&
-           (session->permission & crypto::PERM::input_mouse);
+           !!(session->permission & crypto::PERM::input_kbd) &&
+           !!(session->permission & crypto::PERM::input_mouse);
   }
 
   /// A Frametop host input record (frametop_hostin_policy.h). Encrypted streams only: the

@@ -79,6 +79,8 @@ namespace frametop_hostin {
     /// belongs to a lease that ended, never to the owner now.
     unsigned unanswered_ = 0;
     std::uint64_t unanswered_on_ = 0;  ///< the connection they went on
+    /// The service said "escape", and no client has released since.
+    bool escaped_ = false;
     clock::time_point next_report_ {};
     std::map<const void *, std::deque<std::string>> queues_;
     struct refusal_t {

@@ -85,10 +85,12 @@ namespace frametop_hostin {
       const bool release = lease->action == policy::lease_t::release;
       if (owner_) log("a client gave this computer's keyboard and mouse back");
       if (owner_ || release) give_back(release ? "release" : "drop", "host");
+      if (release) escaped_ = false;
       return tell(session, false, "host");
     }
     if (owner_ && owner_ != session) return refuse(session, "busy", now);
-    if (owner_ != session) {
+    const bool asking = owner_ != session;
+    if (asking) {
       owner_ = session;
       engaged_ = false;
       reason_ = "lease";
@@ -96,6 +98,12 @@ namespace frametop_hostin {
       log("a client asks for this computer's keyboard and mouse");
     }
     until_ = now + lease->duration;
+    if (escaped_) {
+      // Kept here too, so a service that started again doesn't hand the input straight back.
+      reason_ = "escape";
+      if (asking) tell(session, false, reason_);
+      return;
+    }
     if (!service_.send("engage")) {
       owner_ = nullptr;
       engaged_ = false;
@@ -133,6 +141,7 @@ namespace frametop_hostin {
       const bool changed = state->engaged != engaged_ || (!state->engaged && state->reason != reason_);
       engaged_ = state->engaged;
       reason_ = state->engaged ? "" : state->reason;
+      if (engaged_ || reason_ == "escape") escaped_ = !engaged_;
       if (owner_ && changed) tell(owner_, engaged_, reason_);
       return;
     }

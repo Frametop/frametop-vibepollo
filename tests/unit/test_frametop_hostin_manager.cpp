@@ -248,6 +248,24 @@ TEST_F(FrametopHostInputManager, AnEscapeIsToldOnce) {
   EXPECT_TRUE(manager.active());  // the client still holds the lease, so nobody else gets in
 }
 
+TEST_F(FrametopHostInputManager, AnEscapeOutlivesTheService) {
+  manager.lease(a, true, engage(), t0);
+  manager.service_message(1, "state engaged");
+  manager.service_message(1, "state released escape");
+  manager.take(a, true, t0);
+  manager.service_gone(1);
+  service.id = 2;
+  // A fresh service knows nothing of it: no engage goes until a release.
+  manager.lease(a, true, engage(), t0 + 500ms);
+  EXPECT_EQ(service.sent, std::vector<std::string> {"engage"});
+  manager.session_end(a);
+  manager.lease(b, true, engage(), t0 + 600ms);
+  EXPECT_EQ(manager.take(b, true, t0 + 600ms), std::vector<std::string> {state(false, "escape")});
+  manager.lease(b, true, release, t0 + 700ms);
+  manager.lease(b, true, engage(), t0 + 800ms);
+  EXPECT_EQ(service.sent, (std::vector<std::string> {"engage", "drop", "release", "engage"}));
+}
+
 TEST_F(FrametopHostInputManager, SessionEndDropsButKeepsAnEscape) {
   manager.lease(a, true, engage(), t0);
   manager.service_message(1, "state engaged");

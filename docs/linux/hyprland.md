@@ -99,7 +99,7 @@ service's own.
 
 Both Shifts and Escape take the keyboard and mouse back at once (the Shifts may be on different keyboards). Then no lease
 takes them until the client releases its own: its headset comes off or its
-switch goes off. A paused Frametop or a dropped stream keeps the escape. A
+switch goes off. A paused Frametop or a dropped stream keeps the escape, and so does the capture service restarting (restarting Vibepollo forgets it). The escape is for a well-behaved client: one allowed keyboard and mouse input could lift it itself, and already drives this computer's desktop. A
 lapsed lease, the stream ending, the client's permission going, its control
 stream falling behind, the kernel dropping a device's events, or the machine host stopping also gives them back.
 Keys and buttons that were down on the client come up there. One client at a
