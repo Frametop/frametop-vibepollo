@@ -94,7 +94,8 @@ button, motion and wheel events to the client (`0x3004`). Bluetooth keyboards
 and mice (uhid) are taken too. Touchpads are taken through libinput, which
 turns them into the client's mouse: accelerated motion, buttons with tap to
 click, and two-finger scrolling (in 120ths of a notch, and whole notches).
-Touchscreens, gamepads and uinput devices (the host's own passthrough devices
+(Builds without libinput 1.19 or newer leave touchpads here; the Arch package
+depends on it.) Touchscreens, gamepads and uinput devices (the host's own passthrough devices
 among them) are never taken. Devices are found from sysfs, so only the ones
 taken are ever opened. A device is grabbed only once no key is held on it (a key pressed and released within the few microseconds of the grab itself could still stay down here; no human press is that short). Volume, media
 and brightness keys stay here: they are typed again on a uinput device of the
@@ -119,7 +120,8 @@ lapsed lease, the stream ending, the client's permission going, its control
 stream falling behind, or the machine host stopping also gives them back. When
 the kernel drops a device's events (a fast mouse outrunning its buffer), the
 service catches up from the device's key state: keys that came up meanwhile
-come up on the client, and the device stays taken.
+come up on the client, an escape held through the loss still fires, and the
+device stays taken.
 Keys and buttons that were down on the client come up there. One client at a
 time holds them; another is told it's busy.
 

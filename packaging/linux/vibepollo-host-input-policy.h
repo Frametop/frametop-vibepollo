@@ -78,8 +78,10 @@ enum vibepollo_host_input_kind {
 static inline enum vibepollo_host_input_kind vibepollo_host_input_kind_of(const struct vibepollo_host_input_caps *caps) {
   if (caps->virtual_device) return VIBEPOLLO_HOST_INPUT_SKIP;
   if (caps->abs_mt) {
-    return caps->btn_tool_finger && caps->btn_left && !caps->direct ? VIBEPOLLO_HOST_INPUT_TOUCHPAD :
-                                                                      VIBEPOLLO_HOST_INPUT_SKIP;
+    // A keyboard with a touch surface on one node stays here: libinput would read it as a
+    // touchpad only, and its keys (the escape's among them) would be lost.
+    const bool touchpad = caps->btn_tool_finger && caps->btn_left && !caps->direct && !caps->keys_letters;
+    return touchpad ? VIBEPOLLO_HOST_INPUT_TOUCHPAD : VIBEPOLLO_HOST_INPUT_SKIP;
   }
   return caps->keys_letters || (caps->rel_xy && caps->btn_left) ? VIBEPOLLO_HOST_INPUT_EVDEV : VIBEPOLLO_HOST_INPUT_SKIP;
 }
@@ -93,7 +95,8 @@ static inline void vibepollo_host_input_lost_keys(
 }
 
 // A touchpad's settings (VIBEPOLLO_HOST_INPUT_TOUCHPAD in the service's environment, words
-// "tap=on|off natural=on|off click=fingers|areas scroll=FACTOR"). The defaults are Hyprland's.
+// "tap=on|off natural=on|off click=fingers|areas scroll=FACTOR", apart by spaces, tabs or
+// newlines). The defaults are Hyprland's.
 struct vibepollo_host_input_touchpad {
   bool tap;  // tap to click, and tap and drag
   bool natural;  // natural scrolling
@@ -110,17 +113,19 @@ static inline bool vibepollo_host_input_parse_touchpad(const char *text, struct 
   *out = vibepollo_host_input_touchpad_defaults();
   struct vibepollo_host_input_touchpad parsed = *out;
   for (const char *p = text ? text : ""; *p;) {
-    while (*p == ' ') ++p;
+    while (*p == ' ' || *p == '\t' || *p == '\n') ++p;
     if (!*p) break;
     size_t length = 0;
-    while (p[length] && p[length] != ' ') ++length;
+    while (p[length] && p[length] != ' ' && p[length] != '\t' && p[length] != '\n') ++length;
     char word[32];
     if (length >= sizeof word) return false;
     memcpy(word, p, length);
     word[length] = 0;
     p += length;
-    if (!strcmp(word, "tap=on") || !strcmp(word, "tap=off")) parsed.tap = word[5] == 'n';
-    else if (!strcmp(word, "natural=on") || !strcmp(word, "natural=off")) parsed.natural = word[9] == 'n';
+    if (!strcmp(word, "tap=on")) parsed.tap = true;
+    else if (!strcmp(word, "tap=off")) parsed.tap = false;
+    else if (!strcmp(word, "natural=on")) parsed.natural = true;
+    else if (!strcmp(word, "natural=off")) parsed.natural = false;
     else if (!strcmp(word, "click=fingers")) parsed.clickfinger = true;
     else if (!strcmp(word, "click=areas")) parsed.clickfinger = false;
     else if (!strncmp(word, "scroll=", 7)) {
@@ -134,6 +139,13 @@ static inline bool vibepollo_host_input_parse_touchpad(const char *text, struct 
   }
   *out = parsed;
   return true;
+}
+
+// The whole counts in *rest, which keeps what's under one for the next event.
+static inline int32_t vibepollo_host_input_carry(double *rest) {
+  const int32_t whole = (int32_t) *rest;  // toward zero
+  *rest -= whole;
+  return whole;
 }
 
 // A touchpad's finger scrolling, from libinput (15 to a wheel notch, as Wayland's axis events), in
@@ -152,9 +164,8 @@ static inline int32_t vibepollo_host_input_scroll_step(
     *scroll = (struct vibepollo_host_input_scroll) {0};
     return 0;
   }
-  const double exact = value * 8.0 * factor + scroll->rest;
-  const int32_t whole = (int32_t) exact;
-  scroll->rest = exact - whole;
+  scroll->rest += value * 8.0 * factor;
+  const int32_t whole = vibepollo_host_input_carry(&scroll->rest);
   scroll->partial += whole;
   *notches = scroll->partial / 120;
   scroll->partial -= *notches * 120;

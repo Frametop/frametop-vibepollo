@@ -421,11 +421,6 @@ jobs:
           grep -qx 'usr/lib/systemd/system/vibepollo-host-input.socket' <<< "${package_files}"
           grep -qx 'usr/lib/systemd/system/vibepollo-host-input.service' <<< "${package_files}"
           grep -qx 'usr/libexec/vibeshine/vibepollo-host-input' <<< "${package_files}"
-          # Touchpads are lent through libinput: the daemon must be built with it.
-          host_input_root="$(mktemp -d)"
-          bsdtar -xpf "${package}" -C "${host_input_root}" usr/libexec/vibeshine/vibepollo-host-input
-          readelf -d "${host_input_root}/usr/libexec/vibeshine/vibepollo-host-input" | grep -q 'NEEDED.*libinput\.so'
-          rm -rf "${host_input_root}"
           grep -qx 'usr/libexec/vibeshine/vibepollo-session-controller' <<< "${package_files}"
           grep -qx 'usr/libexec/vibeshine/vibepollo-session-exec' <<< "${package_files}"
           grep -qx 'usr/libexec/vibeshine/vibepollo-session-broker' <<< "${package_files}"
@@ -442,7 +437,10 @@ jobs:
           bsdtar --xattrs -xpf "${package}" -C "${capability_check_root}" \
             usr/bin/vibepollo \
             usr/libexec/vibeshine/vibepollo-session-exec \
+            usr/libexec/vibeshine/vibepollo-host-input \
             usr/lib/libvibeshine-kwin-gpu.so
+          # Touchpads are lent through libinput: the host input service must be built with it.
+          readelf -d "${capability_check_root}/usr/libexec/vibeshine/vibepollo-host-input" | grep -q 'NEEDED.*libinput\.so'
           # Matching KWin 6.8 builds must include both native hooks, not just
           # the legacy bridge that silently leaves these outputs on CPU copies.
           if [[ "$(readlink -f /usr/lib/libkwin.so)" == /usr/lib/libkwin.so.6.8.* ]]; then

@@ -43,7 +43,6 @@
 #include <limits.h>
 #include <linux/input.h>
 #include <linux/uinput.h>
-#include <math.h>
 #include <poll.h>
 #include <pwd.h>
 #include <signal.h>
@@ -68,7 +67,7 @@ struct device {
   dev_t rdev;
   bool grabbed;
   bool touchpad;
-  bool dropping;  // the kernel dropped events: skip to the next report, then resync
+  bool pad_failed;  // libinput couldn't add it: left alone until it is plugged in again
   char name[64];
   char path[32];
   unsigned long held[BITS(KEY_CNT)];  // keys and buttons that went down to the Frame from here
@@ -76,7 +75,6 @@ struct device {
   struct vibepollo_host_input_escape escape;  // its Shifts
 #ifdef VIBEPOLLO_HOST_INPUT_LIBINPUT
   struct libinput_device *pad;  // while grabbed
-  bool pad_failed;  // libinput couldn't add it: left alone until it is plugged in again
   double rest_x, rest_y;  // motion under a count
   struct vibepollo_host_input_scroll scroll_v, scroll_h;
 #endif
@@ -193,22 +191,38 @@ static void set_held(struct device *device, unsigned int code, bool down) {
   set_bit(device->held, code, down);
 }
 
-// What went down to the Frame from this device comes up there.
+static void type_kept(uint16_t code, int32_t value);
+
+// What went down from this device and isn't in down now (NULL: nothing is) comes up: on the
+// Frame, or on our own device for the kept keys.
+static void lift_except(struct device *device, const unsigned long *down, struct batch *keys, struct batch *mouse) {
+  static const unsigned long none[BITS(KEY_CNT)];
+  unsigned long lost[BITS(KEY_CNT)], kept_lost[BITS(KEY_CNT)];
+  vibepollo_host_input_lost_keys(device->held, down ? down : none, lost, BITS(KEY_CNT));
+  vibepollo_host_input_lost_keys(device->kept, down ? down : none, kept_lost, BITS(KEY_CNT));
+  for (unsigned int code = 1; code <= KEY_MAX; ++code) {
+    if (vibepollo_host_input_bit(lost, BITS(KEY_CNT), code)) {
+      set_held(device, code, false);
+      const bool to_mouse = vibepollo_host_input_route_event(EV_KEY, (uint16_t) code, 0) == VIBEPOLLO_HOST_INPUT_MOUSE;
+      batch_add(to_mouse ? mouse : keys, EV_KEY, (uint16_t) code, 0);
+    }
+    if (vibepollo_host_input_bit(kept_lost, BITS(KEY_CNT), code)) {
+      set_bit(device->kept, code, false);
+      type_kept((uint16_t) code, 0);
+    }
+  }
+}
+
+// Everything that went down from this device comes up (or one unplugged while held stays down).
 static void lift(struct device *device) {
   struct batch keys, mouse;
   batch_start(&keys, 'k');
   batch_start(&mouse, 'm');
-  for (unsigned int code = 1; code <= KEY_MAX; ++code) {
-    if (!held(device, code)) continue;
-    set_held(device, code, false);
-    const enum vibepollo_host_input_route route = vibepollo_host_input_route_event(EV_KEY, (uint16_t) code, 0);
-    batch_add(route == VIBEPOLLO_HOST_INPUT_MOUSE ? &mouse : &keys, EV_KEY, (uint16_t) code, 0);
-  }
+  lift_except(device, NULL, &keys, &mouse);
   batch_send(&keys);
   batch_send(&mouse);
 }
 
-static void type_kept(uint16_t code, int32_t value);
 #ifdef VIBEPOLLO_HOST_INPUT_LIBINPUT
 static void remove_pad(struct device *device);
 #endif
@@ -216,9 +230,6 @@ static void remove_pad(struct device *device);
 static void close_device(size_t index) {
   struct device *device = &devices[index];
   lift(device);
-  // Its kept keys come up on our own device, or one unplugged while held stays down.
-  for (unsigned int code = 1; code <= KEY_MAX; ++code)
-    if (vibepollo_host_input_bit(device->kept, BITS(KEY_CNT), code)) type_kept((uint16_t) code, 0);
 #ifdef VIBEPOLLO_HOST_INPUT_LIBINPUT
   if (device->pad) remove_pad(device);
 #endif
@@ -254,11 +265,11 @@ static bool any_key_down(int fd) {
   return false;
 }
 
-// Takes a device once nothing is held on it, so no key stays down on either side.
 #ifdef VIBEPOLLO_HOST_INPUT_LIBINPUT
 static bool add_pad(struct device *device);
 #endif
 
+// Takes a device once nothing is held on it, so no key stays down on either side.
 static void try_grab(struct device *device) {
   if (device->grabbed || any_key_down(device->fd)) return;
 #ifdef VIBEPOLLO_HOST_INPUT_LIBINPUT
@@ -313,6 +324,7 @@ static void scan(void) {
   if (!dir) return;
   struct dirent *entry;
   while ((entry = readdir(dir)) && device_count < VIBEPOLLO_HOST_INPUT_MAX_DEVICES) {
+    // A longer name wouldn't fit the device's path.
     if (strncmp(entry->d_name, "event", 5) != 0 || strlen(entry->d_name) > 16) continue;
     char path[PATH_MAX];
     snprintf(path, sizeof path, "/dev/input/%s", entry->d_name);
@@ -345,6 +357,13 @@ static void scan(void) {
     const enum vibepollo_host_input_kind kind = vibepollo_host_input_kind_of(&caps);
 #ifdef VIBEPOLLO_HOST_INPUT_LIBINPUT
     if (kind == VIBEPOLLO_HOST_INPUT_SKIP) continue;
+    if (kind == VIBEPOLLO_HOST_INPUT_TOUCHPAD) {
+      // libinput waits (up to 2 s, reading nothing else) for udev to finish with a new device, so
+      // a touchpad is taken from the rescan after udev is done.
+      char ready[64];
+      snprintf(ready, sizeof ready, "/run/udev/data/c%u:%u", major(st.st_rdev), minor(st.st_rdev));
+      if (access(ready, F_OK) < 0) continue;
+    }
 #else
     if (kind != VIBEPOLLO_HOST_INPUT_EVDEV) continue;
 #endif
@@ -398,28 +417,23 @@ static void take(void) {
   say("engaged");
 }
 
-// After dropped events: the keys that came up meanwhile come up on the Frame (or on our own
-// device, the kept ones), and the Shifts are as they are now. A key that went down meanwhile stays
-// here, as one held at the grab does.
-static void resync(struct device *device, struct batch *keys, struct batch *mouse) {
-  unsigned long down[BITS(KEY_CNT)] = {0}, lost[BITS(KEY_CNT)], kept_lost[BITS(KEY_CNT)];
+// After the kernel dropped events (SYN_DROPPED): what is still queued is older than any look at
+// the keys, so it goes too, and then the keys that came up meanwhile come up on the Frame (or on
+// our own device, the kept ones) and the Shifts are as they are now. A key that went down
+// meanwhile stays here, as one held at the grab does. True when the escape is held now (its
+// Escape press may have been among the lost events).
+static bool resync(struct device *device, struct batch *keys, struct batch *mouse) {
+  struct input_event stale[64];
+  while (read(device->fd, stale, sizeof stale) > 0) {}
+  unsigned long down[BITS(KEY_CNT)] = {0};
   if (ioctl(device->fd, EVIOCGKEY(sizeof down), down) < 0) memset(down, 0, sizeof down);  // gone: all up
-  vibepollo_host_input_lost_keys(device->held, down, lost, BITS(KEY_CNT));
-  vibepollo_host_input_lost_keys(device->kept, down, kept_lost, BITS(KEY_CNT));
-  for (unsigned int code = 1; code <= KEY_MAX; ++code) {
-    if (vibepollo_host_input_bit(lost, BITS(KEY_CNT), code)) {
-      set_held(device, code, false);
-      const bool to_mouse = vibepollo_host_input_route_event(EV_KEY, (uint16_t) code, 0) == VIBEPOLLO_HOST_INPUT_MOUSE;
-      batch_add(to_mouse ? mouse : keys, EV_KEY, (uint16_t) code, 0);
-    }
-    if (vibepollo_host_input_bit(kept_lost, BITS(KEY_CNT), code)) {
-      set_bit(device->kept, code, false);
-      type_kept((uint16_t) code, 0);
-    }
-  }
+  lift_except(device, down, keys, mouse);
   device->escape.left_shift = vibepollo_host_input_bit(down, BITS(KEY_CNT), KEY_LEFTSHIFT);
   device->escape.right_shift = vibepollo_host_input_bit(down, BITS(KEY_CNT), KEY_RIGHTSHIFT);
   say("%s dropped events: caught up", device->name);
+  bool left = false, right = false;
+  for (size_t i = 0; i < device_count; ++i) left |= devices[i].escape.left_shift, right |= devices[i].escape.right_shift;
+  return left && right && vibepollo_host_input_bit(down, BITS(KEY_CNT), KEY_ESC);
 }
 
 #ifdef VIBEPOLLO_HOST_INPUT_LIBINPUT
@@ -533,10 +547,9 @@ static void pad_events(void) {
         case LIBINPUT_EVENT_POINTER_MOTION: {
           device->rest_x += libinput_event_pointer_get_dx(pointer);
           device->rest_y += libinput_event_pointer_get_dy(pointer);
-          const double x = trunc(device->rest_x), y = trunc(device->rest_y);
-          device->rest_x -= x, device->rest_y -= y;
-          if (x != 0) batch_add(&mouse, EV_REL, REL_X, (int32_t) x);
-          if (y != 0) batch_add(&mouse, EV_REL, REL_Y, (int32_t) y);
+          const int32_t x = vibepollo_host_input_carry(&device->rest_x), y = vibepollo_host_input_carry(&device->rest_y);
+          if (x) batch_add(&mouse, EV_REL, REL_X, x);
+          if (y) batch_add(&mouse, EV_REL, REL_Y, y);
           break;
         }
         case LIBINPUT_EVENT_POINTER_BUTTON: {
@@ -567,7 +580,7 @@ static bool read_device(struct device *device) {
   struct batch keys, mouse;
   batch_start(&keys, 'k');
   batch_start(&mouse, 'm');
-  for (;;) {
+  for (bool more = true; more;) {
     const ssize_t n = read(device->fd, events, sizeof events);
     if (n < 0 && errno == EAGAIN) break;
     if (n <= 0) return false;
@@ -576,18 +589,17 @@ static bool read_device(struct device *device) {
       if (event->type == EV_SYN && event->code == SYN_DROPPED) {
         batch_send(&keys);
         batch_send(&mouse);
-        device->dropping = true;
-        continue;
-      }
-      if (device->dropping) {
-        // The kernel's way back: what follows, up to the next report, is part of what was lost.
-        if (event->type == EV_SYN && event->code == SYN_REPORT) {
-          device->dropping = false;
-          resync(device, &keys, &mouse);
-          batch_send(&keys);
-          batch_send(&mouse);
+        const bool escape = resync(device, &keys, &mouse);  // the rest of events[] is stale too
+        batch_send(&keys);
+        batch_send(&mouse);
+        if (escape) {
+          vibepollo_host_input_lease_escape(&lease);
+          say("this computer took its keyboard and mouse back (both Shifts and Escape)");
+          give_back("escape");
+          return true;
         }
-        continue;
+        more = false;
+        break;
       }
       if (event->type == EV_SYN && event->code == SYN_REPORT) {
         batch_send(&keys);
@@ -700,7 +712,7 @@ int main(void) {
       const int64_t now = now_ms();
       int64_t next = lease.until < rescan_at ? lease.until : rescan_at;
       for (size_t i = 0; i < device_count; ++i)
-        if (!devices[i].grabbed && now + 100 < next) next = now + 100;  // waiting for its keys to come up
+        if (!devices[i].grabbed && !devices[i].pad_failed && now + 100 < next) next = now + 100;  // waiting for its keys to come up
       timeout = next > now ? (int) (next - now) : 0;
     }
     const nfds_t count = 1 + device_count;

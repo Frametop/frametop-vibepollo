@@ -21,6 +21,10 @@ static void takes_keyboards_mice_and_touchpads_only(void) {
   const struct vibepollo_host_input_caps nothing = {0};
   const struct vibepollo_host_input_caps keyboard_with_mouse = {.keys_letters = true, .rel_xy = true, .btn_left = true};
   const struct vibepollo_host_input_caps touch_keyboard = {.keys_letters = true, .abs_mt = true};
+  const struct vibepollo_host_input_caps keyboard_touchpad = {.keys_letters = true, .btn_left = true, .abs_mt = true, .btn_tool_finger = true};
+  const struct vibepollo_host_input_caps no_button_pad = {.abs_mt = true, .btn_tool_finger = true};
+  assert(vibepollo_host_input_kind_of(&keyboard_touchpad) == VIBEPOLLO_HOST_INPUT_SKIP);  // its keys, the escape's too
+  assert(vibepollo_host_input_kind_of(&no_button_pad) == VIBEPOLLO_HOST_INPUT_SKIP);
   assert(vibepollo_host_input_kind_of(&keyboard) == VIBEPOLLO_HOST_INPUT_EVDEV);
   assert(vibepollo_host_input_kind_of(&mouse) == VIBEPOLLO_HOST_INPUT_EVDEV);
   assert(vibepollo_host_input_kind_of(&touchpad) == VIBEPOLLO_HOST_INPUT_TOUCHPAD);
@@ -56,6 +60,7 @@ static void parses_sysfs_bitmaps(void) {
   assert(!vibepollo_host_input_parse_bits("\n", bits, 2));
   assert(!vibepollo_host_input_parse_bits("1z 0", bits, 2));
   assert(bits[0] == 0 && bits[1] == 0);
+  assert(vibepollo_host_input_parse_bits("0\n", bits, 2) && bits[0] == 0);  // an empty set
 }
 
 static void finds_keys_lost_in_a_drop(void) {
@@ -73,6 +78,7 @@ static void reads_touchpad_settings(void) {
   assert(vibepollo_host_input_parse_touchpad("  tap=off natural=on click=fingers scroll=0.4 ", &settings));
   assert(!settings.tap && settings.natural && settings.clickfinger && settings.scroll == 0.4);
   assert(vibepollo_host_input_parse_touchpad("click=areas", &settings) && !settings.clickfinger);
+  assert(vibepollo_host_input_parse_touchpad("tap=off\tscroll=2\n", &settings) && !settings.tap && settings.scroll == 2);
   const char *bad[] = {"tap=maybe", "scroll=0", "scroll=11", "scroll=x", "scroll=", "speed=2", "tap=onn",
                        "averyveryveryverylongwordthatdoesnotfit=1"};
   for (size_t i = 0; i < sizeof bad / sizeof bad[0]; ++i) {
@@ -89,18 +95,40 @@ static void scrolls_in_120ths_and_notches(void) {
   assert(vibepollo_host_input_scroll_step(&scroll, 15, 1.0, &notches) == 120 && notches == 1);
   assert(vibepollo_host_input_scroll_step(&scroll, 7.5, 1.0, &notches) == 60 && notches == 0);
   assert(vibepollo_host_input_scroll_step(&scroll, 7.5, 1.0, &notches) == 60 && notches == 1);
-  // Fractions carry.
+  // Fractions carry: 1/16 is 0.5 of a 120th.
   int32_t total = 0;
-  for (int i = 0; i < 10; ++i) total += vibepollo_host_input_scroll_step(&scroll, 0.05, 1.0, &notches);
-  assert(total == 3 || total == 4);
-  // The factor scales it; 0 ends the scroll and forgets what was toward a notch.
+  for (int i = 0; i < 10; ++i) total += vibepollo_host_input_scroll_step(&scroll, 0.0625, 1.0, &notches);
+  assert(total == 5);
+  // The factor scales it; 0 ends the scroll and forgets what was toward a notch, and under a 120th.
   assert(vibepollo_host_input_scroll_step(&scroll, 0, 1.0, &notches) == 0 && notches == 0);
+  assert(vibepollo_host_input_scroll_step(&scroll, 0.0625, 1.0, &notches) == 0);  // 0.5: under one
+  assert(vibepollo_host_input_scroll_step(&scroll, 0, 1.0, &notches) == 0);
+  assert(vibepollo_host_input_scroll_step(&scroll, 0.0625, 1.0, &notches) == 0);  // not 1: the half went
+  assert(vibepollo_host_input_scroll_step(&scroll, 0, 1.0, &notches) == 0);
   assert(vibepollo_host_input_scroll_step(&scroll, 15, 0.4, &notches) == 48 && notches == 0);
   assert(vibepollo_host_input_scroll_step(&scroll, 0, 1.0, &notches) == 0);
   assert(vibepollo_host_input_scroll_step(&scroll, 10, 0.4, &notches) == 32 && notches == 0);
   // Down and up: negatives work the same way.
   assert(vibepollo_host_input_scroll_step(&scroll, 0, 1.0, &notches) == 0);
   assert(vibepollo_host_input_scroll_step(&scroll, -30, 1.0, &notches) == -240 && notches == -2);
+  // A change of direction counts back from where it was.
+  assert(vibepollo_host_input_scroll_step(&scroll, 0, 1.0, &notches) == 0);
+  assert(vibepollo_host_input_scroll_step(&scroll, 7.5, 1.0, &notches) == 60 && notches == 0);
+  assert(vibepollo_host_input_scroll_step(&scroll, -15, 1.0, &notches) == -120 && notches == 0);
+  assert(scroll.partial == -60);
+  assert(vibepollo_host_input_scroll_step(&scroll, -0.0625, 1.0, &notches) == 0 && scroll.rest == -0.5);
+  assert(vibepollo_host_input_scroll_step(&scroll, -0.0625, 1.0, &notches) == -1);
+}
+
+static void carries_motion_under_a_count(void) {
+  double rest = 0;
+  assert(vibepollo_host_input_carry(&rest) == 0);
+  rest += 0.75;
+  assert(vibepollo_host_input_carry(&rest) == 0 && rest == 0.75);
+  rest += 0.75;
+  assert(vibepollo_host_input_carry(&rest) == 1 && rest == 0.5);
+  rest = -2.25;
+  assert(vibepollo_host_input_carry(&rest) == -2 && rest == -0.25);
 }
 
 static void routes_events(void) {
@@ -220,6 +248,7 @@ int main(void) {
   finds_keys_lost_in_a_drop();
   reads_touchpad_settings();
   scrolls_in_120ths_and_notches();
+  carries_motion_under_a_count();
   routes_events();
   escape_needs_both_shifts();
   accepts_exact_requests();
