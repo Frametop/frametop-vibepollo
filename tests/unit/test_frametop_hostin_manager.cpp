@@ -315,6 +315,22 @@ TEST_F(FrametopHostInputManager, DropsEventsTheServiceShouldNotSend) {
   EXPECT_TRUE(manager.take(a, true, t0 + 100ms).empty());
 }
 
+TEST_F(FrametopHostInputManager, AnotherSessionsFullQueueOnlyStopsGrowing) {
+  manager.lease(a, true, engage(), t0);
+  // A new reason is told at once: alternating them fills b's queue, never drained.
+  for (int i = 0; i < 600; ++i) manager.lease(b, i % 2 == 0, engage(), t0);
+  EXPECT_EQ(service.sent, std::vector<std::string> {"engage"});
+  EXPECT_TRUE(manager.active());
+  EXPECT_EQ(manager.take(b, true, t0).size(), manager_t::MAX_QUEUED);
+}
+
+TEST_F(FrametopHostInputManager, AReleaseAfterALapseStillReachesTheService) {
+  manager.lease(a, true, engage(500), t0);
+  manager.lease(a, true, release, t0 + 600ms);
+  EXPECT_EQ(service.sent, (std::vector<std::string> {"engage", "drop", "release"}));
+  EXPECT_EQ(manager.take(a, true, t0 + 600ms), (std::vector<std::string> {state(false, "lease"), state(false, "host")}));
+}
+
 TEST_F(FrametopHostInputManager, AFullQueueGivesTheInputBack) {
   manager.lease(a, true, engage(), t0);
   manager.service_message(1, "state engaged");
