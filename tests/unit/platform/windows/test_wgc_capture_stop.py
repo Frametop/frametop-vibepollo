@@ -142,6 +142,7 @@ struct capture_thread_async_ctx_t {
 #define _WIN32
 // END
 #undef _WIN32
+namespace frametop_hostin{inline void on_session_end(const void*){}}
 struct session_t{std::thread videoThread,audioThread;safe::signal_t controlEnd;std::shared_ptr<void> audio_context_guard=std::make_shared<int>(1);std::shared_ptr<void> frametop_mic;};
 // AUDIO_JOIN
 void join_session(session_t& session){
