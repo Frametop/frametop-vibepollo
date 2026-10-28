@@ -87,6 +87,7 @@ static int keep = -1;  // our uinput device for the kept keys
 static struct vibepollo_host_input_lease lease;
 static int64_t rescan_at;
 static bool stalled;  // a message couldn't go: the host stopped reading
+static bool escape_check;  // a device caught up: is the escape held now? (see settled)
 
 static void say(const char *format, ...) __attribute__((format(printf, 1, 2)));
 static void say(const char *format, ...) {
@@ -256,6 +257,7 @@ static bool escape_pressed(struct device *device, const struct input_event *even
 // already says released.
 static void give_back(const char *reason) {
   while (device_count) close_device(device_count - 1);
+  escape_check = false;
   char text[64];
   snprintf(text, sizeof text, "state released %s", reason);
   send_control(text);
@@ -425,9 +427,9 @@ static void take(void) {
 // After the kernel dropped events (SYN_DROPPED): what is still queued is older than any look at
 // the keys, so it goes too, and then the keys that came up meanwhile come up on the Frame (or on
 // our own device, the kept ones) and the Shifts are as they are now. A key that went down
-// meanwhile stays here, as one held at the grab does. True when the escape is held now (its
-// Escape press may have been among the lost events).
-static bool resync(struct device *device, struct batch *keys, struct batch *mouse) {
+// meanwhile stays here, as one held at the grab does. The escape is checked once the others are
+// settled too (its Escape press may have been among the lost events).
+static void resync(struct device *device, struct batch *keys, struct batch *mouse) {
   struct input_event stale[64];
   while (read(device->fd, stale, sizeof stale) > 0) {}
   unsigned long down[BITS(KEY_CNT)] = {0};
@@ -437,7 +439,26 @@ static bool resync(struct device *device, struct batch *keys, struct batch *mous
   device->escape.right_shift = vibepollo_host_input_bit(down, BITS(KEY_CNT), KEY_RIGHTSHIFT);
   device->escape.escape = vibepollo_host_input_bit(down, BITS(KEY_CNT), KEY_ESC);
   say("%s dropped events: caught up", device->name);
-  return escape_held(true);  // the parts may be on different keyboards, each caught up in turn
+  escape_check = true;
+}
+
+// No keyboard holding part of the escape has events still to read, so what each holds is as it
+// is now: a release, a drop or an unplug still queued would otherwise count a part let go.
+static bool settled(void) {
+  struct pollfd polls[VIBEPOLLO_HOST_INPUT_MAX_DEVICES];
+  nfds_t count = 0;
+  for (size_t i = 0; i < device_count; ++i) {
+    const struct vibepollo_host_input_escape *escape = &devices[i].escape;
+    if (devices[i].grabbed && (escape->left_shift || escape->right_shift || escape->escape))
+      polls[count++] = (struct pollfd) {.fd = devices[i].fd, .events = POLLIN};
+  }
+  return poll(polls, count, 0) == 0;
+}
+
+static void escape_now(void) {
+  vibepollo_host_input_lease_escape(&lease);
+  say("this computer took its keyboard and mouse back (both Shifts and Escape)");
+  give_back("escape");  // closes every device
 }
 
 #ifdef VIBEPOLLO_HOST_INPUT_LIBINPUT
@@ -593,15 +614,9 @@ static bool read_device(struct device *device) {
       if (event->type == EV_SYN && event->code == SYN_DROPPED) {
         batch_send(&keys);
         batch_send(&mouse);
-        const bool escape = resync(device, &keys, &mouse);  // the rest of events[] is stale too
+        resync(device, &keys, &mouse);  // the rest of events[] is stale too
         batch_send(&keys);
         batch_send(&mouse);
-        if (escape) {
-          vibepollo_host_input_lease_escape(&lease);
-          say("this computer took its keyboard and mouse back (both Shifts and Escape)");
-          give_back("escape");
-          return true;
-        }
         more = false;
         break;
       }
@@ -613,9 +628,7 @@ static bool read_device(struct device *device) {
       if (escape_pressed(device, event)) {
         batch_send(&keys);
         batch_send(&mouse);
-        vibepollo_host_input_lease_escape(&lease);
-        say("this computer took its keyboard and mouse back (both Shifts and Escape)");
-        give_back("escape");  // closes every device, this one too
+        escape_now();  // this device too
         return true;
       }
       switch (vibepollo_host_input_route_event(event->type, event->code, event->value)) {
@@ -756,6 +769,15 @@ int main(void) {
       }
     }
     if (!lease.engaged) continue;
+    // After a catch-up, an escape whose parts were lost (or split across keyboards that caught up
+    // in turn). A keyboard still to be read is read first, next round.
+    if (escape_check && settled()) {
+      escape_check = false;
+      if (escape_held(true)) {
+        escape_now();
+        continue;
+      }
+    }
     const int64_t now = now_ms();
     if (vibepollo_host_input_lease_lapsed(&lease, now)) {
       give_back("lease");
