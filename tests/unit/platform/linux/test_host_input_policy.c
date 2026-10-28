@@ -181,6 +181,7 @@ static void escape_needs_both_shifts(void) {
   assert(!vibepollo_host_input_escape_step(&escape, EV_KEY, KEY_ESC, 1));  // one Shift
   assert(!vibepollo_host_input_escape_step(&escape, EV_KEY, KEY_RIGHTSHIFT, 1));
   assert(!vibepollo_host_input_escape_step(&escape, EV_KEY, KEY_ESC, 2));  // a repeat isn't a press
+  assert(escape.escape);  // but Escape is held
   assert(!vibepollo_host_input_escape_step(&escape, EV_REL, KEY_ESC, 1));
   assert(vibepollo_host_input_escape_step(&escape, EV_KEY, KEY_ESC, 1));
   assert(!vibepollo_host_input_escape_step(&escape, EV_KEY, KEY_RIGHTSHIFT, 0));
@@ -189,6 +190,7 @@ static void escape_needs_both_shifts(void) {
   assert(vibepollo_host_input_escape_step(&escape, EV_KEY, KEY_ESC, 1));  // both again
   assert(!vibepollo_host_input_escape_step(&escape, EV_KEY, KEY_LEFTSHIFT, 0));
   assert(!vibepollo_host_input_escape_step(&escape, EV_KEY, KEY_ESC, 1));
+  assert(!vibepollo_host_input_escape_step(&escape, EV_KEY, KEY_ESC, 0) && !escape.escape);
 }
 
 static void leases_and_the_escape_latch(void) {

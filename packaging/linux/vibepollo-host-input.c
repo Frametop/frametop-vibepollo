@@ -238,13 +238,18 @@ static void close_device(size_t index) {
   devices[index] = devices[--device_count];
 }
 
+// Both Shifts down, on any taken keyboards, and (with escape) Escape on any too.
+static bool escape_held(bool escape) {
+  bool left = false, right = false, esc = !escape;
+  for (size_t i = 0; i < device_count; ++i)
+    left |= devices[i].escape.left_shift, right |= devices[i].escape.right_shift, esc |= devices[i].escape.escape;
+  return left && right && esc;
+}
+
 // The escape hotkey from this device's key: both Shifts down, on any taken keyboards, and Escape.
 static bool escape_pressed(struct device *device, const struct input_event *event) {
   if (vibepollo_host_input_escape_step(&device->escape, event->type, event->code, event->value)) return true;
-  if (event->type != EV_KEY || event->code != KEY_ESC || event->value != 1) return false;
-  bool left = false, right = false;
-  for (size_t i = 0; i < device_count; ++i) left |= devices[i].escape.left_shift, right |= devices[i].escape.right_shift;
-  return left && right;
+  return event->type == EV_KEY && event->code == KEY_ESC && event->value == 1 && escape_held(false);
 }
 
 // The devices go back, and the kept keys still down on our own device come up. The lease
@@ -430,10 +435,9 @@ static bool resync(struct device *device, struct batch *keys, struct batch *mous
   lift_except(device, down, keys, mouse);
   device->escape.left_shift = vibepollo_host_input_bit(down, BITS(KEY_CNT), KEY_LEFTSHIFT);
   device->escape.right_shift = vibepollo_host_input_bit(down, BITS(KEY_CNT), KEY_RIGHTSHIFT);
+  device->escape.escape = vibepollo_host_input_bit(down, BITS(KEY_CNT), KEY_ESC);
   say("%s dropped events: caught up", device->name);
-  bool left = false, right = false;
-  for (size_t i = 0; i < device_count; ++i) left |= devices[i].escape.left_shift, right |= devices[i].escape.right_shift;
-  return left && right && vibepollo_host_input_bit(down, BITS(KEY_CNT), KEY_ESC);
+  return escape_held(true);  // the parts may be on different keyboards, each caught up in turn
 }
 
 #ifdef VIBEPOLLO_HOST_INPUT_LIBINPUT

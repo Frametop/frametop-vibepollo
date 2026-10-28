@@ -216,6 +216,7 @@ static inline enum vibepollo_host_input_route vibepollo_host_input_route_event(
 struct vibepollo_host_input_escape {
   bool left_shift;
   bool right_shift;
+  bool escape;  // held, for catching up after dropped events
 };
 
 // Follows one key event from a taken keyboard; true when it completes the escape hotkey.
@@ -225,7 +226,10 @@ static inline bool vibepollo_host_input_escape_step(
   if (type != EV_KEY) return false;
   if (code == KEY_LEFTSHIFT) escape->left_shift = value != 0;
   else if (code == KEY_RIGHTSHIFT) escape->right_shift = value != 0;
-  else if (code == KEY_ESC && value == 1) return escape->left_shift && escape->right_shift;
+  else if (code == KEY_ESC) {
+    escape->escape = value != 0;
+    return value == 1 && escape->left_shift && escape->right_shift;
+  }
   return false;
 }
 
