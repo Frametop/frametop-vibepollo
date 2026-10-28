@@ -91,17 +91,35 @@ worn, and only a client allowed both keyboard and mouse input gets one. While a
 lease holds, `vibepollo-host-input.service` grabs the keyboards and mice
 (`EVIOCGRAB`), so the desktop here sees nothing from them, and sends their key,
 button, motion and wheel events to the client (`0x3004`). Bluetooth keyboards
-and mice (uhid) are taken too. Touchpads' multitouch nodes, touchscreens,
-gamepads and uinput devices (the host's own passthrough devices among them) are
-never taken. A device is grabbed only once no key is held on it (a key pressed and released within the few microseconds of the grab itself could still stay down here; no human press is that short). Volume, media
+and mice (uhid) are taken too. Touchpads are taken through libinput, which
+turns them into the client's mouse: accelerated motion, buttons with tap to
+click, and two-finger scrolling (in 120ths of a notch, and whole notches).
+Touchscreens, gamepads and uinput devices (the host's own passthrough devices
+among them) are never taken. Devices are found from sysfs, so only the ones
+taken are ever opened. A device is grabbed only once no key is held on it (a key pressed and released within the few microseconds of the grab itself could still stay down here; no human press is that short). Volume, media
 and brightness keys stay here: they are typed again on a uinput device of the
 service's own.
+
+A touchpad's settings come from `VIBEPOLLO_HOST_INPUT_TOUCHPAD` in the
+service's environment: `tap=on|off`, `natural=on|off`, `click=fingers|areas`
+and `scroll=FACTOR` (0.05 to 10). The defaults are Hyprland's (tap on, natural
+scrolling off, button areas, factor 1). To match a Hyprland config with
+`clickfinger_behavior = true` and `scroll_factor = 0.4`:
+
+```bash
+sudo systemctl edit vibepollo-host-input.service
+# [Service]
+# Environment="VIBEPOLLO_HOST_INPUT_TOUCHPAD=click=fingers scroll=0.4"
+```
 
 Both Shifts and Escape take the keyboard and mouse back at once (the Shifts may be on different keyboards). Then no lease
 takes them until the client releases its own: its headset comes off or its
 switch goes off. A paused Frametop or a dropped stream keeps the escape, and so does the capture service restarting (restarting Vibepollo forgets it). The escape is for a well-behaved client: one allowed keyboard and mouse input could lift it itself, and already drives this computer's desktop. A
 lapsed lease, the stream ending, the client's permission going, its control
-stream falling behind, the kernel dropping a device's events, or the machine host stopping also gives them back.
+stream falling behind, or the machine host stopping also gives them back. When
+the kernel drops a device's events (a fast mouse outrunning its buffer), the
+service catches up from the device's key state: keys that came up meanwhile
+come up on the client, and the device stays taken.
 Keys and buttons that were down on the client come up there. One client at a
 time holds them; another is told it's busy.
 

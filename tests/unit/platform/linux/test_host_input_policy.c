@@ -5,25 +5,102 @@
 #undef NDEBUG
 #include <assert.h>
 
-static void takes_keyboards_and_mice_only(void) {
+#define BITS_FOR_TEST 8
+
+static void takes_keyboards_mice_and_touchpads_only(void) {
   const struct vibepollo_host_input_caps keyboard = {.keys_letters = true};
   const struct vibepollo_host_input_caps mouse = {.rel_xy = true, .btn_left = true};
-  const struct vibepollo_host_input_caps touchpad = {.rel_xy = true, .btn_left = true, .abs_mt = true};
+  const struct vibepollo_host_input_caps touchpad = {.btn_left = true, .abs_mt = true, .btn_tool_finger = true};
+  const struct vibepollo_host_input_caps touchpad_with_rel = {.rel_xy = true, .btn_left = true, .abs_mt = true, .btn_tool_finger = true};
+  const struct vibepollo_host_input_caps touchscreen = {.btn_left = true, .abs_mt = true, .btn_tool_finger = true, .direct = true};
+  const struct vibepollo_host_input_caps touch_no_finger = {.rel_xy = true, .btn_left = true, .abs_mt = true};
+  const struct vibepollo_host_input_caps virtual_touchpad = {.btn_left = true, .abs_mt = true, .btn_tool_finger = true, .virtual_device = true};
   const struct vibepollo_host_input_caps passthrough = {.keys_letters = true, .virtual_device = true};
   const struct vibepollo_host_input_caps virtual_mouse = {.rel_xy = true, .btn_left = true, .virtual_device = true};
   const struct vibepollo_host_input_caps motion_only = {.rel_xy = true};
   const struct vibepollo_host_input_caps nothing = {0};
   const struct vibepollo_host_input_caps keyboard_with_mouse = {.keys_letters = true, .rel_xy = true, .btn_left = true};
   const struct vibepollo_host_input_caps touch_keyboard = {.keys_letters = true, .abs_mt = true};
-  assert(vibepollo_host_input_takes(&keyboard));
-  assert(vibepollo_host_input_takes(&mouse));
-  assert(!vibepollo_host_input_takes(&touchpad));
-  assert(!vibepollo_host_input_takes(&passthrough));  // the host's own devices never loop back
-  assert(!vibepollo_host_input_takes(&virtual_mouse));
-  assert(!vibepollo_host_input_takes(&motion_only));
-  assert(!vibepollo_host_input_takes(&nothing));
-  assert(vibepollo_host_input_takes(&keyboard_with_mouse));
-  assert(!vibepollo_host_input_takes(&touch_keyboard));
+  assert(vibepollo_host_input_kind_of(&keyboard) == VIBEPOLLO_HOST_INPUT_EVDEV);
+  assert(vibepollo_host_input_kind_of(&mouse) == VIBEPOLLO_HOST_INPUT_EVDEV);
+  assert(vibepollo_host_input_kind_of(&touchpad) == VIBEPOLLO_HOST_INPUT_TOUCHPAD);
+  assert(vibepollo_host_input_kind_of(&touchpad_with_rel) == VIBEPOLLO_HOST_INPUT_TOUCHPAD);  // never read raw
+  assert(vibepollo_host_input_kind_of(&touchscreen) == VIBEPOLLO_HOST_INPUT_SKIP);
+  assert(vibepollo_host_input_kind_of(&touch_no_finger) == VIBEPOLLO_HOST_INPUT_SKIP);
+  assert(vibepollo_host_input_kind_of(&virtual_touchpad) == VIBEPOLLO_HOST_INPUT_SKIP);
+  assert(vibepollo_host_input_kind_of(&passthrough) == VIBEPOLLO_HOST_INPUT_SKIP);  // the host's own devices never loop back
+  assert(vibepollo_host_input_kind_of(&virtual_mouse) == VIBEPOLLO_HOST_INPUT_SKIP);
+  assert(vibepollo_host_input_kind_of(&motion_only) == VIBEPOLLO_HOST_INPUT_SKIP);
+  assert(vibepollo_host_input_kind_of(&nothing) == VIBEPOLLO_HOST_INPUT_SKIP);
+  assert(vibepollo_host_input_kind_of(&keyboard_with_mouse) == VIBEPOLLO_HOST_INPUT_EVDEV);
+  assert(vibepollo_host_input_kind_of(&touch_keyboard) == VIBEPOLLO_HOST_INPUT_SKIP);
+}
+
+static void parses_sysfs_bitmaps(void) {
+  const size_t per = sizeof(unsigned long) * 8;
+  unsigned long bits[BITS_FOR_TEST];
+  assert(vibepollo_host_input_parse_bits("1b\n", bits, BITS_FOR_TEST));
+  assert(bits[0] == 0x1b && bits[1] == 0);
+  // The highest word first: "e520 10000 0 0 0 0" is a touchpad's key bits.
+  assert(vibepollo_host_input_parse_bits("e520 10000 0 0 0 0\n", bits, BITS_FOR_TEST));
+  assert(bits[5] == 0xe520 && bits[4] == 0x10000 && bits[0] == 0);
+  if (per == 64) {
+    assert(vibepollo_host_input_bit(bits, BITS_FOR_TEST, BTN_TOOL_FINGER));
+    assert(vibepollo_host_input_bit(bits, BITS_FOR_TEST, BTN_LEFT));
+    assert(!vibepollo_host_input_bit(bits, BITS_FOR_TEST, KEY_A));
+  }
+  // Words past the array are left out; garbage and empty files aren't bitmaps.
+  assert(vibepollo_host_input_parse_bits("ff 0 1", bits, 2));
+  assert(bits[0] == 1 && bits[1] == 0);
+  assert(!vibepollo_host_input_parse_bits("", bits, 2));
+  assert(!vibepollo_host_input_parse_bits("\n", bits, 2));
+  assert(!vibepollo_host_input_parse_bits("1z 0", bits, 2));
+  assert(bits[0] == 0 && bits[1] == 0);
+}
+
+static void finds_keys_lost_in_a_drop(void) {
+  const unsigned long held[2] = {0x6, 0x1}, down[2] = {0x4, 0x3};
+  unsigned long lost[2];
+  vibepollo_host_input_lost_keys(held, down, lost, 2);
+  assert(lost[0] == 0x2);  // held, now up: it comes up on the Frame
+  assert(lost[1] == 0);  // down meanwhile, never sent: stays here
+}
+
+static void reads_touchpad_settings(void) {
+  struct vibepollo_host_input_touchpad settings;
+  assert(vibepollo_host_input_parse_touchpad(NULL, &settings));
+  assert(settings.tap && !settings.natural && !settings.clickfinger && settings.scroll == 1.0);
+  assert(vibepollo_host_input_parse_touchpad("  tap=off natural=on click=fingers scroll=0.4 ", &settings));
+  assert(!settings.tap && settings.natural && settings.clickfinger && settings.scroll == 0.4);
+  assert(vibepollo_host_input_parse_touchpad("click=areas", &settings) && !settings.clickfinger);
+  const char *bad[] = {"tap=maybe", "scroll=0", "scroll=11", "scroll=x", "scroll=", "speed=2", "tap=onn",
+                       "averyveryveryverylongwordthatdoesnotfit=1"};
+  for (size_t i = 0; i < sizeof bad / sizeof bad[0]; ++i) {
+    assert(!vibepollo_host_input_parse_touchpad(bad[i], &settings));
+    assert(settings.tap && !settings.natural && settings.scroll == 1.0);  // the defaults
+  }
+  assert(!vibepollo_host_input_parse_touchpad("natural=on bogus", &settings) && !settings.natural);
+}
+
+static void scrolls_in_120ths_and_notches(void) {
+  struct vibepollo_host_input_scroll scroll = {0};
+  int32_t notches;
+  // 15 is a notch: 120ths, with whole notches as they add up.
+  assert(vibepollo_host_input_scroll_step(&scroll, 15, 1.0, &notches) == 120 && notches == 1);
+  assert(vibepollo_host_input_scroll_step(&scroll, 7.5, 1.0, &notches) == 60 && notches == 0);
+  assert(vibepollo_host_input_scroll_step(&scroll, 7.5, 1.0, &notches) == 60 && notches == 1);
+  // Fractions carry.
+  int32_t total = 0;
+  for (int i = 0; i < 10; ++i) total += vibepollo_host_input_scroll_step(&scroll, 0.05, 1.0, &notches);
+  assert(total == 3 || total == 4);
+  // The factor scales it; 0 ends the scroll and forgets what was toward a notch.
+  assert(vibepollo_host_input_scroll_step(&scroll, 0, 1.0, &notches) == 0 && notches == 0);
+  assert(vibepollo_host_input_scroll_step(&scroll, 15, 0.4, &notches) == 48 && notches == 0);
+  assert(vibepollo_host_input_scroll_step(&scroll, 0, 1.0, &notches) == 0);
+  assert(vibepollo_host_input_scroll_step(&scroll, 10, 0.4, &notches) == 32 && notches == 0);
+  // Down and up: negatives work the same way.
+  assert(vibepollo_host_input_scroll_step(&scroll, 0, 1.0, &notches) == 0);
+  assert(vibepollo_host_input_scroll_step(&scroll, -30, 1.0, &notches) == -240 && notches == -2);
 }
 
 static void routes_events(void) {
@@ -138,7 +215,11 @@ static void reads_capability_bits(void) {
 }
 
 int main(void) {
-  takes_keyboards_and_mice_only();
+  takes_keyboards_mice_and_touchpads_only();
+  parses_sysfs_bitmaps();
+  finds_keys_lost_in_a_drop();
+  reads_touchpad_settings();
+  scrolls_in_120ths_and_notches();
   routes_events();
   escape_needs_both_shifts();
   accepts_exact_requests();

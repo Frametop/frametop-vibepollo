@@ -10,6 +10,8 @@ ExecStart=/usr/libexec/vibeshine/vibepollo-host-input
 # It serves one connection from the machine host (checked by its peer uid), then exits; the
 # socket starts it again for the next one.
 Restart=no
+# Touchpad settings (vibepollo-host-input-policy.h), in a drop-in, for example:
+#   Environment="VIBEPOLLO_HOST_INPUT_TOUCHPAD=tap=on natural=off click=fingers scroll=0.4"
 DynamicUser=yes
 # Read the keyboards and mice; type a taken keyboard's volume and media keys again.
 SupplementaryGroups=input vibepollo-uinput

@@ -402,6 +402,7 @@ jobs:
           grep -qx 'depend = mokutil>=0.7.2' <<< "${package_info}"
           grep -qx 'depend = wayland-utils' <<< "${package_info}"
           grep -qx 'depend = xorg-xdpyinfo' <<< "${package_info}"
+          grep -qx 'depend = libinput' <<< "${package_info}"
           grep -qx $'\tmakedepends = nodejs' .SRCINFO
           grep -qx $'\tmakedepends = npm' .SRCINFO
           grep -qx $'\tmakedepends = ninja' .SRCINFO
@@ -420,6 +421,11 @@ jobs:
           grep -qx 'usr/lib/systemd/system/vibepollo-host-input.socket' <<< "${package_files}"
           grep -qx 'usr/lib/systemd/system/vibepollo-host-input.service' <<< "${package_files}"
           grep -qx 'usr/libexec/vibeshine/vibepollo-host-input' <<< "${package_files}"
+          # Touchpads are lent through libinput: the daemon must be built with it.
+          host_input_root="$(mktemp -d)"
+          bsdtar -xpf "${package}" -C "${host_input_root}" usr/libexec/vibeshine/vibepollo-host-input
+          readelf -d "${host_input_root}/usr/libexec/vibeshine/vibepollo-host-input" | grep -q 'NEEDED.*libinput\.so'
+          rm -rf "${host_input_root}"
           grep -qx 'usr/libexec/vibeshine/vibepollo-session-controller' <<< "${package_files}"
           grep -qx 'usr/libexec/vibeshine/vibepollo-session-exec' <<< "${package_files}"
           grep -qx 'usr/libexec/vibeshine/vibepollo-session-broker' <<< "${package_files}"

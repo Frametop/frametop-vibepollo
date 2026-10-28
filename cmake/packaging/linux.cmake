@@ -123,6 +123,15 @@ else()
         add_executable(vibepollo_host_input
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibepollo-host-input.c")
         set_target_properties(vibepollo_host_input PROPERTIES OUTPUT_NAME "vibepollo-host-input")
+        # Touchpads go through libinput (finger scrolling needs 1.19); without it they stay here.
+        pkg_check_modules(VIBEPOLLO_HOST_INPUT_LIBINPUT QUIET libinput>=1.19)
+        if(VIBEPOLLO_HOST_INPUT_LIBINPUT_FOUND)
+            target_compile_definitions(vibepollo_host_input PRIVATE VIBEPOLLO_HOST_INPUT_LIBINPUT=1)
+            target_include_directories(vibepollo_host_input PRIVATE ${VIBEPOLLO_HOST_INPUT_LIBINPUT_INCLUDE_DIRS})
+            target_link_libraries(vibepollo_host_input PRIVATE ${VIBEPOLLO_HOST_INPUT_LIBINPUT_LIBRARIES} m)
+        else()
+            message(STATUS "vibepollo-host-input: no libinput >= 1.19, so touchpads aren't lent")
+        endif()
         add_executable(vibepollo_display_power
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibepollo-display-power.c")
         set_target_properties(vibepollo_display_power PROPERTIES OUTPUT_NAME "vibepollo-display-power")

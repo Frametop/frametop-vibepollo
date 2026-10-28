@@ -7,11 +7,13 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 // A Frametop lease keeps the devices for this long; the Frame renews it every 500 ms.
 #define VIBEPOLLO_HOST_INPUT_LEASE_MS 1500
-// Devices are looked for again this often while engaged (hotplug).
+// Devices are looked for again this often while engaged (hotplug), from sysfs: opening and closing
+// an event node can block for tens of milliseconds, longer than a fast mouse's kernel buffer lasts.
 #define VIBEPOLLO_HOST_INPUT_RESCAN_MS 1000
 #define VIBEPOLLO_HOST_INPUT_MAX_DEVICES 32
 // Events in one message to the host; a longer report goes in several.
@@ -29,7 +31,31 @@ static inline bool vibepollo_host_input_bit(const unsigned long *bits, size_t co
   return bit / per < count && (bits[bit / per] >> (bit % per)) & 1UL;
 }
 
-// What a device is, from its capability bits (EVIOCGBIT), and whether it is a uinput device.
+// A sysfs capabilities or properties file ("120013", "1 0 0 3"): hex words of the kernel's
+// unsigned long, the highest first. False if it isn't one; bits past count are left out.
+static inline bool vibepollo_host_input_parse_bits(const char *text, unsigned long *bits, size_t count) {
+  memset(bits, 0, count * sizeof *bits);
+  size_t words = 0;
+  for (const char *p = text; *p;) {
+    while (*p == ' ') ++p;
+    if (!*p || *p == '\n') break;
+    char *end;
+    (void) strtoul(p, &end, 16);
+    if (end == p || (*end && *end != ' ' && *end != '\n')) return false;
+    ++words, p = end;
+  }
+  size_t index = words;
+  for (const char *p = text; index;) {
+    while (*p == ' ') ++p;
+    char *end;
+    const unsigned long word = strtoul(p, &end, 16);
+    if (--index < count) bits[index] = word;
+    p = end;
+  }
+  return words > 0;
+}
+
+// What a device is, from its capability bits, and whether it is a uinput device.
 struct vibepollo_host_input_caps {
   bool virtual_device;  // under /devices/virtual/input: uinput, such as the host's own passthrough
                         // devices (uhid ones, Bluetooth keyboards and mice, are real)
@@ -37,13 +63,102 @@ struct vibepollo_host_input_caps {
   bool rel_xy;  // REL_X and REL_Y
   bool btn_left;
   bool abs_mt;  // a touchpad or touchscreen (ABS_MT_POSITION_X)
+  bool btn_tool_finger;  // a touchpad's (BTN_TOOL_FINGER)
+  bool direct;  // INPUT_PROP_DIRECT: a touchscreen or tablet, on its screen
 };
 
-// A keyboard or a mouse that isn't ours and isn't a touch surface. A touchpad's relative mouse
-// node (REL_X/REL_Y with BTN_LEFT) counts as a mouse; its multitouch node stays here.
-static inline bool vibepollo_host_input_takes(const struct vibepollo_host_input_caps *caps) {
-  if (caps->virtual_device || caps->abs_mt) return false;
-  return caps->keys_letters || (caps->rel_xy && caps->btn_left);
+enum vibepollo_host_input_kind {
+  VIBEPOLLO_HOST_INPUT_SKIP = 0,
+  VIBEPOLLO_HOST_INPUT_EVDEV,  // a keyboard or mouse, read here
+  VIBEPOLLO_HOST_INPUT_TOUCHPAD,  // read through libinput, which turns it into a mouse
+};
+
+// Keyboards, mice and touchpads that aren't ours. A touchscreen stays here, and a touch surface
+// is never read as a mouse: its relative node (REL_X/REL_Y with BTN_LEFT, no ABS_MT) is one.
+static inline enum vibepollo_host_input_kind vibepollo_host_input_kind_of(const struct vibepollo_host_input_caps *caps) {
+  if (caps->virtual_device) return VIBEPOLLO_HOST_INPUT_SKIP;
+  if (caps->abs_mt) {
+    return caps->btn_tool_finger && caps->btn_left && !caps->direct ? VIBEPOLLO_HOST_INPUT_TOUCHPAD :
+                                                                      VIBEPOLLO_HOST_INPUT_SKIP;
+  }
+  return caps->keys_letters || (caps->rel_xy && caps->btn_left) ? VIBEPOLLO_HOST_INPUT_EVDEV : VIBEPOLLO_HOST_INPUT_SKIP;
+}
+
+// After the kernel dropped a device's events (SYN_DROPPED): which of the keys that went down to
+// the Frame are up now (held and not in EVIOCGKEY's), into lost.
+static inline void vibepollo_host_input_lost_keys(
+  const unsigned long *held, const unsigned long *down, unsigned long *lost, size_t count
+) {
+  for (size_t i = 0; i < count; ++i) lost[i] = held[i] & ~down[i];
+}
+
+// A touchpad's settings (VIBEPOLLO_HOST_INPUT_TOUCHPAD in the service's environment, words
+// "tap=on|off natural=on|off click=fingers|areas scroll=FACTOR"). The defaults are Hyprland's.
+struct vibepollo_host_input_touchpad {
+  bool tap;  // tap to click, and tap and drag
+  bool natural;  // natural scrolling
+  bool clickfinger;  // a click's button by its finger count, not where it is pressed
+  double scroll;  // scroll speed, 0.05 to 10
+};
+
+static inline struct vibepollo_host_input_touchpad vibepollo_host_input_touchpad_defaults(void) {
+  return (struct vibepollo_host_input_touchpad) {.tap = true, .natural = false, .clickfinger = false, .scroll = 1.0};
+}
+
+// False on a word it doesn't know; *out keeps the defaults then.
+static inline bool vibepollo_host_input_parse_touchpad(const char *text, struct vibepollo_host_input_touchpad *out) {
+  *out = vibepollo_host_input_touchpad_defaults();
+  struct vibepollo_host_input_touchpad parsed = *out;
+  for (const char *p = text ? text : ""; *p;) {
+    while (*p == ' ') ++p;
+    if (!*p) break;
+    size_t length = 0;
+    while (p[length] && p[length] != ' ') ++length;
+    char word[32];
+    if (length >= sizeof word) return false;
+    memcpy(word, p, length);
+    word[length] = 0;
+    p += length;
+    if (!strcmp(word, "tap=on") || !strcmp(word, "tap=off")) parsed.tap = word[5] == 'n';
+    else if (!strcmp(word, "natural=on") || !strcmp(word, "natural=off")) parsed.natural = word[9] == 'n';
+    else if (!strcmp(word, "click=fingers")) parsed.clickfinger = true;
+    else if (!strcmp(word, "click=areas")) parsed.clickfinger = false;
+    else if (!strncmp(word, "scroll=", 7)) {
+      char *end;
+      const double factor = strtod(word + 7, &end);
+      if (end == word + 7 || *end || !(factor >= 0.05 && factor <= 10)) return false;
+      parsed.scroll = factor;
+    } else {
+      return false;
+    }
+  }
+  *out = parsed;
+  return true;
+}
+
+// A touchpad's finger scrolling, from libinput (15 to a wheel notch, as Wayland's axis events), in
+// the wheel's 120ths and its whole notches. Its sign is libinput's (down and right positive).
+struct vibepollo_host_input_scroll {
+  double rest;  // under a 120th
+  int32_t partial;  // 120ths toward the next notch
+};
+
+// The 120ths for this value; *notches the whole notches it completes. 0 ends the scroll.
+static inline int32_t vibepollo_host_input_scroll_step(
+  struct vibepollo_host_input_scroll *scroll, double value, double factor, int32_t *notches
+) {
+  *notches = 0;
+  if (value == 0) {
+    *scroll = (struct vibepollo_host_input_scroll) {0};
+    return 0;
+  }
+  const double exact = value * 8.0 * factor + scroll->rest;
+  const int32_t whole = (int32_t) exact;
+  scroll->rest = exact - whole;
+  scroll->partial += whole;
+  *notches = scroll->partial / 120;
+  scroll->partial -= *notches * 120;
+  return whole;
 }
 
 // Volume, media and brightness keys never go to the Frame.

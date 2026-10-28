@@ -37,6 +37,7 @@ depends=(
   'libcap'
   'libdrm'
   'libevdev'
+  'libinput'
   'libkscreen'
   'libmfx'
   'libnotify'
