@@ -21,7 +21,7 @@ namespace {
 TEST(FrametopHostInputPolicy, ParsesALease) {
   const auto lease = parse_lease(engage(0x01020304, 1000));
   ASSERT_TRUE(lease);
-  EXPECT_TRUE(lease->engage);
+  EXPECT_EQ(lease->action, lease_t::engage);
   EXPECT_EQ(lease->sequence, 0x01020304u);
   EXPECT_EQ(lease->duration, std::chrono::milliseconds {1000});
 }
@@ -31,7 +31,11 @@ TEST(FrametopHostInputPolicy, CapsALongLease) {
 }
 
 TEST(FrametopHostInputPolicy, ParsesARelease) {
-  EXPECT_EQ(parse_lease(bytes({VERSION, 2})), lease_t {});
+  EXPECT_EQ(parse_lease(bytes({VERSION, 2})), lease_t {lease_t::release});
+}
+
+TEST(FrametopHostInputPolicy, ParsesADrop) {
+  EXPECT_EQ(parse_lease(bytes({VERSION, 3})), lease_t {lease_t::drop});
 }
 
 TEST(FrametopHostInputPolicy, RejectsOtherLeasePackets) {
@@ -39,7 +43,9 @@ TEST(FrametopHostInputPolicy, RejectsOtherLeasePackets) {
   EXPECT_FALSE(parse_lease(bytes({VERSION})));
   EXPECT_FALSE(parse_lease(bytes({2, 2})));  // another version
   EXPECT_FALSE(parse_lease(bytes({VERSION, 2, 0})));  // a release with more
-  EXPECT_FALSE(parse_lease(bytes({VERSION, 3})));
+  EXPECT_FALSE(parse_lease(bytes({VERSION, 3, 0})));
+  EXPECT_FALSE(parse_lease(bytes({VERSION, 4})));
+  EXPECT_FALSE(parse_lease(bytes({VERSION, 0})));
   EXPECT_FALSE(parse_lease(engage(1, 0)));  // a lease of nothing
   EXPECT_FALSE(parse_lease(engage(1, 500).substr(0, 7)));
   EXPECT_FALSE(parse_lease(engage(1, 500) + '\0'));
@@ -80,6 +86,15 @@ TEST(FrametopHostInputPolicy, RefusesEventsTheFrameShouldNotGet) {
   EXPECT_FALSE(events_payload("ev k 1 30 1x"));
   EXPECT_FALSE(events_payload("ev k 1 30  1"));
   EXPECT_FALSE(events_payload("ev k -1 30 1"));
+  // Each kind carries only its own: buttons and motion are the mouse's, other keys the keyboard's.
+  EXPECT_FALSE(events_payload("ev k 1 272 1"));  // BTN_LEFT
+  EXPECT_FALSE(events_payload("ev k 1 279 1"));  // BTN_TASK
+  EXPECT_FALSE(events_payload("ev k 2 0 1"));
+  EXPECT_FALSE(events_payload("ev m 1 30 1"));
+  EXPECT_FALSE(events_payload("ev m 1 271 1"));  // BTN_MOUSE - 1
+  EXPECT_FALSE(events_payload("ev m 1 280 1"));  // BTN_TASK + 1
+  EXPECT_TRUE(events_payload("ev m 1 279 1 2 8 -1 0 0 0"));
+  EXPECT_TRUE(events_payload("ev k 1 271 1 1 280 0"));
   std::string many = "ev k";
   for (std::size_t i = 0; i < MAX_EVENTS; ++i) many += " 1 30 1";
   EXPECT_TRUE(events_payload(many));

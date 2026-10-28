@@ -10,11 +10,14 @@
  *   - events (1): kind (1 keyboard, 2 mouse), a little-endian u16 count, then that many
  *     evdev events, each type (u16), code (u16) and value (s32), little-endian. A report ends
  *     with 0 0 0.
+ *     A keyboard record carries keys outside the mouse buttons; a mouse record those buttons
+ *     (BTN_MOUSE to BTN_TASK) and relative motion.
  *   - state (2): engaged (0 or 1), then the reason it isn't, ASCII (lease, host, escape, busy,
- *     permission, service, unsupported).
+ *     permission, overflow, stalled, closed, off, service, unsupported).
  *   - hello (3): the kinds it lends (bit 1 keyboard, bit 2 mouse), then this host's name.
  * - Client -> host, 0x3005: version (1), then engage (1) with a u32 sequence and a u16 lease
- *   in milliseconds, or release (2).
+ *   in milliseconds; release (2), which also lifts the host's escape; or drop (3), which gives the
+ *   input back but leaves an escape in place.
  *
  * Both only on the encrypted control stream.
  */
@@ -43,7 +46,11 @@ namespace frametop_hostin::policy {
   constexpr std::uint8_t MOUSE = 2;
 
   struct lease_t {
-    bool engage = false;  ///< false: release
+    enum action_e : std::uint8_t {
+      engage = 1,
+      release = 2,
+      drop = 3,
+    } action = release;
     std::uint32_t sequence = 0;
     std::chrono::milliseconds duration {0};  ///< capped at MAX_LEASE
     friend bool operator==(const lease_t &, const lease_t &) = default;
@@ -62,7 +69,7 @@ namespace frametop_hostin::policy {
   std::optional<service_state_t> parse_service_state(std::string_view message);
 
   /// The capture service's "ev k|m T C V..." as a 0x3004 events payload, or nullopt when it
-  /// isn't one: only key, relative and sync events, at most MAX_EVENTS of them.
+  /// isn't one: only key, relative and sync events of its kind, at most MAX_EVENTS of them.
   std::optional<std::string> events_payload(std::string_view message);
 
   /// 0x3004 state and hello payloads. Reason and name are cut to their limits, printable ASCII.

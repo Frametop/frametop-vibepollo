@@ -16,7 +16,7 @@
 // While engaged, every keyboard and mouse that isn't a uinput device or a touch surface is
 // grabbed (EVIOCGRAB), so the desktop sees nothing from it, and only once no key is held on it.
 // Release reasons: lease (no engage in time), host (release or drop), escape (both Shifts and Escape on
-// this computer), closed. After escape, engage is refused until the host sends release (the
+// this computer), stalled (the host stopped reading), closed. After escape, engage is refused until the host sends release (the
 // Frame's headset came off, or its switch went off). Keys and buttons that went to the Frame come
 // up there when the devices go back. Volume, media and brightness keys stay here: a taken
 // keyboard's are typed again on a uinput device of our own. Key codes are never logged.
@@ -61,11 +61,11 @@ static struct device devices[VIBEPOLLO_HOST_INPUT_MAX_DEVICES];
 static size_t device_count;
 static int host = -1;
 static int keep = -1;  // our uinput device for the kept keys
-static bool engaged;
-static bool escaped;  // released by the hotkey: no engage until the host releases
-static int64_t lease_until;
+static struct vibepollo_host_input_lease lease;
 static int64_t rescan_at;
 static struct vibepollo_host_input_escape escape;
+static unsigned long kept_held[BITS(KEY_CNT)];  // kept keys down on our own device
+static bool stalled;  // a message couldn't go: the host stopped reading
 
 static void say(const char *format, ...) __attribute__((format(printf, 1, 2)));
 static void say(const char *format, ...) {
@@ -83,12 +83,18 @@ static int64_t now_ms(void) {
   return (int64_t) now.tv_sec * 1000 + now.tv_nsec / 1000000;
 }
 
+// Never blocks: a host that stops reading gets its lease ended (main loop), so this computer's
+// keyboard, mouse and escape hotkey never wait on it.
 static void send_text(const char *text) {
-  if (host >= 0 && send(host, text, strlen(text), MSG_NOSIGNAL) < 0 && errno != EAGAIN) {
-    say("the host went away");
-    close(host);
-    host = -1;
+  if (host < 0 || send(host, text, strlen(text), MSG_NOSIGNAL | MSG_DONTWAIT) >= 0) return;
+  if (errno == EAGAIN || errno == EWOULDBLOCK) {
+    if (!stalled) say("the host stopped reading");
+    stalled = true;
+    return;
   }
+  say("the host went away");
+  close(host);
+  host = -1;
 }
 
 // One message of events for the Frame's host keyboard or mouse.
@@ -123,10 +129,14 @@ static bool held(const struct device *device, unsigned int code) {
   return vibepollo_host_input_bit(device->held, BITS(KEY_CNT), code);
 }
 
-static void set_held(struct device *device, unsigned int code, bool down) {
+static void set_bit(unsigned long *bits, unsigned int code, bool on) {
   const size_t per = sizeof(unsigned long) * 8;
-  if (down) device->held[code / per] |= 1UL << (code % per);
-  else device->held[code / per] &= ~(1UL << (code % per));
+  if (on) bits[code / per] |= 1UL << (code % per);
+  else bits[code / per] &= ~(1UL << (code % per));
+}
+
+static void set_held(struct device *device, unsigned int code, bool down) {
+  set_bit(device->held, code, down);
 }
 
 // What went down to the Frame from this device comes up there.
@@ -150,13 +160,18 @@ static void close_device(size_t index) {
   if (device->grabbed) (void) ioctl(device->fd, EVIOCGRAB, 0);
   close(device->fd);
   devices[index] = devices[--device_count];
+  // Its Shift may have gone down without coming up here.
+  memset(&escape, 0, sizeof escape);
 }
 
-static void release(const char *reason) {
+static void type_kept(uint16_t code, int32_t value);
+
+// The devices go back, and the kept keys still down on our own device come up. The lease
+// already says released.
+static void give_back(const char *reason) {
   while (device_count) close_device(device_count - 1);
-  memset(&escape, 0, sizeof escape);
-  if (!engaged) return;
-  engaged = false;
+  for (unsigned int code = 1; code <= KEY_MAX; ++code)
+    if (vibepollo_host_input_bit(kept_held, BITS(KEY_CNT), code)) type_kept((uint16_t) code, 0);
   char text[64];
   snprintf(text, sizeof text, "state released %s", reason);
   send_text(text);
@@ -175,6 +190,11 @@ static bool any_key_down(int fd) {
 static void try_grab(struct device *device) {
   if (device->grabbed || any_key_down(device->fd)) return;
   if (ioctl(device->fd, EVIOCGRAB, 1) < 0) return;
+  // A key that went down between the look and the grab would come up only here: try later.
+  if (any_key_down(device->fd)) {
+    (void) ioctl(device->fd, EVIOCGRAB, 0);
+    return;
+  }
   device->grabbed = true;
   // Events from before the grab went to the desktop too.
   struct input_event events[64];
@@ -182,11 +202,13 @@ static void try_grab(struct device *device) {
   say("took %s", device->name);
 }
 
+// A uinput device (ours, the host's passthrough devices, any other). Bluetooth keyboards and mice
+// come through uhid, under /devices/virtual/misc/uhid, and are taken.
 static bool is_virtual(const char *node) {
   char link[PATH_MAX], resolved[PATH_MAX];
   snprintf(link, sizeof link, "/sys/class/input/%s/device", node);
   if (!realpath(link, resolved)) return true;  // can't tell: leave it alone
-  return strstr(resolved, "/devices/virtual/") != NULL;
+  return strstr(resolved, "/devices/virtual/input/") != NULL;
 }
 
 static void scan(void) {
@@ -257,19 +279,13 @@ static void open_keep(void) {
 }
 
 static void type_kept(uint16_t code, int32_t value) {
+  if (value == 0 || value == 1) set_bit(kept_held, code, value == 1);
   if (keep < 0) return;
   struct input_event events[2] = {{.type = EV_KEY, .code = code, .value = value}, {.type = EV_SYN, .code = SYN_REPORT}};
   if (write(keep, events, sizeof events) < 0) {}
 }
 
-static void engage(void) {
-  if (escaped) {
-    send_text("state released escape");
-    return;
-  }
-  lease_until = now_ms() + VIBEPOLLO_HOST_INPUT_LEASE_MS;
-  if (engaged) return;
-  engaged = true;
+static void take(void) {
   open_keep();
   scan();
   for (size_t i = 0; i < device_count; ++i) try_grab(&devices[i]);
@@ -298,9 +314,9 @@ static bool read_device(struct device *device) {
       if (vibepollo_host_input_escape_step(&escape, event->type, event->code, event->value)) {
         batch_send(&keys);
         batch_send(&mouse);
-        escaped = true;
+        vibepollo_host_input_lease_escape(&lease);
         say("this computer took its keyboard and mouse back (both Shifts and Escape)");
-        release("escape");  // closes every device, this one too
+        give_back("escape");  // closes every device, this one too
         return true;
       }
       switch (vibepollo_host_input_route_event(event->type, event->code, event->value)) {
@@ -329,6 +345,33 @@ static bool read_device(struct device *device) {
   return true;
 }
 
+// One message from the host. False when the connection ends.
+static bool serve_request(void) {
+  char request[64];
+  const ssize_t n = recv(host, request, sizeof request, MSG_DONTWAIT);
+  if (n < 0 && (errno == EAGAIN || errno == EINTR)) return true;
+  if (n <= 0) return false;
+  const enum vibepollo_host_input_request parsed = vibepollo_host_input_parse_request(request, (size_t) n);
+  if (parsed == VIBEPOLLO_HOST_INPUT_REQUEST_INVALID) {
+    say("an unknown request: the connection ends");
+    return false;
+  }
+  switch (vibepollo_host_input_lease_request(&lease, parsed, now_ms())) {
+    case VIBEPOLLO_HOST_INPUT_TAKE:
+      take();
+      break;
+    case VIBEPOLLO_HOST_INPUT_GIVE_BACK:
+      give_back("host");
+      break;
+    case VIBEPOLLO_HOST_INPUT_STILL_ESCAPED:
+      send_text("state released escape");
+      break;
+    case VIBEPOLLO_HOST_INPUT_STAY:
+      break;
+  }
+  return true;
+}
+
 static uid_t host_uid(void) {
   const struct passwd *user = getpwnam("vibepollo");
   return user ? user->pw_uid : (uid_t) -1;
@@ -347,7 +390,7 @@ int main(void) {
     say("no vibepollo user");
     return 1;
   }
-  host = accept4(3, NULL, NULL, SOCK_CLOEXEC);
+  host = accept4(3, NULL, NULL, SOCK_CLOEXEC | SOCK_NONBLOCK);
   if (host < 0) {
     say("accept: %s", strerror(errno));
     return 1;
@@ -366,9 +409,9 @@ int main(void) {
     for (size_t i = 0; i < device_count; ++i)
       polls[1 + i] = (struct pollfd) {.fd = devices[i].fd, .events = devices[i].grabbed ? POLLIN : 0};
     int timeout = -1;
-    if (engaged) {
+    if (lease.engaged) {
       const int64_t now = now_ms();
-      int64_t next = lease_until < rescan_at ? lease_until : rescan_at;
+      int64_t next = lease.until < rescan_at ? lease.until : rescan_at;
       for (size_t i = 0; i < device_count; ++i)
         if (!devices[i].grabbed && now + 100 < next) next = now + 100;  // waiting for its keys to come up
       timeout = next > now ? (int) (next - now) : 0;
@@ -377,24 +420,7 @@ int main(void) {
     if (poll(polls, count, timeout) < 0 && errno != EINTR) break;
 
     if (polls[0].revents & POLLIN) {
-      char request[64];
-      const ssize_t n = recv(host, request, sizeof request, 0);
-      if (n <= 0) break;
-      switch (vibepollo_host_input_parse_request(request, (size_t) n)) {
-        case VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE:
-          engage();
-          break;
-        case VIBEPOLLO_HOST_INPUT_REQUEST_RELEASE:
-          escaped = false;
-          release("host");
-          break;
-        case VIBEPOLLO_HOST_INPUT_REQUEST_DROP:
-          release("host");
-          break;
-        default:
-          say("an unknown request: the connection ends");
-          goto done;
-      }
+      if (!serve_request()) break;
     } else if (polls[0].revents & (POLLHUP | POLLERR)) {
       break;
     }
@@ -410,10 +436,17 @@ int main(void) {
         close_device(i);
       }
     }
-    if (!engaged) continue;
+    if (stalled) {
+      stalled = false;
+      if (lease.engaged) {
+        lease.engaged = false;
+        give_back("stalled");
+      }
+    }
+    if (!lease.engaged) continue;
     const int64_t now = now_ms();
-    if (now >= lease_until) {
-      release("lease");
+    if (vibepollo_host_input_lease_lapsed(&lease, now)) {
+      give_back("lease");
       continue;
     }
     for (size_t i = 0; i < device_count; ++i) try_grab(&devices[i]);
@@ -424,8 +457,10 @@ int main(void) {
       rescan_at = now + VIBEPOLLO_HOST_INPUT_RESCAN_MS;
     }
   }
-done:
-  release("closed");
+  if (lease.engaged) {
+    lease.engaged = false;
+    give_back("closed");
+  }
   if (keep >= 0) {
     (void) ioctl(keep, UI_DEV_DESTROY);
     close(keep);

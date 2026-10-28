@@ -78,19 +78,30 @@ on: if Hyprland's idle handling turns it off, capture fails. HDR outputs fail
 closed as above.
 
 Frametop's build can also lend this computer's keyboards and mice to one
-Frametop client (Frametop's host input). The client renews a 1.5 s lease on
-the encrypted control stream (packet `0x3005`) while its headset is worn, and
-only a client allowed both keyboard and mouse input gets one. While a lease
-holds, `vibepollo-host-input.service` grabs every keyboard and mouse
+Frametop client (Frametop's host input). It is off until this computer's owner
+turns it on:
+
+```bash
+sudo systemctl enable --now vibepollo-host-input.socket
+```
+
+Until then a client asking is told `off`. Once on, the client renews a 1.5 s
+lease on the encrypted control stream (packet `0x3005`) while its headset is
+worn, and only a client allowed both keyboard and mouse input gets one. While a
+lease holds, `vibepollo-host-input.service` grabs the keyboards and mice
 (`EVIOCGRAB`), so the desktop here sees nothing from them, and sends their key,
-button, motion and wheel events to the client (`0x3004`). Touchpads' multitouch
-nodes, touchscreens, gamepads and uinput devices (the host's own passthrough
-devices among them) are never taken. A device is grabbed only once no key is
-held on it. Volume, media and brightness keys stay here: they are typed again
-on a uinput device of the service's own. Both Shifts and Escape take the
-keyboard and mouse back at once; then no lease takes them until the client
-releases its own (its headset comes off, or its switch goes off). A lapsed
-lease, the stream ending or the machine host stopping gives them back too.
+button, motion and wheel events to the client (`0x3004`). Bluetooth keyboards
+and mice (uhid) are taken too. Touchpads' multitouch nodes, touchscreens,
+gamepads and uinput devices (the host's own passthrough devices among them) are
+never taken. A device is grabbed only once no key is held on it. Volume, media
+and brightness keys stay here: they are typed again on a uinput device of the
+service's own.
+
+Both Shifts and Escape take the keyboard and mouse back at once. Then no lease
+takes them until the client releases its own: its headset comes off or its
+switch goes off. A paused Frametop or a dropped stream keeps the escape. A
+lapsed lease, the stream ending, the client's permission going, its control
+stream falling behind, or the machine host stopping also gives them back.
 Keys and buttons that were down on the client come up there. One client at a
 time holds them; another is told it's busy.
 

@@ -10,8 +10,6 @@
 
 namespace frametop_hostin::policy {
   namespace {
-    constexpr std::uint8_t ENGAGE = 1;
-    constexpr std::uint8_t RELEASE = 2;
     constexpr std::uint8_t EVENTS = 1;
     constexpr std::uint8_t STATE = 2;
     constexpr std::uint8_t HELLO = 3;
@@ -21,6 +19,8 @@ namespace frametop_hostin::policy {
     constexpr std::uint16_t EV_REL = 2;
     constexpr std::uint16_t KEY_MAX = 0x2ff;
     constexpr std::uint16_t REL_MAX = 0x0f;
+    constexpr std::uint16_t BTN_MOUSE = 0x110;
+    constexpr std::uint16_t BTN_TASK = 0x117;
 
     std::uint32_t le32(std::string_view bytes, std::size_t at) {
       return std::uint32_t(std::uint8_t(bytes[at])) | std::uint32_t(std::uint8_t(bytes[at + 1])) << 8 |
@@ -64,11 +64,12 @@ namespace frametop_hostin::policy {
 
   std::optional<lease_t> parse_lease(std::string_view payload) {
     if (payload.size() < 2 || std::uint8_t(payload[0]) != VERSION) return std::nullopt;
-    if (std::uint8_t(payload[1]) == RELEASE && payload.size() == 2) return lease_t {};
-    if (std::uint8_t(payload[1]) != ENGAGE || payload.size() != 8) return std::nullopt;
+    const auto action = std::uint8_t(payload[1]);
+    if ((action == lease_t::release || action == lease_t::drop) && payload.size() == 2) return lease_t {lease_t::action_e(action)};
+    if (action != lease_t::engage || payload.size() != 8) return std::nullopt;
     const auto ms = std::uint16_t(std::uint8_t(payload[6]) | std::uint8_t(payload[7]) << 8);
     if (!ms) return std::nullopt;
-    return lease_t {true, le32(payload, 2), std::min(std::chrono::milliseconds {ms}, MAX_LEASE)};
+    return lease_t {lease_t::engage, le32(payload, 2), std::min(std::chrono::milliseconds {ms}, MAX_LEASE)};
   }
 
   std::optional<service_state_t> parse_service_state(std::string_view message) {
@@ -88,12 +89,13 @@ namespace frametop_hostin::policy {
     if (parts.size() < 5 || parts[0] != "ev" || (parts[1] != "k" && parts[1] != "m") || (parts.size() - 2) % 3) {
       return std::nullopt;
     }
+    const bool mouse = parts[1] == "m";
     const std::size_t count = (parts.size() - 2) / 3;
     if (count > MAX_EVENTS) return std::nullopt;
     std::string out;
     out.push_back(char(VERSION));
     out.push_back(char(EVENTS));
-    out.push_back(char(parts[1] == "k" ? KEYBOARD : MOUSE));
+    out.push_back(char(mouse ? MOUSE : KEYBOARD));
     put16(out, std::uint16_t(count));
     for (std::size_t i = 0; i < count; ++i) {
       std::uint16_t type = 0, code = 0;
@@ -101,8 +103,10 @@ namespace frametop_hostin::policy {
       if (!number(parts[2 + i * 3], type) || !number(parts[3 + i * 3], code) || !number(parts[4 + i * 3], value)) {
         return std::nullopt;
       }
-      const bool ok = (type == EV_SYN && code == 0 && value == 0) || (type == EV_KEY && code > 0 && code <= KEY_MAX && (value == 0 || value == 1)) ||
-                      (type == EV_REL && code <= REL_MAX);
+      const bool button = code >= BTN_MOUSE && code <= BTN_TASK;
+      const bool ok = (type == EV_SYN && code == 0 && value == 0) ||
+                      (type == EV_KEY && code > 0 && code <= KEY_MAX && button == mouse && (value == 0 || value == 1)) ||
+                      (type == EV_REL && code <= REL_MAX && mouse);
       if (!ok) return std::nullopt;
       put16(out, type);
       put16(out, code);

@@ -14,6 +14,7 @@
   #include <atomic>
   #include <cerrno>
   #include <cstring>
+  #include <fcntl.h>
   #include <sys/socket.h>
   #include <sys/un.h>
   #include <thread>
@@ -67,7 +68,11 @@ namespace frametop_hostin {
     class socket_service_t: public manager_t::service_t {
     public:
       bool send(std::string_view request) override {
-        if (connection_ && connection_->closed) connection_.reset();
+        if (connection_ && connection_->closed) {
+          // Its reader told the manager already; the next request connects again.
+          connection_.reset();
+          return false;
+        }
         if (!connection_ && !connect_service()) return false;
         if (::send(connection_->fd, request.data(), request.size(), MSG_DONTWAIT | MSG_NOSIGNAL) >= 0) return true;
         if (errno == EAGAIN) return true;  // the next lease's engage comes soon
@@ -78,7 +83,7 @@ namespace frametop_hostin {
       }
 
       const char *unavailable() const override {
-        return "service";
+        return off_ ? "off" : "service";
       }
 
       std::uint64_t connection() const override {
@@ -90,17 +95,24 @@ namespace frametop_hostin {
         const auto now = std::chrono::steady_clock::now();
         if (now < retry_at_) return false;
         retry_at_ = now + RETRY_INTERVAL;
-        const int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+        // Nonblocking, so a full backlog fails here rather than holding the manager's lock.
+        const int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
         if (fd < 0) return false;
         sockaddr_un address {};
         address.sun_family = AF_UNIX;
         std::memcpy(address.sun_path, SOCKET_PATH, sizeof SOCKET_PATH);
         if (::connect(fd, reinterpret_cast<const sockaddr *>(&address), sizeof address) < 0) {
-          if (!logged_failure_) log_line("can't reach the capture service ("s + SOCKET_PATH + "): " + std::strerror(errno));
+          const int error = errno;
+          // No socket: the host's owner hasn't turned it on (vibepollo-host-input.socket).
+          off_ = error == ENOENT || error == ECONNREFUSED;
+          if (!logged_failure_) log_line("can't reach the capture service ("s + SOCKET_PATH + "): " + std::strerror(error));
           logged_failure_ = true;
           close(fd);
           return false;
         }
+        // Its reader blocks; requests go with MSG_DONTWAIT.
+        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
+        off_ = false;
         logged_failure_ = false;
         connection_ = std::make_shared<connection_t>(fd, ++last_id_);
         std::thread {read_service, connection_}.detach();
@@ -112,6 +124,7 @@ namespace frametop_hostin {
       std::uint64_t last_id_ = 0;
       std::chrono::steady_clock::time_point retry_at_ {};
       bool logged_failure_ = false;
+      bool off_ = false;
     };
 
     using service_type = socket_service_t;
@@ -152,8 +165,8 @@ namespace frametop_hostin {
     the_manager().session_end(session);
   }
 
-  std::vector<std::string> take(const void *session) {
-    return the_manager().take(session, manager_t::clock::now());
+  std::vector<std::string> take(const void *session, bool permitted) {
+    return the_manager().take(session, permitted, manager_t::clock::now());
   }
 
   bool active() {

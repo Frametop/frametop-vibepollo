@@ -33,7 +33,8 @@ namespace frametop_hostin {
       virtual std::uint64_t connection() const = 0;
     };
 
-    /// Queued payloads per session; past this, new ones are dropped.
+    /// Queued payloads per session. The owner's queue filling gives the input back (a dropped
+    /// key-up would leave a key held on the client); another session's just stops growing.
     static constexpr std::size_t MAX_QUEUED = 512;
     /// A client is told the state this often, and about a refusal at most this often.
     static constexpr std::chrono::seconds REPORT_INTERVAL {1};
@@ -46,16 +47,22 @@ namespace frametop_hostin {
     void service_message(std::uint64_t connection, std::string_view message);
     /// That connection to the capture service closed.
     void service_gone(std::uint64_t connection);
-    /// Payloads for this session; first lets a lapsed lease go and sends the periodic state.
-    std::vector<std::string> take(const void *session, clock::time_point now);
+    /// Payloads for this session; first lets a lapsed lease go, gives the input back if the
+    /// session lost its permission, and sends the periodic state.
+    std::vector<std::string> take(const void *session, bool permitted, clock::time_point now);
     bool active() const;
 
   private:
-    void push(const void *session, std::string payload);
+    /// False when it didn't fit.
+    bool push(const void *session, std::string payload);
     void tell(const void *session, bool engaged, std::string_view reason);
     void refuse(const void *session, const char *reason, clock::time_point now);
     /// The owner's lease lapsed: give the input back and tell it.
     void expire();
+    /// Give the input back with request ("drop" or "release") and forget the owner.
+    void give_back(const char *request, std::string reason);
+    /// The owner may no longer have the input: give it back, with nothing more queued.
+    void lose_permission(const void *session);
     void log(const std::string &line) const;
 
     service_t &service_;
@@ -68,7 +75,11 @@ namespace frametop_hostin {
     std::string reason_ = "lease";
     clock::time_point next_report_ {};
     std::map<const void *, std::deque<std::string>> queues_;
-    std::map<const void *, clock::time_point> refused_at_;
-    bool overflow_logged_ = false;
+    struct refusal_t {
+      std::string reason;
+      clock::time_point at;
+    };
+
+    std::map<const void *, refusal_t> refused_;
   };
 }  // namespace frametop_hostin

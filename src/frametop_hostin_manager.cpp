@@ -16,57 +16,73 @@ namespace frametop_hostin {
     if (log_) log_(line);
   }
 
-  void manager_t::push(const void *session, std::string payload) {
+  bool manager_t::push(const void *session, std::string payload) {
     auto &queue = queues_[session];
-    if (queue.size() >= MAX_QUEUED) {
-      if (!overflow_logged_) log("a client's control stream fell behind: host input dropped");
-      overflow_logged_ = true;
-      return;
+    if (queue.size() < MAX_QUEUED) {
+      queue.push_back(std::move(payload));
+      return true;
     }
-    queue.push_back(std::move(payload));
+    if (session != owner_) return false;
+    // Whatever is queued may hold a key-up: give the input back rather than lose one, and say so
+    // in place of the queue, so the client lets go of every key it holds.
+    log("a client's control stream fell behind: this computer's input goes back");
+    queue.clear();
+    give_back("drop", "overflow");
+    queue.push_back(policy::state_payload(false, "overflow"));
+    return false;
   }
 
   void manager_t::tell(const void *session, bool engaged, std::string_view reason) {
-    push(session, policy::state_payload(engaged, reason));
-    if (engaged) push(session, policy::hello_payload(policy::KEYBOARD | policy::MOUSE, host_name_));
+    if (push(session, policy::state_payload(engaged, reason)) && engaged) {
+      push(session, policy::hello_payload(policy::KEYBOARD | policy::MOUSE, host_name_));
+    }
   }
 
   void manager_t::refuse(const void *session, const char *reason, clock::time_point now) {
-    auto [at, fresh] = refused_at_.try_emplace(session, now);
-    if (!fresh && now - at->second < REPORT_INTERVAL) return;
-    at->second = now;
+    auto [refusal, fresh] = refused_.try_emplace(session, refusal_t {reason, now});
+    if (!fresh) {
+      if (refusal->second.reason == reason && now - refusal->second.at < REPORT_INTERVAL) return;
+      fresh = refusal->second.reason != reason;
+      refusal->second = {reason, now};
+    }
     if (fresh) log(std::string("a client's lease refused: ") + reason);
     tell(session, false, reason);
+  }
+
+  void manager_t::give_back(const char *request, std::string reason) {
+    service_.send(request);
+    owner_ = nullptr;
+    engaged_ = false;
+    reason_ = std::move(reason);
+  }
+
+  void manager_t::lose_permission(const void *session) {
+    give_back("drop", "permission");
+    queues_.erase(session);  // nothing it already had queued goes either
+    log("a client lost its keyboard and mouse permission: this computer's input goes back");
   }
 
   void manager_t::lease(const void *session, bool permitted, std::string_view payload, clock::time_point now) {
     const auto lease = policy::parse_lease(payload);
     if (!lease) return;
     std::lock_guard lock {mutex_};
+    if (owner_ && now >= until_) expire();
     if (!permitted) {
       // Its permission can go while it holds the input.
-      if (owner_ == session) {
-        service_.send("drop");
-        owner_ = nullptr;
-        engaged_ = false;
-        log("a client lost its keyboard and mouse permission: this computer's input goes back");
-      }
+      if (owner_ == session) lose_permission(session);
       return refuse(session, "permission", now);
     }
-    if (!lease->engage) {
-      if (owner_ != session) return;
-      service_.send("release");
-      owner_ = nullptr;
-      engaged_ = false;
-      reason_ = "host";
-      log("a client gave this computer's keyboard and mouse back");
+    if (lease->action != policy::lease_t::engage) {
+      if (owner_ && owner_ != session) return;  // not its to give back
+      // A release with nobody holding the input still lifts an escape left after a session ended.
+      const bool release = lease->action == policy::lease_t::release;
+      if (owner_) log("a client gave this computer's keyboard and mouse back");
+      if (owner_ || release) give_back(release ? "release" : "drop", "host");
       return tell(session, false, "host");
     }
-    if (owner_ && owner_ != session && now < until_) return refuse(session, "busy", now);
+    if (owner_ && owner_ != session) return refuse(session, "busy", now);
     if (owner_ != session) {
-      if (owner_) expire();
       owner_ = session;
-      refused_at_.erase(session);
       engaged_ = false;
       reason_ = "lease";
       next_report_ = now + REPORT_INTERVAL;  // the service's answer tells it first
@@ -74,32 +90,26 @@ namespace frametop_hostin {
     }
     until_ = now + lease->duration;
     if (!service_.send("engage")) {
-      const char *why = service_.unavailable();
       owner_ = nullptr;
       engaged_ = false;
-      refuse(session, why, now);
+      refuse(session, service_.unavailable(), now);
     }
   }
 
   void manager_t::expire() {
     // The client may have asked for less than the service's own lease: end it here too.
-    service_.send("drop");
+    const void *const session = owner_;
+    give_back("drop", "lease");
     log("a client's lease on this computer's keyboard and mouse ran out");
-    tell(owner_, false, "lease");
-    owner_ = nullptr;
-    engaged_ = false;
-    reason_ = "lease";
+    tell(session, false, "lease");
   }
 
   void manager_t::session_end(const void *session) {
     std::lock_guard lock {mutex_};
     queues_.erase(session);
-    refused_at_.erase(session);
-    if (owner_ != session) return;
+    refused_.erase(session);
     // Give the input back now, but keep an escape: only the client lifts that.
-    service_.send("drop");
-    owner_ = nullptr;
-    engaged_ = false;
+    if (owner_ == session) give_back("drop", "lease");
   }
 
   void manager_t::service_message(std::uint64_t connection, std::string_view message) {
@@ -126,9 +136,13 @@ namespace frametop_hostin {
     if (owner_) tell(owner_, false, reason_);
   }
 
-  std::vector<std::string> manager_t::take(const void *session, clock::time_point now) {
+  std::vector<std::string> manager_t::take(const void *session, bool permitted, clock::time_point now) {
     std::lock_guard lock {mutex_};
     if (owner_ && now >= until_) expire();
+    if (owner_ == session && !permitted) {
+      lose_permission(session);
+      refuse(session, "permission", now);
+    }
     if (owner_ && now >= next_report_) {
       tell(owner_, engaged_, reason_);
       next_report_ = now + REPORT_INTERVAL;
@@ -137,7 +151,6 @@ namespace frametop_hostin {
     if (found == queues_.end()) return {};
     std::vector<std::string> out(std::make_move_iterator(found->second.begin()), std::make_move_iterator(found->second.end()));
     queues_.erase(found);
-    overflow_logged_ = false;
     return out;
   }
 

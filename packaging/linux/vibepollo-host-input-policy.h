@@ -31,7 +31,8 @@ static inline bool vibepollo_host_input_bit(const unsigned long *bits, size_t co
 
 // What a device is, from its capability bits (EVIOCGBIT), and whether it is a uinput device.
 struct vibepollo_host_input_caps {
-  bool virtual_device;  // under /devices/virtual: uinput, such as the host's own passthrough devices
+  bool virtual_device;  // under /devices/virtual/input: uinput, such as the host's own passthrough
+                        // devices (uhid ones, Bluetooth keyboards and mice, are real)
   bool keys_letters;  // KEY_A, KEY_Z, KEY_SPACE and KEY_ENTER
   bool rel_xy;  // REL_X and REL_Y
   bool btn_left;
@@ -115,4 +116,54 @@ static inline enum vibepollo_host_input_request vibepollo_host_input_parse_reque
   if (length == 7 && !memcmp(data, "release", 7)) return VIBEPOLLO_HOST_INPUT_REQUEST_RELEASE;
   if (length == 4 && !memcmp(data, "drop", 4)) return VIBEPOLLO_HOST_INPUT_REQUEST_DROP;
   return VIBEPOLLO_HOST_INPUT_REQUEST_INVALID;
+}
+
+// The lease and the escape latch, apart from the devices. While escaped no engage takes them;
+// release lifts that, drop doesn't.
+struct vibepollo_host_input_lease {
+  bool engaged;
+  bool escaped;
+  int64_t until;  // ms, CLOCK_MONOTONIC
+};
+
+enum vibepollo_host_input_step {
+  VIBEPOLLO_HOST_INPUT_STAY = 0,  // nothing changes
+  VIBEPOLLO_HOST_INPUT_TAKE,  // take the devices, and say "state engaged"
+  VIBEPOLLO_HOST_INPUT_GIVE_BACK,  // give them back, and say "state released host"
+  VIBEPOLLO_HOST_INPUT_STILL_ESCAPED,  // say "state released escape"
+};
+
+static inline enum vibepollo_host_input_step vibepollo_host_input_lease_request(
+  struct vibepollo_host_input_lease *lease, enum vibepollo_host_input_request request, int64_t now
+) {
+  switch (request) {
+    case VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE:
+      if (lease->escaped) return VIBEPOLLO_HOST_INPUT_STILL_ESCAPED;
+      lease->until = now + VIBEPOLLO_HOST_INPUT_LEASE_MS;
+      if (lease->engaged) return VIBEPOLLO_HOST_INPUT_STAY;
+      lease->engaged = true;
+      return VIBEPOLLO_HOST_INPUT_TAKE;
+    case VIBEPOLLO_HOST_INPUT_REQUEST_RELEASE:
+      lease->escaped = false;
+      // fall through
+    case VIBEPOLLO_HOST_INPUT_REQUEST_DROP:
+      if (!lease->engaged) return VIBEPOLLO_HOST_INPUT_STAY;
+      lease->engaged = false;
+      return VIBEPOLLO_HOST_INPUT_GIVE_BACK;
+    default:
+      return VIBEPOLLO_HOST_INPUT_STAY;
+  }
+}
+
+// True when the lease ran out now: give the devices back ("state released lease").
+static inline bool vibepollo_host_input_lease_lapsed(struct vibepollo_host_input_lease *lease, int64_t now) {
+  if (!lease->engaged || now < lease->until) return false;
+  lease->engaged = false;
+  return true;
+}
+
+// The hotkey: give them back ("state released escape") and refuse engage until a release.
+static inline void vibepollo_host_input_lease_escape(struct vibepollo_host_input_lease *lease) {
+  lease->engaged = false;
+  lease->escaped = true;
 }

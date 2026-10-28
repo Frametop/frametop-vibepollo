@@ -25,7 +25,8 @@ namespace frametop_hostin {
   void on_session_end(const void *session);
 
   /// 0x3004 payloads waiting for this session, oldest first. Control stream thread.
-  std::vector<std::string> take(const void *session);
+  /// @param permitted As for on_lease, now: a session that lost it gives the input back.
+  std::vector<std::string> take(const void *session, bool permitted);
 
   /// A client holds this computer's input: the control stream loop should wait less.
   bool active();

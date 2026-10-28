@@ -1611,6 +1611,14 @@ namespace stream {
     return 0;
   }
 
+  /// A session may borrow this computer's keyboards and mice. As with the microphone, only an
+  /// encrypted control stream is type 13.
+  bool frametop_host_input_permitted(const session_t *session) {
+    return session->config.controlProtocolType == 13 &&
+           (session->permission & crypto::PERM::input_kbd) &&
+           (session->permission & crypto::PERM::input_mouse);
+  }
+
   /// A Frametop host input record (frametop_hostin_policy.h). Encrypted streams only: the
   /// manager answers nothing else.
   int send_frametop_host_input(session_t *session, const std::string &record) {
@@ -2008,11 +2016,7 @@ namespace stream {
     });
 
     server->map(packetTypes[IDX_FRAMETOP_HOST_INPUT_LEASE], [](session_t *session, const std::string_view &payload) {
-      // As with the microphone, only an encrypted control stream gets here as type 13.
-      const bool permitted = session->config.controlProtocolType == 13 &&
-                             (session->permission & crypto::PERM::input_kbd) &&
-                             (session->permission & crypto::PERM::input_mouse);
-      frametop_hostin::on_lease(session, permitted, payload);
+      frametop_hostin::on_lease(session, frametop_host_input_permitted(session), payload);
     });
 
     server->map(packetTypes[IDX_ENCRYPTED], [server](session_t *session, const std::string_view &payload) {
@@ -2280,7 +2284,7 @@ namespace stream {
               send_hdr_mode(session, std::move(hdr_info));
             }
 
-            for (const auto &record : frametop_hostin::take(session)) {
+            for (const auto &record : frametop_hostin::take(session, frametop_host_input_permitted(session))) {
               send_frametop_host_input(session, record);
             }
 
