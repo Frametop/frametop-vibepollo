@@ -42,6 +42,11 @@ namespace frametop_hostin::policy {
   /// The longest 0x3004 payload: an events record with MAX_EVENTS events.
   constexpr std::size_t MAX_PAYLOAD = 5 + MAX_EVENTS * 8;
 
+  /// 0x3004 record types, after the version.
+  constexpr std::uint8_t EVENTS = 1;
+  constexpr std::uint8_t STATE = 2;
+  constexpr std::uint8_t HELLO = 3;
+
   constexpr std::uint8_t KEYBOARD = 1;
   constexpr std::uint8_t MOUSE = 2;
 

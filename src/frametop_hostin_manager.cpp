@@ -135,7 +135,11 @@ namespace frametop_hostin {
       if (unanswered_) --unanswered_;
       return;
     }
-    if (unanswered_) return;  // the last lease's
+    if (unanswered_) {
+      // The last lease's, but an escape is kept whenever it was pressed.
+      if (const auto state = policy::parse_service_state(message); state && !state->engaged && state->reason == "escape") escaped_ = true;
+      return;
+    }
     if (const auto state = policy::parse_service_state(message)) {
       // The service answers every engage while escaped: tell the owner only what changed.
       const bool changed = state->engaged != engaged_ || (!state->engaged && state->reason != reason_);
@@ -160,11 +164,20 @@ namespace frametop_hostin {
 
   std::vector<std::string> manager_t::take(const void *session, bool permitted, clock::time_point now) {
     std::lock_guard lock {mutex_};
-    if (owner_ && now >= until_) expire();
-    if (owner_ == session && !permitted) {
-      lose_permission(session);
-      refuse(session, "permission", now);
+    if (!permitted) {
+      // Before a lapse: an owner that lost its permission is refused, not told its lease ran out.
+      if (owner_ == session) {
+        lose_permission(session);
+        refuse(session, "permission", now);
+      }
+      // Whatever it had queued, it gets no events.
+      if (const auto found = queues_.find(session); found != queues_.end()) {
+        std::erase_if(found->second, [](const std::string &payload) {
+          return payload.size() > 1 && std::uint8_t(payload[1]) == policy::EVENTS;
+        });
+      }
     }
+    if (owner_ && now >= until_) expire();
     if (owner_ && now >= next_report_) {
       tell(owner_, engaged_, reason_);
       next_report_ = now + REPORT_INTERVAL;

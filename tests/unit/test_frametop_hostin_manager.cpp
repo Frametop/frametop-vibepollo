@@ -3,6 +3,7 @@
 #include "src/frametop_hostin_manager.h"
 #include "src/frametop_hostin_policy.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -246,6 +247,28 @@ TEST_F(FrametopHostInputManager, AnEscapeIsToldOnce) {
   manager.service_message(1, "state released escape");
   EXPECT_TRUE(manager.take(a, true, t0 + 500ms).empty());
   EXPECT_TRUE(manager.active());  // the client still holds the lease, so nobody else gets in
+}
+
+TEST_F(FrametopHostInputManager, ARevokedSessionGetsNoEventsAfterALapse) {
+  manager.lease(a, true, engage(500), t0);
+  manager.service_message(1, "state engaged");
+  manager.service_message(1, "ev k 1 30 1 0 0 0");
+  const auto out = manager.take(a, false, t0 + 600ms);
+  EXPECT_EQ(std::count(out.begin(), out.end(), *policy::events_payload("ev k 1 30 1 0 0 0")), 0);
+  EXPECT_FALSE(manager.active());
+}
+
+TEST_F(FrametopHostInputManager, AnEscapeBehindAFenceIsStillKept) {
+  manager.lease(a, true, engage(), t0);
+  manager.service_message(1, "state engaged");
+  manager.session_end(a);  // its drop goes before the service's escape is read
+  manager.service_message(1, "state released escape");
+  manager.service_message(1, "done");
+  manager.service_gone(1);
+  service.id = 2;
+  manager.lease(b, true, engage(), t0 + 100ms);
+  EXPECT_EQ(service.sent, (std::vector<std::string> {"engage", "drop"}));
+  EXPECT_EQ(manager.take(b, true, t0 + 100ms), std::vector<std::string> {state(false, "escape")});
 }
 
 TEST_F(FrametopHostInputManager, AnEscapeOutlivesTheService) {

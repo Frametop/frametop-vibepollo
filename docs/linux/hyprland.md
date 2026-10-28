@@ -93,7 +93,7 @@ lease holds, `vibepollo-host-input.service` grabs the keyboards and mice
 button, motion and wheel events to the client (`0x3004`). Bluetooth keyboards
 and mice (uhid) are taken too. Touchpads' multitouch nodes, touchscreens,
 gamepads and uinput devices (the host's own passthrough devices among them) are
-never taken. A device is grabbed only once no key is held on it. Volume, media
+never taken. A device is grabbed only once no key is held on it (a key pressed and released within the few microseconds of the grab itself could still stay down here; no human press is that short). Volume, media
 and brightness keys stay here: they are typed again on a uinput device of the
 service's own.
 

@@ -10,9 +10,6 @@
 
 namespace frametop_hostin::policy {
   namespace {
-    constexpr std::uint8_t EVENTS = 1;
-    constexpr std::uint8_t STATE = 2;
-    constexpr std::uint8_t HELLO = 3;
 
     constexpr std::uint16_t EV_SYN = 0;
     constexpr std::uint16_t EV_KEY = 1;
