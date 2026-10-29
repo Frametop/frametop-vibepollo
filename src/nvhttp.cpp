@@ -5230,7 +5230,13 @@ namespace nvhttp {
 #if defined(_WIN32) || defined(__linux__)
           // Probe first (a cache hit unless displays moved between GPUs), so the check sees the
           // encoder this launch will stream with. A failed probe gets its own 503 below.
+  #ifdef _WIN32
+          // Only on a cache miss, as the launch probe below: a cached result without every wanted
+          // codec would otherwise probe again on each launch.
+          if (!video::has_successful_encoder_probe()) (void) video::probe_encoders();
+  #else
           (void) video::probe_encoders();
+  #endif
           if (!existing_display_capturable_by_encoder(*output)) {
             BOOST_LOG(warning) << "Frametop display '" << *output << "' is on a GPU the selected encoder can't capture from.";
             tree.put("root.resume", 0);
