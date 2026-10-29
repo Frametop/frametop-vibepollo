@@ -451,6 +451,19 @@ namespace nvhttp {
       return std::nullopt;
     }
 
+    // Whether the chosen encoder can capture this display. Capture runs on the GPU that drives
+    // the display, but a hardware encoder (like a configured adapter) only on the GPU its probe
+    // used, so a display wired to another GPU would stream no video at all. Without a probed
+    // GPU, the stream's own probe decides.
+    bool existing_display_capturable_by_encoder(const std::string &output) {
+      const auto encoder_adapter = video::chosen_hardware_encoder_adapter();
+      if (!encoder_adapter) return true;
+      const auto display_adapter = platf::resolve_output_adapter(output);
+      if (!display_adapter) return true;
+      return display_adapter.luid->HighPart == encoder_adapter->high_part &&
+             display_adapter.luid->LowPart == encoder_adapter->low_part;
+    }
+
     // The name of the display a display-role launch names when it's there and active but a
     // capture worker (another stream) holds it: Desktop Duplication captures an output once
     // per process, so its DXGI test fails and existing_display_capture_output() finds nothing.
@@ -5214,7 +5227,7 @@ namespace nvhttp {
             );
             return;
           }
-#ifdef __linux__
+#if defined(_WIN32) || defined(__linux__)
           // Probe first (a cache hit unless displays moved between GPUs), so the check sees the
           // encoder this launch will stream with. A failed probe gets its own 503 below.
           (void) video::probe_encoders();

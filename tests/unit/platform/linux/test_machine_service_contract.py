@@ -655,8 +655,13 @@ display_capture = nvhttp.split("existing_display_capture_output(requested_displa
 reprobe = display_capture.index("(void) video::probe_encoders();")
 require(display_capture[reprobe:], "if (!existing_display_capturable_by_encoder(*output)) {", "display role checks the encoder it will stream with")
 require(display_capture[reprobe:], 'tree.put("root.<xmlattr>.status_code", 503);', "uncapturable display launch status")
-capturable = nvhttp.split("bool existing_display_capturable_by_encoder(", 1)[1].split("\n    }\n", 1)[0]
+require(display_capture[:reprobe], "#if defined(_WIN32) || defined(__linux__)", "Windows display role checks the encoder too")
+windows_nvhttp, linux_nvhttp = nvhttp.split("#elif defined(__linux__)", 2)[1:3]
+capturable = linux_nvhttp.split("bool existing_display_capturable_by_encoder(", 1)[1].split("\n    }\n", 1)[0]
 require(capturable, "output_in_capture_list(output, *mem_type)", "capturability uses the chosen encoder's capture list")
+windows_capturable = windows_nvhttp.split("bool existing_display_capturable_by_encoder(", 1)[1].split("\n    }\n", 1)[0]
+require(windows_capturable, "video::chosen_hardware_encoder_adapter()", "Windows capturability uses the probed encoder's GPU")
+require(windows_capturable, "platf::resolve_output_adapter(output)", "Windows capturability uses the display's GPU")
 demotion = video_source.split("std::optional<bool> hyprland_cuda_demotion() {", 1)[1].split("\n    }\n", 1)[0]
 require(demotion, "!config::video.encoder.empty() || !platf::linux_display::hyprland_kms_session()", "only automatic Hyprland selection demotes NVENC")
 require(demotion, "video::policy::demote_cuda_encoders(", "demotion uses the tested policy")
@@ -672,6 +677,7 @@ require(validate, "hyprland_capture_outputs(encoder.platform_formats->dev_type, 
 forbid(validate, "probe_target.display_name\n", "the per-encoder probe display reaches validate_encoder")
 success = video_source.split("int probe_encoders() {", 1)[1].split("chosen_encoder = new_encoder;", 1)[1].split("return 0;", 1)[0]
 require(success, "probed_cuda_demotion = cuda_demotion;", "a successful probe records its GPU split")
+require(success, "probed_encoder_adapter = successful_probe_adapter;", "a successful Windows probe records its GPU")
 # Idle screen-off of a private-only topology wedged NVIDIA GSP with no client
 # left. Its hold blocks only screen changes and ends with the restore.
 require(broker, '!strcmp(argv[1], "display-retain") && argc == 2', "fixed retained screen operation")

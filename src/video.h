@@ -474,6 +474,11 @@ namespace video {
   bool last_encoder_probe_failed();
   /// The memory type the chosen encoder captures into, once an encoder probe has succeeded.
   std::optional<platf::mem_type_e> chosen_capture_mem_type();
+#ifdef _WIN32
+  /// The GPU a hardware encoder's successful probe captured from, when the probe saw it.
+  /// Software encoding takes frames from any GPU, so it has none.
+  std::optional<platf::adapter_id_t> chosen_hardware_encoder_adapter();
+#endif
 
   struct advertised_encoder_capabilities_t {
     int hevc_mode = 0;

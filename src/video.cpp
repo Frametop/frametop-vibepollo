@@ -2731,6 +2731,10 @@ namespace video {
   std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec = {};
   std::atomic<std::int64_t> last_negative_hdr_advertisement_probe_ns {0};
   std::mutex encoder_probe_mutex;
+#ifdef _WIN32
+  // The GPU the cached probe validated chosen_encoder on. Guarded by encoder_probe_mutex.
+  static std::optional<platf::adapter_id_t> probed_encoder_adapter;
+#endif
 
   namespace {
     struct encoder_probe_status_t {
@@ -2769,6 +2773,14 @@ namespace video {
     if (!encoder || !has_successful_encoder_probe()) return std::nullopt;
     return encoder->platform_formats->dev_type;
   }
+
+#ifdef _WIN32
+  std::optional<platf::adapter_id_t> chosen_hardware_encoder_adapter() {
+    std::lock_guard<std::mutex> lock(encoder_probe_mutex);
+    if (!chosen_encoder || chosen_encoder == &software || !has_successful_encoder_probe()) return std::nullopt;
+    return probed_encoder_adapter;
+  }
+#endif
 
   bool last_encoder_probe_failed() {
     auto &state = encoder_probe_cache_state();
@@ -7942,6 +7954,9 @@ namespace video {
     chosen_encoder = new_encoder;
 #ifdef __linux__
     probed_cuda_demotion = cuda_demotion;
+#endif
+#ifdef _WIN32
+    probed_encoder_adapter = successful_probe_adapter;
 #endif
     restore_previous_probe_state.disable();
     return 0;
