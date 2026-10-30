@@ -18,6 +18,10 @@ namespace release_selection {
     while (std::getline(parts, part, '.')) { int number; if (!version_compare::parse_nonnegative_integer(part, number)) return false; }
     return true;
   }
+  // Frametop's releases are tagged frametop-<version>, the tag its CI builds; the version follows.
+  inline std::string frametop_version(const std::string &tag) {
+    return tag.starts_with("frametop-") ? tag.substr(9) : tag;
+  }
   inline bool daily_tag(const std::string &tag) {
     static const std::regex pattern(R"(^daily-[0-9]{4}-[0-9]{2}-[0-9]{2}(\.([1-9][0-9]{0,2}))?$)");
     static const std::regex semver(R"(^[0-9]+\.[0-9]+\.[0-9]+-daily\.d[0-9]{8}(\.([1-9][0-9]{0,2}))?$)");
@@ -41,10 +45,13 @@ namespace release_selection {
         !release.contains("prerelease") || !release["prerelease"].is_boolean() ||
         !release.contains("tag_name") || !release["tag_name"].is_string()) return false;
 #ifdef _WIN32
-    auto version = release["tag_name"].get<std::string>();
+    const auto tag = release["tag_name"].get<std::string>();
+    auto version = tag;
     if (version.starts_with('v')) version.erase(0, 1);
+    // A Frametop release's Windows build is the sunshine.exe swapped into an existing install.
     const bool package = asset(release, "VibepolloSetup.exe") || (!nightly &&
-      (asset(release, "VibepolloSetup-v" + version + ".exe") || asset(release, "VibepolloSetup-" + version + ".exe")));
+      (asset(release, "VibepolloSetup-v" + version + ".exe") || asset(release, "VibepolloSetup-" + version + ".exe") ||
+       (tag != frametop_version(tag) && asset(release, "sunshine.exe"))));
 #elif defined(__APPLE__)
 #if defined(__aarch64__) || defined(__arm64__) || defined(_M_ARM64)
     const bool package = macos_package(release, true);
@@ -138,7 +145,8 @@ namespace release_selection {
       // Malformed nightly identities must not fall back to an unqualified
       // ordinary prerelease and bypass metadata verification.
       if (tag.find("-nightly.d") != std::string::npos || tag.find("-daily.d") != std::string::npos) return "";
-      return ordered_version(tag) ? tag : "";
+      const auto version = frametop_version(tag);
+      return ordered_version(version) ? version : "";
     }
     const auto metadata = api_metadata(release);
     if (metadata.is_null()) return "";

@@ -120,6 +120,22 @@ test('published versioned setup and Arch package names retain stable notificatio
   assert.equal(selectAvailableUpdate('1.18.4', [arch], false, 'linux', 'x86_64')?.tag, '2.0.0');
   assert.equal(selectAvailableUpdate('1.18.4', [arch], false, 'linux', 'aarch64'), null);
 });
+test('Frametop release tags rank by the version after frametop-', () => {
+  const arch = (tag: string) => ({
+    ...release(tag),
+    assets: [{ name: 'vibepollo-2.0.3-1-x86_64.pkg.tar.zst', state: 'uploaded', size: 100 }],
+  });
+  assert.equal(selectAvailableUpdate('2.0.2', [arch('frametop-2.0.3')], false, 'linux')?.tag, 'frametop-2.0.3');
+  assert.equal(selectAvailableUpdate('2.0.3', [arch('frametop-2.0.3')], false, 'linux'), null);
+  assert.equal(selectAvailableUpdate('2.0.2', [arch('frametop-2.0.0-3')], true, 'linux'), null);
+  assert.equal(selectAvailableUpdate('2.0.0', [arch('frametop-build')], true, 'linux'), null);
+  const exe = (tag: string) => ({
+    ...release(tag),
+    assets: [{ name: 'sunshine.exe', state: 'uploaded', size: 100 }],
+  });
+  assert.equal(selectAvailableUpdate('2.0.2', [exe('frametop-2.0.3')], false)?.tag, 'frametop-2.0.3');
+  assert.equal(selectAvailableUpdate('2.0.2', [exe('2.0.3')], false), null);
+});
 test('draft, incomplete, malformed and incompatible packages never notify', () => {
   const incomplete = daily('2026-10-11');
   incomplete.assets = assets;

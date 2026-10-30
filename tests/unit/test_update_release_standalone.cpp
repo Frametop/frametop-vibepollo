@@ -222,5 +222,19 @@ int main() {
   auto wrong_core = compatible;
   wrong_core["nightly_metadata"]["version"] = "2.0.2-daily.d20261011.3+aaaaaaaaaaaa";
   assert(select(json::array({wrong_core}), "2.0.0", true).is_null());
+  // Frametop tags its releases frametop-<version>; the version after the prefix decides the order.
+  assert(select(json::array({release("frametop-2.0.3")}), "2.0.2", false)["tag_name"] == "frametop-2.0.3");
+  assert(select(json::array({release("frametop-2.0.3")}), "2.0.3", false).is_null());
+  assert(select(json::array({release("frametop-2.0.0-3")}), "2.0.2", true).is_null());
+  assert(select(json::array({release("frametop-build")}), "2.0.0", true).is_null());
+#ifdef _WIN32
+  auto exe_only = [](std::string tag) {
+    auto result = release(tag);
+    result["assets"] = json::array({{{"name","sunshine.exe"},{"state","uploaded"},{"size",100}}});
+    return result;
+  };
+  assert(select(json::array({exe_only("frametop-2.0.3")}), "2.0.2", false)["tag_name"] == "frametop-2.0.3");
+  assert(select(json::array({exe_only("2.0.3")}), "2.0.2", false).is_null());
+#endif
   std::cout << "release selection regression checks passed\n";
 }

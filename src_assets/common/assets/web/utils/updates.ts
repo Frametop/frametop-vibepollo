@@ -54,6 +54,11 @@ function asset(release: UpdateRelease, name: string): boolean {
   );
 }
 
+// Frametop's releases are tagged frametop-<version>, the tag its CI builds; the version follows.
+function frametopVersion(tag: string): string {
+  return tag.startsWith('frametop-') ? tag.slice('frametop-'.length) : tag;
+}
+
 export function isDailyTag(tag: string): boolean {
   return /^daily-\d{4}-\d{2}-\d{2}(?:\.(?:[1-9][0-9]{0,2}))?$/.test(tag) ||
     /^\d+\.\d+\.\d+-daily\.d\d{8}(?:\.(?:[1-9][0-9]{0,2}))?$/.test(tag) ||
@@ -137,7 +142,9 @@ export function completeRelease(
       ? asset(release, 'VibepolloSetup.exe') ||
         (!isDailyTag(release.tag_name) &&
           (asset(release, `VibepolloSetup-v${release.tag_name.replace(/^v/, '')}.exe`) ||
-            asset(release, `VibepolloSetup-${release.tag_name.replace(/^v/, '')}.exe`)))
+            asset(release, `VibepolloSetup-${release.tag_name.replace(/^v/, '')}.exe`) ||
+            // A Frametop release's Windows build is the sunshine.exe swapped into an existing install.
+            (release.tag_name !== frametopVersion(release.tag_name) && asset(release, 'sunshine.exe'))))
       : platform === 'macos'
         ? architecture === 'aarch64'
           ? asset(release, 'Vibepollo-macOS-arm64.dmg')
@@ -212,8 +219,11 @@ export function selectAvailableUpdate(
     } else {
       // An invalid nightly shape must not bypass nightly qualification through
       // the ordinary prerelease fallback.
-      if (nightlyVersion(identity) || !orderedVersion(identity)) continue;
-      entry = githubReleaseToChangelogEntry(release);
+      if (nightlyVersion(identity)) continue;
+      identity = frametopVersion(identity);
+      if (!orderedVersion(identity)) continue;
+      entry = githubReleaseToChangelogEntry({ ...release, tag_name: identity });
+      if (entry && identity !== release.tag_name) entry.tag = release.tag_name!;
     }
     if (
       nightlyVersion(installedVersion) &&
