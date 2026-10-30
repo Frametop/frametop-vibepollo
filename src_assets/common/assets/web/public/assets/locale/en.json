@@ -779,6 +779,8 @@
     "file_apps_desc": "The file where current apps of Vibepollo are stored.",
     "file_state": "State File",
     "file_state_desc": "The file where current state of Vibepollo is stored",
+    "frametop_host_input": "Frametop Host Input",
+    "frametop_host_input_desc": "Windows only. Lends this computer's keyboard and mouse to one Frametop client while its headset is worn. Both Shifts and Escape take them back.",
     "gamepad": "Emulated Gamepad Type",
     "gamepad_auto": "Automatic selection options",
     "gamepad_desc": "Choose which type of gamepad to emulate on the host. The Vibepollo Virtual Gamepad options use Vibepollo's own driver instead of ViGEmBus. Automatic presents a DualSense to PlayStation clients and an Xbox Series controller otherwise. Xbox Series and Xbox One are the options Windows places on the XInput path, so they are the ones games that support only XInput can see. DualShock 4 and DualSense add the touchpad, motion, battery, lightbar, and (DualSense) adaptive triggers. DualSense with waveform haptics presents a wired USB DualSense and its controller audio endpoint to Windows games, regardless of the physical client connection. It requires the optional DualSense USB audio and haptics installer component and a Moonlight client with waveform support. The Steam Controller option presents a Steam Controller (2026); a client that reads the real controller's firmware attributes relays them, so Steam sees the real firmware build and offers an update only when the real controller needs one. Do not start a Steam Controller firmware update from Steam while streaming: the update would target this virtual controller, not the real one. Update with the controller connected directly to a PC.",
