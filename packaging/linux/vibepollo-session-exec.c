@@ -3,6 +3,7 @@
 #include "vibepollo-session-protocol.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -107,7 +108,8 @@ static int connect_to_broker(void) {
   return socket_fd;
 }
 
-static bool send_request(int socket_fd, int argc, char **argv, uint64_t generation) {
+// With input_fd >= 0, that descriptor goes with the request (SCM_RIGHTS).
+static bool send_request_passing(int socket_fd, int argc, char **argv, uint64_t generation, int input_fd) {
   if (argc < 2 || (uint32_t) (argc - 1) > VIBEPOLLO_SESSION_PROTOCOL_MAX_ARGUMENTS) {
     errno = E2BIG;
     return false;
@@ -144,9 +146,24 @@ static bool send_request(int socket_fd, int argc, char **argv, uint64_t generati
     memcpy(message + offset, argv[index], length);
     offset += length;
   }
+  struct iovec vector = {.iov_base = message, .iov_len = message_length};
+  union {
+    struct cmsghdr header;
+    unsigned char space[CMSG_SPACE(sizeof(int))];
+  } control = {0};
+  struct msghdr packet = {.msg_iov = &vector, .msg_iovlen = 1};
+  if (input_fd >= 0) {
+    packet.msg_control = control.space;
+    packet.msg_controllen = sizeof(control.space);
+    struct cmsghdr *rights = CMSG_FIRSTHDR(&packet);
+    rights->cmsg_level = SOL_SOCKET;
+    rights->cmsg_type = SCM_RIGHTS;
+    rights->cmsg_len = CMSG_LEN(sizeof(int));
+    memcpy(CMSG_DATA(rights), &input_fd, sizeof(int));
+  }
   ssize_t sent;
   do {
-    sent = send(socket_fd, message, message_length, MSG_NOSIGNAL);
+    sent = sendmsg(socket_fd, &packet, MSG_NOSIGNAL);
   } while (sent < 0 && errno == EINTR);
   free(message);
   if (sent != (ssize_t) message_length) {
@@ -154,6 +171,20 @@ static bool send_request(int socket_fd, int argc, char **argv, uint64_t generati
     return false;
   }
   return true;
+}
+
+static bool send_request(int socket_fd, int argc, char **argv, uint64_t generation) {
+  return send_request_passing(socket_fd, argc, argv, generation, -1);
+}
+
+// The broker's worker has stdin now: this process lets go of it, so the worker sees the
+// end of it when the host closes its end.
+static bool release_input(void) {
+  const int null_input = open("/dev/null", O_RDONLY | O_CLOEXEC);
+  if (null_input < 0) return false;
+  const bool replaced = dup2(null_input, STDIN_FILENO) == STDIN_FILENO;
+  close(null_input);
+  return replaced;
 }
 
 static int relay_responses(int socket_fd, uint64_t generation) {
@@ -231,11 +262,17 @@ int main(int argc, char **argv) {
   }
   const int socket_fd = connect_to_broker();
   if (socket_fd < 0) return fail("could not connect to the session broker");
-  if (!send_request(socket_fd, argc, argv, generation)) {
+  // Only this request takes the host's stdin to the worker.
+  const bool passes_input = !strcmp(argv[1], VIBEPOLLO_SESSION_INPUT_OPERATION);
+  if (!send_request_passing(socket_fd, argc, argv, generation, passes_input ? STDIN_FILENO : -1)) {
     const int saved_errno = errno;
     close(socket_fd);
     errno = saved_errno;
     return fail("could not send request to the session broker");
+  }
+  if (passes_input && !release_input()) {
+    close(socket_fd);
+    return fail("could not release the input passed to the session broker");
   }
   const int status = relay_responses(socket_fd, generation);
   close(socket_fd);

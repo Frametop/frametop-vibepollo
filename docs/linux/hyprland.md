@@ -131,6 +131,25 @@ machine host's uid. It runs as a dynamic user in the `input` and
 `vibepollo-uinput` groups, with no capabilities, no network and access only to
 input devices and `/dev/uinput`. Key codes are never logged.
 
+A Frametop client's microphone shows up here as "Frametop Microphone", a
+source in the desktop user's sound server (PulseAudio, or PipeWire with
+`pipewire-pulse`), while the client sends it. It never becomes the default
+microphone: pick it in the app. Run as the system service, Vibepollo can't
+reach that sound server itself, so the session broker runs
+`vibepollo-mic-source` as the desktop user (`vibepollo-session-exec
+audio-mic-source`, desktop role only). It adds the source with
+`module-pipe-source`, whose pipe the sound server makes as
+`$XDG_RUNTIME_DIR/vibepollo-frametop-mic.fifo`, and Vibepollo's audio reaches it
+through a pipe the broker hands over (the one request that may pass a
+descriptor, and only the read end of a pipe). The source goes away when the
+client stops sending, the stream ends, or the desktop session changes. At most
+85 ms of audio waits in each pipe; when no app reads, the rest is dropped
+rather than delayed. If the source can't be added (no sound server in the
+desktop session, or no `pipewire-pulse`), the stream carries on without it,
+Vibepollo's log says why (once), and it tries again every 30 s while the client
+sends. Check with `pactl list short sources | grep frametop_mic` as the desktop
+user.
+
 On a hybrid laptop, the encoder must run on the GPU the displays are wired to.
 KMS capture for NVENC skips a GPU it can't import framebuffers from, so an
 Intel- or AMD-wired display would stream no video. With no `encoder` set, the

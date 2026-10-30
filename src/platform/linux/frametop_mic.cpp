@@ -2,6 +2,10 @@
  * @file src/platform/linux/frametop_mic.cpp
  * @brief Frametop: a client's microphone plays into a "Frametop Microphone" source, made with
  *        module-pipe-source (PulseAudio or PipeWire) while a client sends it.
+ *
+ * Run as the desktop user, Vibepollo adds the source itself. As the system service it can't
+ * reach the desktop's sound server, so the session broker runs vibepollo-mic-source as the
+ * desktop user (vibepollo-session-exec audio-mic-source) and the audio goes to it over a pipe.
  */
 #include "src/frametop_mic.h"
 
@@ -21,12 +25,17 @@
 #include <pulse/context.h>
 #include <pulse/error.h>
 #include <pulse/introspect.h>
+#include <poll.h>
 #include <pulse/mainloop.h>
+#include <spawn.h>
 #include <string>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <utility>
 #include <vector>
+
+extern char **environ;
 
 using namespace std::literals;
 
@@ -37,6 +46,51 @@ namespace platf::frametop_mic {
     constexpr int PIPE_BYTES = 8192;  // 85 ms of 16-bit mono at 48 kHz
     /// Pipe writes up to PIPE_BUF bytes go in whole or not at all.
     constexpr int CHUNK_SAMPLES = PIPE_BUF / sizeof(std::int16_t);
+    constexpr auto SESSION_EXEC = "/usr/libexec/vibeshine/vibepollo-session-exec";
+    /// How long the desktop's helper may take to add the source.
+    constexpr int READY_MS = 5000;
+    /// How long it may take to remove it once its input ends, before it's stopped.
+    constexpr int EXIT_MS = 2000;
+
+    /// Samples into a pipe, never waiting: what doesn't fit goes, so no delay piles up.
+    class pipe_writer_t {
+    protected:
+      pipe_writer_t() {
+        // A write after the reader goes away raises SIGPIPE, which would end Sunshine. This
+        // thread only plays the microphone, so it blocks the signal and handles EPIPE instead.
+        sigemptyset(&sigpipe_);
+        sigaddset(&sigpipe_, SIGPIPE);
+        pthread_sigmask(SIG_BLOCK, &sigpipe_, nullptr);
+      }
+
+      /// False when the reader is gone.
+      bool write_samples(int fd, const float *samples, int count) {
+        buffer_.resize(count);
+        for (int i = 0; i < count; ++i) {
+          buffer_[i] = static_cast<std::int16_t>(std::lrint(std::clamp(samples[i], -1.0f, 1.0f) * 32767.0f));
+        }
+
+        for (int done = 0; done < count; done += CHUNK_SAMPLES) {
+          const auto samples_now = std::min(CHUNK_SAMPLES, count - done);
+          if (::write(fd, buffer_.data() + done, samples_now * sizeof(std::int16_t)) >= 0) {
+            continue;
+          }
+          if (errno == EAGAIN) {
+            return true;  // the pipe is full: no app reads it, or not fast enough. The rest goes.
+          }
+          if (errno == EPIPE) {
+            const timespec now {};
+            sigtimedwait(&sigpipe_, nullptr, &now);  // take the SIGPIPE this write raised
+          }
+          return false;
+        }
+        return true;
+      }
+
+    private:
+      sigset_t sigpipe_ {};
+      std::vector<std::int16_t> buffer_;
+    };
 
     /// A connection to the sound server that runs each request to the end before returning.
     class pulse_t {
@@ -118,7 +172,7 @@ namespace platf::frametop_mic {
       pa_context *ctx_ = nullptr;
     };
 
-    class pipe_device_t: public device_t {
+    class pipe_device_t: public device_t, pipe_writer_t {
     public:
       ~pipe_device_t() override {
         if (fd_ >= 0) {
@@ -136,12 +190,6 @@ namespace platf::frametop_mic {
       }
 
       bool open() {
-        // A write after the sound server goes away raises SIGPIPE, which would end Sunshine. This
-        // thread only plays the microphone, so it blocks the signal and handles EPIPE instead.
-        sigemptyset(&sigpipe_);
-        sigaddset(&sigpipe_, SIGPIPE);
-        pthread_sigmask(SIG_BLOCK, &sigpipe_, nullptr);
-
         const char *runtime = std::getenv("XDG_RUNTIME_DIR");
         std::string dir = (runtime && *runtime ? std::string {runtime} : "/tmp"s) + "/sunshine-frametop-mic-XXXXXX";
         if (!mkdtemp(dir.data())) {
@@ -188,48 +236,159 @@ namespace platf::frametop_mic {
       }
 
       bool write(const float *samples, int count) override {
-        buffer_.resize(count);
-        for (int i = 0; i < count; ++i) {
-          buffer_[i] = static_cast<std::int16_t>(std::lrint(std::clamp(samples[i], -1.0f, 1.0f) * 32767.0f));
-        }
-
-        for (int done = 0; done < count; done += CHUNK_SAMPLES) {
-          const auto samples_now = std::min(CHUNK_SAMPLES, count - done);
-          if (::write(fd_, buffer_.data() + done, samples_now * sizeof(std::int16_t)) >= 0) {
-            continue;
-          }
-          if (errno == EAGAIN) {
-            return true;  // the pipe is full: no app reads it, or not fast enough. The rest goes.
-          }
-          if (errno == EPIPE) {
-            const timespec now {};
-            sigtimedwait(&sigpipe_, nullptr, &now);  // take the SIGPIPE this write raised
-          }
-          return false;
-        }
-        return true;
+        return write_samples(fd_, samples, count);
       }
 
     private:
       pulse_t pulse_;
-      sigset_t sigpipe_ {};
       std::string dir_;
       std::string fifo_;
       std::uint32_t module_ = PA_INVALID_INDEX;
       int fd_ = -1;
-      std::vector<std::int16_t> buffer_;
+    };
+
+    /// The source in the desktop user's sound server, made by vibepollo-mic-source there: this
+    /// writes into its stdin, a pipe the session broker hands it.
+    class session_device_t: public device_t, pipe_writer_t {
+    public:
+      ~session_device_t() override {
+        if (fd_ >= 0) {
+          close(fd_);  // its input ends: it removes the source and exits
+        }
+        if (pid_ > 0) {
+          stop();
+        }
+      }
+
+      /// Empty when it's ready, else why not.
+      std::string open() {
+        int input[2] = {-1, -1};
+        int ready[2] = {-1, -1};
+        if (pipe2(input, O_CLOEXEC) < 0) {
+          return "couldn't make its pipe: "s + std::strerror(errno);
+        }
+        if (pipe2(ready, O_CLOEXEC) < 0) {
+          const auto why = "couldn't make its pipe: "s + std::strerror(errno);
+          close(input[0]);
+          close(input[1]);
+          return why;
+        }
+
+        posix_spawn_file_actions_t actions;
+        posix_spawn_file_actions_init(&actions);
+        posix_spawn_file_actions_adddup2(&actions, input[0], STDIN_FILENO);
+        posix_spawn_file_actions_adddup2(&actions, ready[1], STDOUT_FILENO);
+        // This thread blocks SIGPIPE; session-exec gets the signals as they'd be.
+        posix_spawnattr_t attributes;
+        posix_spawnattr_init(&attributes);
+        sigset_t none;
+        sigemptyset(&none);
+        posix_spawnattr_setsigmask(&attributes, &none);
+        posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSIGMASK);
+        char *const arguments[] = {const_cast<char *>(SESSION_EXEC), const_cast<char *>("audio-mic-source"), nullptr};
+        const int spawned = posix_spawn(&pid_, SESSION_EXEC, &actions, &attributes, arguments, environ);
+        posix_spawn_file_actions_destroy(&actions);
+        posix_spawnattr_destroy(&attributes);
+        close(input[0]);
+        close(ready[1]);
+        if (spawned) {
+          pid_ = -1;
+          close(input[1]);
+          close(ready[0]);
+          return "couldn't start "s + SESSION_EXEC + ": " + std::strerror(spawned);
+        }
+
+        const bool is_ready = wait_ready(ready[0]);
+        close(ready[0]);
+        if (!is_ready) {
+          close(input[1]);
+          return "the desktop session didn't add it (Vibepollo's log has vibepollo-mic-source's reason)";
+        }
+        fd_ = input[1];
+        fcntl(fd_, F_SETFL, fcntl(fd_, F_GETFL) | O_NONBLOCK);
+        fcntl(fd_, F_SETPIPE_SZ, PIPE_BYTES);
+        return {};
+      }
+
+      bool write(const float *samples, int count) override {
+        return write_samples(fd_, samples, count);
+      }
+
+    private:
+      /// The helper says "ready" once the source is there; anything else, or nothing, isn't.
+      static bool wait_ready(int fd) {
+        std::string said;
+        for (int waited = 0; waited < READY_MS; waited += 100) {
+          pollfd ready {fd, POLLIN, 0};
+          const int polled = poll(&ready, 1, 100);
+          if (polled < 0 && errno != EINTR) {
+            return false;
+          }
+          if (polled <= 0) {
+            continue;
+          }
+          char buffer[16];
+          const auto got = read(fd, buffer, sizeof buffer);
+          if (got <= 0) {
+            return false;  // it ended
+          }
+          said.append(buffer, got);
+          if (said.find('\n') != std::string::npos) {
+            return said == "ready\n";
+          }
+          if (said.size() > 64) {
+            return false;
+          }
+        }
+        return false;
+      }
+
+      bool reaped(int within_ms) {
+        for (int waited = 0;; waited += 20) {
+          const auto done = waitpid(pid_, nullptr, WNOHANG);
+          if (done == pid_ || (done < 0 && errno == ECHILD)) {
+            return true;
+          }
+          if (waited >= within_ms) {
+            return false;
+          }
+          const timespec pause {0, 20'000'000};
+          nanosleep(&pause, nullptr);
+        }
+      }
+
+      /// session-exec ends when the helper does; else stopping it makes the broker stop the helper.
+      void stop() {
+        if (reaped(EXIT_MS)) {
+          return;
+        }
+        kill(pid_, SIGTERM);
+        if (!reaped(EXIT_MS)) {
+          kill(pid_, SIGKILL);
+          waitpid(pid_, nullptr, 0);
+        }
+      }
+
+      pid_t pid_ = -1;
+      int fd_ = -1;
     };
   }  // namespace
 
   std::unique_ptr<device_t> open_device() {
-    // As a system service, Vibepollo reaches the desktop's sound only through its session broker,
-    // which has no operation for this yet.
+    // As a system service, Vibepollo reaches the desktop's sound only through its session broker.
     if (std::getenv("VIBEPOLLO_MACHINE_HOST")) {
-      static bool told = false;
-      if (!std::exchange(told, true)) {
-        BOOST_LOG(warning) << "Frametop mic: Vibepollo's system service can't add a microphone to the desktop yet"sv;
+      // Tried again while the client sends; said once until it works.
+      static bool failing = false;
+      auto device = std::make_unique<session_device_t>();
+      if (const auto why = device->open(); !why.empty()) {
+        if (!std::exchange(failing, true)) {
+          BOOST_LOG(warning) << "Frametop mic: couldn't add Frametop Microphone to the desktop session: "sv << why;
+        }
+        return nullptr;
       }
-      return nullptr;
+      failing = false;
+      BOOST_LOG(info) << "Frametop mic: playing into \"Frametop Microphone\" in the desktop session"sv;
+      return device;
     }
 
     auto device = std::make_unique<pipe_device_t>();

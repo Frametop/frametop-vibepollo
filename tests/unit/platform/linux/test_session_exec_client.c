@@ -2,6 +2,7 @@
 
 #include <signal.h>
 #include <stdio.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 
 int vibepollo_session_exec_entrypoint(int argc, char **argv);
@@ -136,6 +137,59 @@ static int check_display_request_limits(void) {
   return 0;
 }
 
+// audio-mic-source passes stdin with the request, then lets go of it: the worker sees the
+// pipe end once the host closes its end, not when this client exits.
+static int check_passed_input(void) {
+  int peers[2] = {-1, -1}, pipe_ends[2] = {-1, -1};
+  CHECK(!socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, peers));
+  CHECK(!pipe2(pipe_ends, O_CLOEXEC));
+  char *arguments[] = {"vibepollo-session-exec", VIBEPOLLO_SESSION_INPUT_OPERATION, NULL};
+  CHECK(send_request_passing(peers[0], 2, arguments, 42, pipe_ends[0]));
+  unsigned char packet[256] = {0};
+  union {
+    struct cmsghdr header;
+    unsigned char space[CMSG_SPACE(sizeof(int) * 2)];
+  } control = {0};
+  struct iovec vector = {.iov_base = packet, .iov_len = sizeof(packet)};
+  struct msghdr message = {.msg_iov = &vector, .msg_iovlen = 1,
+                           .msg_control = control.space, .msg_controllen = sizeof(control.space)};
+  const ssize_t received = recvmsg(peers[1], &message, MSG_CMSG_CLOEXEC);
+  CHECK(received == (ssize_t) (sizeof(struct vibepollo_session_message) +
+                               sizeof(VIBEPOLLO_SESSION_INPUT_OPERATION)));
+  struct cmsghdr *rights = CMSG_FIRSTHDR(&message);
+  CHECK(rights && rights->cmsg_level == SOL_SOCKET && rights->cmsg_type == SCM_RIGHTS &&
+        rights->cmsg_len == CMSG_LEN(sizeof(int)) && !CMSG_NXTHDR(&message, rights));
+  int passed = -1;
+  memcpy(&passed, CMSG_DATA(rights), sizeof(passed));
+  // The same pipe: what the host writes, the passed end reads.
+  CHECK(write(pipe_ends[1], "mic", 3) == 3);
+  char read_back[4] = {0};
+  CHECK(read(passed, read_back, sizeof(read_back)) == 3 && !memcmp(read_back, "mic", 3));
+  close(passed);
+
+  // Requests without an input carry no control message.
+  char *plain[] = {"vibepollo-session-exec", "audio-get-default", NULL};
+  CHECK(send_request(peers[0], 2, plain, 42));
+  message.msg_controllen = sizeof(control.space);
+  CHECK(recvmsg(peers[1], &message, MSG_CMSG_CLOEXEC) > 0 && !message.msg_controllen);
+
+  // Letting go keeps fd 0 open, as /dev/null.
+  const pid_t child = fork();
+  CHECK(child >= 0);
+  if (!child) {
+    if (dup2(pipe_ends[0], STDIN_FILENO) != STDIN_FILENO || !release_input()) _exit(1);
+    struct stat status;
+    _exit(!fstat(STDIN_FILENO, &status) && S_ISCHR(status.st_mode) ? 0 : 1);
+  }
+  int status = 0;
+  CHECK(waitpid(child, &status, 0) == child && WIFEXITED(status) && !WEXITSTATUS(status));
+  close(pipe_ends[0]);
+  close(pipe_ends[1]);
+  close(peers[0]);
+  close(peers[1]);
+  return 0;
+}
+
 int main(void) {
   CHECK(!check_display_request_limits());
   CHECK(!check_client_termination(SIGTERM, true));
@@ -207,6 +261,8 @@ int main(void) {
   int status = 0;
   CHECK(waitpid(child, &status, 0) == child);
   CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+
+  CHECK(!check_passed_input());
 
   puts("PASS: unprivileged session client termination, framing and capability discard");
   return 0;

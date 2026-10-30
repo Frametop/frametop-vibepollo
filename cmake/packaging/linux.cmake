@@ -132,6 +132,12 @@ else()
         else()
             message(STATUS "vibepollo-host-input: no libinput >= 1.19, so touchpads aren't lent")
         endif()
+        # Frametop mic under the system service: the client's microphone as a source in the
+        # desktop user's sound server, run there by the session broker.
+        add_executable(vibepollo_mic_source
+                "${CMAKE_SOURCE_DIR}/packaging/linux/vibepollo-mic-source.c")
+        set_target_properties(vibepollo_mic_source PROPERTIES OUTPUT_NAME "vibepollo-mic-source")
+        target_link_libraries(vibepollo_mic_source PRIVATE pulse)
         add_executable(vibepollo_display_power
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibepollo-display-power.c")
         set_target_properties(vibepollo_display_power PROPERTIES OUTPUT_NAME "vibepollo-display-power")
@@ -228,7 +234,7 @@ else()
         install(TARGETS vibepollo_session_exec vibepollo_app_supervisor
                 vibepollo_profile_import vibepollo_kwin_session_environment
                 vibepollo_provider_scan vibepollo_steam_launch vibepollo_display_power vibepollo_app_focus vibepollo_touch_map
-                vibepollo_host_input
+                vibepollo_host_input vibepollo_mic_source
                 RUNTIME DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}")
         if(TARGET vibepollo_display_observer)
             install(TARGETS vibepollo_display_observer
@@ -373,6 +379,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibepollo-app-supervisor"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibepollo-touch-map"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibepollo-host-input"
+            "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibepollo-mic-source"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibepollo-steam-launch"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibepollo-app-focus"
             "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibepollo-kwin-session-environment"

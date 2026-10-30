@@ -40,7 +40,7 @@ HELPERS = (
     'app-supervisor', 'app-focus', 'display-power', 'display-observer', 'global-limiter.py', 'host',
     'host-input',
     'package-preflight',
-    'kwin-session-environment', 'machine-host', 'profile-import', 'provider-scan',
+    'kwin-session-environment', 'machine-host', 'mic-source', 'profile-import', 'provider-scan',
     'session-broker', 'session-controller', 'session-exec', 'steam-launch', 'touch-map',
 )
 UNITS = (HOST, CONTROLLER, SOCKET, 'vibepollo-session-exec@.service',

@@ -42,6 +42,13 @@ struct vibepollo_session_message {
   uint32_t reserved;
 };
 
+/*
+ * The one request that carries a descriptor: session-exec passes its stdin (the
+ * read end of the host's pipe) with SCM_RIGHTS, and the broker gives it to the
+ * worker as stdin. Every other request carries none, and is rejected with one.
+ */
+#define VIBEPOLLO_SESSION_INPUT_OPERATION "audio-mic-source"
+
 #ifdef __cplusplus
 static_assert(sizeof(struct vibepollo_session_message) == 32,
 #else

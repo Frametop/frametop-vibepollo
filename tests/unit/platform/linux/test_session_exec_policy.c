@@ -163,6 +163,84 @@ static int check_display_request_limits(void) {
   return 0;
 }
 
+// Sends a request with these descriptors in one SCM_RIGHTS message.
+static bool send_with_descriptors(int socket_fd, const unsigned char *packet, size_t length,
+                                  const int *descriptors, size_t count) {
+  union {
+    struct cmsghdr header;
+    unsigned char space[CMSG_SPACE(sizeof(int) * 2)];
+  } control = {0};
+  struct iovec vector = {.iov_base = (void *) packet, .iov_len = length};
+  struct msghdr message = {.msg_iov = &vector, .msg_iovlen = 1};
+  if (count) {
+    message.msg_control = control.space;
+    message.msg_controllen = CMSG_SPACE(sizeof(int) * count);
+    struct cmsghdr *rights = CMSG_FIRSTHDR(&message);
+    rights->cmsg_level = SOL_SOCKET;
+    rights->cmsg_type = SCM_RIGHTS;
+    rights->cmsg_len = CMSG_LEN(sizeof(int) * count);
+    memcpy(CMSG_DATA(rights), descriptors, sizeof(int) * count);
+  }
+  return sendmsg(socket_fd, &message, MSG_NOSIGNAL) == (ssize_t) length;
+}
+
+// audio-mic-source's input: one read end of a pipe, kept close-on-exec until the worker's
+// dup2. More descriptors, or anything but a read-only pipe, never reach a worker.
+static int check_passed_input(const unsigned char *packet, size_t length) {
+  int peers[2] = {-1, -1}, pipe_ends[2] = {-1, -1};
+  CHECK(!socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, peers));
+  CHECK(!pipe2(pipe_ends, O_CLOEXEC));
+  unsigned char received[256] = {0};
+  int input = -1;
+
+  CHECK(send_with_descriptors(peers[1], packet, length, &pipe_ends[0], 1));
+  CHECK(receive_request(peers[0], received, sizeof(received), &input) == (ssize_t) length);
+  CHECK(input >= 0 && input != pipe_ends[0]);
+  CHECK(fcntl(input, F_GETFD) & FD_CLOEXEC);
+  CHECK(passed_input_is_safe(input));
+  close(input);
+
+  CHECK(send_with_descriptors(peers[1], packet, length, &pipe_ends[1], 1));
+  CHECK(receive_request(peers[0], received, sizeof(received), &input) == (ssize_t) length);
+  CHECK(!passed_input_is_safe(input));  // the write end
+  close(input);
+
+  CHECK(send_with_descriptors(peers[1], packet, length, &peers[1], 1));
+  CHECK(receive_request(peers[0], received, sizeof(received), &input) == (ssize_t) length);
+  CHECK(!passed_input_is_safe(input));  // a socket
+  close(input);
+
+  const int file = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
+  CHECK(file >= 0);
+  CHECK(send_with_descriptors(peers[1], packet, length, &file, 1));
+  CHECK(receive_request(peers[0], received, sizeof(received), &input) == (ssize_t) length);
+  CHECK(!passed_input_is_safe(input));  // a file
+  close(input);
+  close(file);
+
+  errno = 0;
+  CHECK(send_with_descriptors(peers[1], packet, length, pipe_ends, 2));
+  CHECK(receive_request(peers[0], received, sizeof(received), &input) == -1);
+  CHECK(errno == EPROTO && input == -1);
+
+  // The decoded operation decides: only audio-mic-source takes one, and only
+  // the desktop role's session gets the source.
+  struct session_identity greeter = {0};
+  strcpy(greeter.role, "greeter");
+  char *mic[] = {"broker", VIBEPOLLO_SESSION_INPUT_OPERATION, NULL};
+  CHECK(execute_request(2, mic, &greeter, getgid()) == 126);
+  char *extra[] = {"broker", VIBEPOLLO_SESSION_INPUT_OPERATION, "x", NULL};
+  struct session_identity desktop = {0};
+  strcpy(desktop.role, "desktop");
+  CHECK(execute_request(3, extra, &desktop, getgid()) == 126);
+
+  close(pipe_ends[0]);
+  close(pipe_ends[1]);
+  close(peers[0]);
+  close(peers[1]);
+  return 0;
+}
+
 int main(void) {
   char *stream_environment[] = {
     "SUNSHINE_APP_ID=42", "SUNSHINE_APP_NAME=Literal $HOME; $(false) name=ok",
@@ -786,8 +864,10 @@ int main(void) {
   CHECK(send(peers[1], request_packet, request_length, MSG_NOSIGNAL) ==
         (ssize_t) request_length);
   unsigned char received_request[256] = {0};
-  CHECK(receive_request(peers[0], received_request, sizeof(received_request)) ==
+  int passed_input = 0;
+  CHECK(receive_request(peers[0], received_request, sizeof(received_request), &passed_input) ==
         (ssize_t) request_length);
+  CHECK(passed_input == -1);
   CHECK(decode_request(received_request, request_length, &decoded));
   CHECK(decoded.header.generation == 7 && !strcmp(decoded.argv[1], "display-query"));
   const char output_payload[] = "bounded output";
@@ -810,6 +890,7 @@ int main(void) {
                     VIBEPOLLO_SESSION_PROTOCOL_OUTPUT_CHUNK + 1));
   close(peers[0]);
   close(peers[1]);
+  CHECK(!check_passed_input(request_packet, request_length));
 
   puts("PASS: session broker protocol, peer credentials, and semantic policy");
   return 0;

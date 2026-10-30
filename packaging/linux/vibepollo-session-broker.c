@@ -39,6 +39,8 @@ static const char application_supervisor_path[] =
   "/usr/libexec/vibeshine/vibepollo-app-supervisor";
 static const char steam_launch_path[] =
   "/usr/libexec/vibeshine/vibepollo-steam-launch";
+static const char mic_source_path[] =
+  "/usr/libexec/vibeshine/vibepollo-mic-source";
 // Steam can still be settling its previous transient launch unit when the
 // next request arrives.  Retry only the desktop Steam fallback; the direct
 // launcher and arbitrary app commands must never be replayed automatically.
@@ -1343,7 +1345,7 @@ static int execute_request(int argc, char **argv,
   if (argc < 2) return 2;
   enum operation {
     DISPLAY_QUERY, DISPLAY_APPLY, DISPLAY_OBSERVE, DISPLAY_LAYOUT, DISPLAY_POWER, DISPLAY_WAKE, DISPLAY_INHIBIT, DISPLAY_RETAIN, TOUCH_MAP, AUDIO_GET_DEFAULT, AUDIO_LIST_SINKS, AUDIO_SET_DEFAULT,
-    AUDIO_CREATE_NULL, AUDIO_REMOVE_NULL, AUDIO_CAPTURE, STEAM, STEAM_BIG_PICTURE, STEAM_DIRECT, GLOBAL_LIMITER, LUTRIS, LUTRIS_WAYLAND_HDR, MANAGED_FOCUS,
+    AUDIO_CREATE_NULL, AUDIO_REMOVE_NULL, AUDIO_CAPTURE, AUDIO_MIC_SOURCE, STEAM, STEAM_BIG_PICTURE, STEAM_DIRECT, GLOBAL_LIMITER, LUTRIS, LUTRIS_WAYLAND_HDR, MANAGED_FOCUS,
     PROVIDER_STEAM_SCAN, PROVIDER_LUTRIS_SCAN, PROVIDER_STEAM_ARTWORK, PROVIDER_LUTRIS_ARTWORK, RTX_HDR_FOREGROUND, APP, APP_WAYLAND_HDR
   } operation;
   unsigned long first_number = 0, second_number = 0, third_number = 0;
@@ -1387,6 +1389,7 @@ static int execute_request(int argc, char **argv,
            (second_number == 2 || second_number == 6 || second_number == 8) &&
            parse_number(argv[4], 1, 8192, &third_number) &&
            parse_channel_mapping(argv[5], second_number, channel_mapping)) operation = AUDIO_CAPTURE;
+  else if (!strcmp(argv[1], VIBEPOLLO_SESSION_INPUT_OPERATION) && argc == 2 && !strcmp(identity->role, "desktop")) operation = AUDIO_MIC_SOURCE;
   else if (!strcmp(argv[1], "steam") && argc == 3 && numeric_suffix(argv[2], "") && !strcmp(identity->role, "desktop")) operation = STEAM;
   else if (!strcmp(argv[1], "global-limiter") &&
            global_limiter_arguments_are_safe(argc, argv) &&
@@ -1539,6 +1542,13 @@ static int execute_request(int argc, char **argv,
       execv("/usr/bin/parec", arguments);
       break;
     }
+    case AUDIO_MIC_SOURCE: {
+      // A Frametop client's microphone, from stdin (the host's pipe), as a source in this
+      // session's sound server.
+      char *const arguments[] = {"vibepollo-mic-source", NULL};
+      execv(mic_source_path, arguments);
+      break;
+    }
     case STEAM: {
       // This is a short-lived handoff to the already-running desktop Steam
       // daemon, not a directly owned game process.  The broker worker has
@@ -1681,7 +1691,28 @@ static bool peer_is_authorized(int socket_fd, uid_t expected_uid, gid_t expected
          peer.uid == expected_uid && peer.gid == expected_gid;
 }
 
-static ssize_t receive_request(int socket_fd, unsigned char *packet, size_t packet_size) {
+static void close_passed_descriptors(struct msghdr *message) {
+  for (struct cmsghdr *header = CMSG_FIRSTHDR(message); header;
+       header = CMSG_NXTHDR(message, header)) {
+    if (header->cmsg_level == SOL_SOCKET && header->cmsg_type == SCM_RIGHTS) {
+      const size_t descriptor_count =
+        (header->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+      const unsigned char *descriptors = CMSG_DATA(header);
+      for (size_t index = 0; index < descriptor_count; ++index) {
+        int descriptor;
+        memcpy(&descriptor, descriptors + index * sizeof(int), sizeof(int));
+        close(descriptor);
+      }
+    }
+  }
+}
+
+// The request, and in *input_fd the one descriptor it may carry (-1 for none):
+// exactly one SCM_RIGHTS message with exactly one descriptor, nothing else.
+// Which request may carry it is checked once the request is decoded.
+static ssize_t receive_request(int socket_fd, unsigned char *packet, size_t packet_size,
+                               int *input_fd) {
+  *input_fd = -1;
   struct pollfd ready = {.fd = socket_fd, .events = POLLIN};
   int polled;
   do {
@@ -1703,23 +1734,33 @@ static ssize_t receive_request(int socket_fd, unsigned char *packet, size_t pack
   };
   ssize_t received;
   do {
-    received = recvmsg(socket_fd, &message, 0);
+    received = recvmsg(socket_fd, &message, MSG_CMSG_CLOEXEC);
   } while (received < 0 && errno == EINTR);
-  if (received <= 0 || (message.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) ||
-      message.msg_controllen) {
+  if (received <= 0 || (message.msg_flags & (MSG_TRUNC | MSG_CTRUNC))) {
     if (received >= 0) errno = EPROTO;
-    for (struct cmsghdr *header = CMSG_FIRSTHDR(&message); header;
-         header = CMSG_NXTHDR(&message, header)) {
-      if (header->cmsg_level == SOL_SOCKET && header->cmsg_type == SCM_RIGHTS) {
-        const size_t descriptor_count =
-          (header->cmsg_len - CMSG_LEN(0)) / sizeof(int);
-        const int *descriptors = (const int *) CMSG_DATA(header);
-        for (size_t index = 0; index < descriptor_count; ++index) close(descriptors[index]);
-      }
-    }
+    close_passed_descriptors(&message);
     return -1;
   }
+  if (message.msg_controllen) {
+    struct cmsghdr *header = CMSG_FIRSTHDR(&message);
+    if (!header || CMSG_NXTHDR(&message, header) || header->cmsg_level != SOL_SOCKET ||
+        header->cmsg_type != SCM_RIGHTS || header->cmsg_len != CMSG_LEN(sizeof(int))) {
+      errno = EPROTO;
+      close_passed_descriptors(&message);
+      return -1;
+    }
+    memcpy(input_fd, CMSG_DATA(header), sizeof(int));
+  }
   return received;
+}
+
+// The audio-mic-source input: the read end of a pipe, read-only. Anything else
+// (a file, a socket, a writable end) is never handed to a worker.
+static bool passed_input_is_safe(int input_fd) {
+  struct stat status;
+  const int flags = fcntl(input_fd, F_GETFL);
+  return !fstat(input_fd, &status) && S_ISFIFO(status.st_mode) &&
+         flags >= 0 && (flags & O_ACCMODE) == O_RDONLY;
 }
 
 static bool send_frame(int socket_fd, uint16_t type, uint64_t generation,
@@ -1790,7 +1831,7 @@ static bool make_output_pipe(int descriptors[2]) {
 
 static pid_t spawn_worker(struct decoded_request *request,
                           const struct session_identity *identity,
-                          gid_t service_gid, int output_fd[2]) {
+                          gid_t service_gid, int output_fd[2], int input_fd) {
   int output[2] = {-1, -1}, error_output[2] = {-1, -1};
   const bool borrow=display_borrow_request(request->argc,request->argv);
   const bool output_ready=borrow?socketpair(AF_UNIX,SOCK_SEQPACKET|SOCK_CLOEXEC|SOCK_NONBLOCK,0,output)==0:make_output_pipe(output);
@@ -1811,7 +1852,8 @@ static pid_t spawn_worker(struct decoded_request *request,
     (void) setpgid(0, 0);
     close(output[0]);
     close(error_output[0]);
-    const int null_input = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    // The request's passed input (audio-mic-source), else nothing.
+    const int null_input = input_fd >= 0 ? input_fd : open("/dev/null", O_RDONLY | O_CLOEXEC);
     if (null_input < 0 || dup2(null_input, STDIN_FILENO) < 0 ||
         dup2(output[1], STDOUT_FILENO) < 0 ||
         dup2(error_output[1], STDERR_FILENO) < 0) _exit(126);
@@ -2026,17 +2068,29 @@ int main(int argc, char **argv) {
 
   unsigned char *packet = malloc(VIBEPOLLO_SESSION_PROTOCOL_MAX_MESSAGE);
   if (!packet) return 126;
+  int input_fd = -1;
   const ssize_t packet_length =
-    receive_request(STDIN_FILENO, packet, VIBEPOLLO_SESSION_PROTOCOL_MAX_MESSAGE);
+    receive_request(STDIN_FILENO, packet, VIBEPOLLO_SESSION_PROTOCOL_MAX_MESSAGE, &input_fd);
   struct decoded_request request = {0};
   if (packet_length < 0 || !decode_request(packet, (size_t) packet_length, &request)) {
     fputs("vibepollo-session-broker: rejected malformed request\n", stderr);
+    if (input_fd >= 0) close(input_fd);
+    free(packet);
+    return 126;
+  }
+  // Exactly the one request that takes an input carries one, and a safe one.
+  const bool takes_input = request.argc >= 2 && !strcmp(request.argv[1], VIBEPOLLO_SESSION_INPUT_OPERATION);
+  if (takes_input != (input_fd >= 0) || (input_fd >= 0 && !passed_input_is_safe(input_fd))) {
+    if (input_fd >= 0) close(input_fd);
+    send_rejection(STDIN_FILENO, request.header.generation,
+                   "Vibepollo rejected the request's input.\n");
     free(packet);
     return 126;
   }
 
   struct session_identity identity = {0};
   if (!load_identity(&identity, service_gid, request.header.generation)) {
+    if (input_fd >= 0) close(input_fd);
     send_rejection(STDIN_FILENO, request.header.generation,
                    "Vibepollo session is unavailable or changed.\n");
     free(packet);
@@ -2069,7 +2123,9 @@ int main(int argc, char **argv) {
     const int result=relay_display_borrow(STDIN_FILENO,0,output_fd,&identity,service_gid,request.argv[2],mutation_lock);
     close(mutation_lock);close(DISPLAY_BORROW_LOCK_FD);free(packet);return result;
   }
-  const pid_t worker = spawn_worker(&request, &identity, service_gid, output_fd);
+  const pid_t worker = spawn_worker(&request, &identity, service_gid, output_fd, input_fd);
+  // The worker has its own copy: the pipe ends for it when the host closes its end.
+  if (input_fd >= 0) close(input_fd);
   if (worker < 0) {
     if(borrow || native_mutation)(void)display_borrow_clear_uncertainty(mutation_lock);
     if(mutation_lock>=0) {close(mutation_lock);close(DISPLAY_BORROW_LOCK_FD);}
