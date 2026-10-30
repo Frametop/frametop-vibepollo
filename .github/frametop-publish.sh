@@ -11,7 +11,7 @@ for f in "$@"; do
 done
 if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
   gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag \
-    --title "Frametop build of Vibepollo 2.0.1 ($tag)" \
+    --title "Vibepollo for Frametop ${tag#frametop-}" \
     --notes-file "$root/.github/frametop-release-notes.md"
 fi
 files=()

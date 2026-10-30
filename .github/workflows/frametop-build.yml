@@ -1,10 +1,10 @@
 ---
-# Frametop's build of Vibepollo 2.0.2 (https://github.com/DeeJanuz/frametop), on upstream's
+# Frametop's build of Vibepollo, 2.0.3 (https://github.com/DeeJanuz/frametop), on upstream's
 # 2.0.2-nightly.d20261026: sunshine.exe, which
 # Frametop's Windows host setup swaps in over the stock one, and the Arch Linux package, on
 # Depot's runners (the Frametop org's Depot GitHub app). It runs when started by hand (Actions
 # -> Frametop build -> Run workflow), which keeps the files as artifacts, and on a frametop-*
-# tag, which also publishes them as a GitHub release, each with its SHA-256
+# tag named for that version (frametop-2.0.3), which also publishes them as a GitHub release, each with its SHA-256
 # (.github/frametop-publish.sh, notes in .github/frametop-release-notes.md). Upstream's ci.yml
 # skips frametop/ branches and frametop-* tags, so this is the only build of them.
 #
@@ -30,7 +30,7 @@ jobs:
     permissions:
       contents: read
     env:
-      BUILD_VERSION: 2.0.2
+      BUILD_VERSION: 2.0.3
       NODE_VERSION: 22.22.2
       CMAKE_BUILD_PARALLEL_LEVEL: 8
       WEBRTC_ROOT: ${{ github.workspace }}\.vibepollo-deps\libwebrtc\out
@@ -203,7 +203,7 @@ jobs:
       build_tests: true
       artifact_retention_days: 14
       release_commit: ${{ github.sha }}
-      release_version: 2.0.2
+      release_version: 2.0.3
 
   release:
     name: Publish the release
@@ -233,4 +233,9 @@ jobs:
           set -euo pipefail
           mapfile -t pkgs < <(find artifacts/build-Archlinux -maxdepth 1 -name 'vibepollo-*.pkg.tar.zst' ! -name '*-debug-*')
           [ "${#pkgs[@]}" = 1 ] || { echo "expected one Arch package, found ${#pkgs[@]}" >&2; exit 1; }
+          # The update check reads the version from the tag, so it has to be the version built.
+          version=${TAG#frametop-}
+          case $(basename "${pkgs[0]}") in "vibepollo-$version-"*) ;; *) echo "::error::$TAG doesn't match ${pkgs[0]}"; exit 1 ;; esac
+          grep -qx "Vibepollo $version with Frametop's changes" artifacts/frametop-windows/BUILD-INFO.txt ||
+            { echo "::error::$TAG doesn't match the Windows build: $(head -1 artifacts/frametop-windows/BUILD-INFO.txt)"; exit 1; }
           bash .github/frametop-publish.sh "$TAG" artifacts/frametop-windows/sunshine.exe "${pkgs[0]}"
