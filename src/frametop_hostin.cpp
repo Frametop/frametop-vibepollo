@@ -19,6 +19,8 @@
   #include <sys/un.h>
   #include <thread>
   #include <unistd.h>
+#elif defined(_WIN32)
+  #include "platform/windows/frametop_hostin.h"
 #endif
 
 using namespace std::literals;
@@ -128,6 +130,22 @@ namespace frametop_hostin {
     };
 
     using service_type = socket_service_t;
+#elif defined(_WIN32)
+    manager_t &the_manager();
+
+    /// The capture thread in this process (platform/windows/frametop_hostin.cpp).
+    manager_t::service_t *make_service() {
+      return platf::frametop_hostin::make_service({
+                                                    [](std::uint64_t connection, std::string_view message) {
+                                                      the_manager().service_message(connection, message);
+                                                    },
+                                                    [](std::uint64_t connection) {
+                                                      the_manager().service_gone(connection);
+                                                    },
+                                                    log_line,
+                                                  })
+        .release();
+    }
 #else
     /// No capture service on this platform yet: every lease is answered "unsupported".
     class unsupported_service_t: public manager_t::service_t {
@@ -151,7 +169,11 @@ namespace frametop_hostin {
     /// Built on first use, after the config is read, and never destroyed: a reader thread may
     /// still be running when the process exits.
     manager_t &the_manager() {
+#ifdef _WIN32
+      static auto *service = make_service();
+#else
       static auto *service = new service_type;
+#endif
       static auto *manager = new manager_t {*service, config::nvhttp.sunshine_name, log_line};
       return *manager;
     }

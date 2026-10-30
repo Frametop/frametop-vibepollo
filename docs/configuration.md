@@ -5355,6 +5355,12 @@ Sets the display mode used when the requested streaming mode cannot be applied.
 Forwards controller rumble events (and, for a Steam Controller, the haptic reports Steam writes
 to its pads) from the emulated host gamepad to the client's physical controller.
 
+### frametop_host_input
+
+Windows only, off by default. Lends this computer's keyboard and mouse to one Frametop client
+while its headset is worn: see [Frametop host input on Windows](windows-frametop-host-input.md).
+On Linux the `vibepollo-host-input.socket` unit turns it on instead.
+
 ### global_state_cmd
 
 Configures commands that run when any application changes streaming state.

@@ -355,6 +355,9 @@ namespace config {
 
     bool enable_input_only_mode;
     bool forward_rumble;
+    // Windows: lend this computer's keyboard and mouse to a Frametop client that asks (Linux
+    // uses vibepollo-host-input.socket instead).
+    bool frametop_host_input;
   };
 
   struct frame_limiter_t {

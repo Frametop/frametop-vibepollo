@@ -4,8 +4,9 @@
  *        while it holds a lease (Frametop's docs/host-input.md; wire format in
  *        frametop_hostin_policy.h).
  *
- * On Linux the input comes from the capture service (vibepollo-host-input). Elsewhere every
- * lease is answered "released unsupported".
+ * On Linux the input comes from the capture service (vibepollo-host-input); on Windows from
+ * low-level hooks in this process (platform/windows/frametop_hostin.cpp), when the
+ * frametop_host_input setting is on. Elsewhere every lease is answered "released unsupported".
  */
 #pragma once
 

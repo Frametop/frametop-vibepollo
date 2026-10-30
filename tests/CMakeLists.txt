@@ -678,6 +678,9 @@ sunshine_register_component(NAME test_component_frametop_mic_policy TEST_SOURCE 
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/frametop_mic_policy.cpp")
 sunshine_register_component(NAME test_component_frametop_hostin_policy TEST_SOURCE unit/test_frametop_hostin_policy.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/frametop_hostin_policy.cpp")
+sunshine_register_component(NAME test_component_frametop_hostin_capture TEST_SOURCE unit/test_frametop_hostin_capture.cpp
+    PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/frametop_hostin_capture.cpp"
+        "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/frametop_hostin_policy.cpp")
 sunshine_register_component(NAME test_component_frametop_hostin_manager TEST_SOURCE unit/test_frametop_hostin_manager.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/frametop_hostin_manager.cpp"
         "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/frametop_hostin_policy.cpp")

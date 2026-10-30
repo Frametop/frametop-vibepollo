@@ -97,6 +97,8 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/http_pairing_policy.h"
         "${CMAKE_SOURCE_DIR}/src/frametop_hostin.h"
         "${CMAKE_SOURCE_DIR}/src/frametop_hostin.cpp"
+        "${CMAKE_SOURCE_DIR}/src/frametop_hostin_capture.h"
+        "${CMAKE_SOURCE_DIR}/src/frametop_hostin_capture.cpp"
         "${CMAKE_SOURCE_DIR}/src/frametop_hostin_manager.h"
         "${CMAKE_SOURCE_DIR}/src/frametop_hostin_manager.cpp"
         "${CMAKE_SOURCE_DIR}/src/frametop_hostin_policy.h"
