@@ -38,6 +38,8 @@ namespace frametop_mic {
 
   private:
     bool claim();
+    /// Stops this session's microphone, and lets another session's play.
+    void stop_playing();
     void decode(std::string_view opus, int frame_samples, bool fec);
 
     std::string client_;

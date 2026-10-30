@@ -146,7 +146,7 @@ client stops sending, the stream ends, or the desktop session changes. At most
 85 ms of audio waits in each pipe; when no app reads, the rest is dropped
 rather than delayed. If the source can't be added (no sound server in the
 desktop session, or no `pipewire-pulse`), the stream carries on without it,
-Vibepollo's log says why (once), and it tries again every 30 s while the client
+Vibepollo's log says why (once), and it tries again every 10 s while the client
 sends. Check with `pactl list short sources | grep frametop_mic` as the desktop
 user.
 

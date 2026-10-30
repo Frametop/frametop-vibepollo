@@ -23,6 +23,10 @@ namespace frametop_mic {
     constexpr int MAX_DECODED_SAMPLES = policy::SAMPLE_RATE * 120 / 1000;
     /// Decoded audio waiting for the device. More than this is old: the oldest goes.
     constexpr std::size_t MAX_QUEUED = 10;
+    /// A device that went away (a format change, or turned off and on) is opened again this
+    /// soon; one that couldn't be opened at all, this often.
+    constexpr auto REOPEN_AFTER_LOSS = 1s;
+    constexpr auto RETRY_OPEN = 10s;
 
     std::mutex g_owner_mutex;
     const receiver_t *g_owner = nullptr;  // the session whose microphone plays
@@ -61,6 +65,8 @@ namespace frametop_mic {
   private:
     void run() {
       platf::set_thread_name("frametop::mic");
+      // A late write is a gap the client's listeners hear.
+      platf::adjust_thread_priority(platf::thread_priority_e::high);
 
       std::unique_ptr<platf::frametop_mic::device_t> device;
       auto retry_at = std::chrono::steady_clock::time_point {};
@@ -83,7 +89,7 @@ namespace frametop_mic {
           device = platf::frametop_mic::open_device();
           lock.lock();
           if (!device) {
-            retry_at = std::chrono::steady_clock::now() + 30s;
+            retry_at = std::chrono::steady_clock::now() + RETRY_OPEN;
             queue_.clear();
             continue;
           }
@@ -100,7 +106,7 @@ namespace frametop_mic {
         if (!device->write(samples.data(), static_cast<int>(samples.size()))) {
           BOOST_LOG(warning) << "Frametop mic: the virtual microphone went away; opening it again shortly"sv;
           device.reset();
-          retry_at = std::chrono::steady_clock::now() + 5s;
+          retry_at = std::chrono::steady_clock::now() + REOPEN_AFTER_LOSS;
         }
         lock.lock();
       }
@@ -127,19 +133,23 @@ namespace frametop_mic {
   }
 
   receiver_t::~receiver_t() {
-    if (player_) {
-      player_.reset();
-      BOOST_LOG(info) << "Frametop mic: ["sv << client_ << "]'s microphone stopped after "sv << packets_
-                      << " packets ("sv << concealed_ << " lost)"sv;
-
-      std::lock_guard lock {g_owner_mutex};
-      if (g_owner == this) {
-        g_owner = nullptr;
-      }
-    }
-
+    stop_playing();
     if (decoder_) {
       opus_decoder_destroy(decoder_);
+    }
+  }
+
+  void receiver_t::stop_playing() {
+    if (!player_) {
+      return;
+    }
+    player_.reset();
+    BOOST_LOG(info) << "Frametop mic: ["sv << client_ << "]'s microphone stopped after "sv << packets_
+                    << " packets ("sv << concealed_ << " lost)"sv;
+
+    std::lock_guard lock {g_owner_mutex};
+    if (g_owner == this) {
+      g_owner = nullptr;
     }
   }
 
@@ -148,6 +158,8 @@ namespace frametop_mic {
       refused_ = true;
       BOOST_LOG(warning) << "Frametop mic: not playing ["sv << client_ << "]'s microphone: "sv << reason;
     }
+    // A session that loses its permission mid-stream stops too, and lets another one play.
+    stop_playing();
   }
 
   void receiver_t::receive(std::string_view payload) {

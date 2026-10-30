@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <string>
 #include <string_view>
@@ -248,6 +249,10 @@ namespace platf::frametop_mic {
         if (started_) {
           client_->Stop();
         }
+        if (trimmed_ || late_) {
+          BOOST_LOG(info) << "Frametop mic: dropped "sv << trimmed_ << " packets to keep the delay down and "sv << late_
+                          << " that came too late"sv;
+        }
       }
 
       bool write(const float *samples, int count) override {
@@ -260,10 +265,16 @@ namespace platf::frametop_mic {
           check_level();
         }
 
+        if (backlog_.drop(queued)) {
+          ++trimmed_;
+          return true;  // a second's worth of packets all found the device too full: delay, not jitter
+        }
+
         const UINT32 lead = queued == 0 ? CUSHION_FRAMES : 0;
         const UINT32 frames = lead + static_cast<UINT32>(count);
         const UINT32 limit = MAX_QUEUED_FRAMES < buffer_frames_ ? MAX_QUEUED_FRAMES : buffer_frames_;
         if (queued + frames > limit) {
+          ++late_;
           return true;  // too far behind: this packet goes, to catch up
         }
 
@@ -317,6 +328,9 @@ namespace platf::frametop_mic {
       UINT32 buffer_frames_ = 0;
       bool started_ = false;
       unsigned writes_ = 0;
+      ::frametop_mic::policy::backlog_t backlog_;
+      std::uint64_t trimmed_ = 0;
+      std::uint64_t late_ = 0;
       float boost_ = 0;  // dB
       float gain_ = 1;
     };

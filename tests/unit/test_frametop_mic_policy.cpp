@@ -66,3 +66,36 @@ TEST(FrametopMicPolicy, StartsOverWhenTheClientCountsAgain) {
   EXPECT_EQ(sequence.next(0), (step_t {.play = true, .reset = true}));
   EXPECT_EQ(sequence.next(1), (step_t {.play = true}));
 }
+
+namespace {
+  /// How many of @p packets go when each finds @p queued frames waiting.
+  int drops(backlog_t &backlog, std::uint32_t queued, int packets) {
+    int dropped = 0;
+    for (int i = 0; i < packets; ++i) {
+      dropped += backlog.drop(queued);
+    }
+    return dropped;
+  }
+}  // namespace
+
+TEST(FrametopMicPolicy, KeepsAudioThatOnlyEvensOutJitter) {
+  backlog_t backlog;
+  EXPECT_EQ(drops(backlog, BACKLOG_TARGET_FRAMES, BACKLOG_WINDOW * 5), 0);
+}
+
+TEST(FrametopMicPolicy, TrimsADelayThatStaysOnePacketASecond) {
+  backlog_t backlog;
+  // The window's last packet decides, once a window.
+  EXPECT_EQ(drops(backlog, BACKLOG_TARGET_FRAMES + 1, BACKLOG_WINDOW - 1), 0);
+  EXPECT_TRUE(backlog.drop(BACKLOG_TARGET_FRAMES + 1));
+  EXPECT_EQ(drops(backlog, 2 * BACKLOG_TARGET_FRAMES, BACKLOG_WINDOW * 3), 3);
+}
+
+TEST(FrametopMicPolicy, OneEmptyMomentInAWindowKeepsIt) {
+  backlog_t backlog;
+  EXPECT_EQ(drops(backlog, 2 * BACKLOG_TARGET_FRAMES, BACKLOG_WINDOW / 2), 0);
+  EXPECT_FALSE(backlog.drop(0));
+  EXPECT_EQ(drops(backlog, 2 * BACKLOG_TARGET_FRAMES, BACKLOG_WINDOW / 2 - 1), 0);
+  // The next window starts afresh.
+  EXPECT_EQ(drops(backlog, 2 * BACKLOG_TARGET_FRAMES, BACKLOG_WINDOW), 1);
+}

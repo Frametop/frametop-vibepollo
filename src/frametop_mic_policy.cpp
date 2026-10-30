@@ -35,4 +35,17 @@ namespace frametop_mic::policy {
     }
     return {.play = true, .conceal = ahead - 1};
   }
+
+  bool backlog_t::drop(std::uint32_t queued_frames) {
+    if (queued_frames < lowest_) {
+      lowest_ = queued_frames;
+    }
+    if (++seen_ < BACKLOG_WINDOW) {
+      return false;
+    }
+    const bool behind = lowest_ > BACKLOG_TARGET_FRAMES;
+    seen_ = 0;
+    lowest_ = UINT32_MAX;
+    return behind;
+  }
 }  // namespace frametop_mic::policy

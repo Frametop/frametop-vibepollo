@@ -29,6 +29,12 @@ namespace frametop_mic::policy {
   /// A packet this far behind means the client started counting again.
   constexpr int RESTART_BEHIND = 50;
 
+  /// Audio the device holds ahead of what's heard. Up to this much evens out the network's
+  /// jitter; what stays above it for a whole window is only delay.
+  constexpr std::uint32_t BACKLOG_TARGET_FRAMES = SAMPLE_RATE * 60 / 1000;
+  /// Packets in a window: a second.
+  constexpr int BACKLOG_WINDOW = 50;
+
   struct packet_t {
     std::uint16_t sequence;
     std::string_view opus;
@@ -52,5 +58,22 @@ namespace frametop_mic::policy {
   private:
     bool started_ = false;
     std::uint16_t last_ = 0;
+  };
+
+  /**
+   * @brief Keeps the delay down: after a burst of late packets, or when the client's clock runs
+   *        a little fast, audio piles up in the device and stays there.
+   * @details Once a window, when every packet found more than BACKLOG_TARGET_FRAMES waiting, one
+   *          packet goes: 20 ms less delay a second until it's back under.
+   */
+  class backlog_t {
+  public:
+    /// @param queued_frames What the device holds as this packet arrives.
+    /// @return True when this packet should go.
+    bool drop(std::uint32_t queued_frames);
+
+  private:
+    int seen_ = 0;
+    std::uint32_t lowest_ = UINT32_MAX;
   };
 }  // namespace frametop_mic::policy
