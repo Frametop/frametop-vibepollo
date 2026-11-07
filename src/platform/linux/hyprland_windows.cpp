@@ -6,6 +6,7 @@
  * for the headless outputs and Lua (Hyprland 0.55+) for the rest.
  */
 #include "hyprland_windows.h"
+#include "app_window_class.h"
 
 #include "src/config.h"
 #include "src/logging.h"
@@ -389,7 +390,7 @@ namespace platf::hyprland_windows {
     }
 
     struct desktop_app_t {
-      std::string id, name, icon, exec;
+      std::string id, name, icon, exec, wm_class;
     };
 
     std::vector<fs::path> application_dirs() {
@@ -428,7 +429,7 @@ namespace platf::hyprland_windows {
           const auto id = entry.path().filename().string();
           if (entry.path().extension() != ".desktop" || !seen.insert(id).second) continue;
           std::ifstream file {entry.path()};
-          desktop_app_t app {id, {}, {}, {}};
+          desktop_app_t app {id, {}, {}, {}, {}};
           bool in_entry = false, hide = false, application = false;
           for (std::string line; std::getline(file, line);) {
             if (!line.empty() && line[0] == '[') {
@@ -446,6 +447,7 @@ namespace platf::hyprland_windows {
             if (key == "Name") app.name = value;
             else if (key == "Icon") app.icon = value;
             else if (key == "Exec") app.exec = strip_field_codes(value);
+            else if (key == "StartupWMClass") app.wm_class = value;
             else if (key == "Type") application = value == "Application";
             else if ((key == "NoDisplay" || key == "Hidden" || key == "Terminal") && value == "true") hide = true;
           }
@@ -659,17 +661,27 @@ namespace platf::hyprland_windows {
     reserved.seen = clock::now();
     hosted[output] = reserved;
     const auto deadline = clock::now() + kLaunchWait;
-    std::string address;
+    // Its window: a new one on the output's workspace, or else a new one of the app's class
+    // anywhere (a browser that was running opens it where you are; place() brings it over).
+    const auto classes = app_window_classes(app->wm_class, app->id, app->exec);
+    std::string address, found_by;
     guard.unlock();
     while (address.empty() && clock::now() < deadline) {
       std::this_thread::sleep_for(150ms);
+      std::string by_class;
       for (const auto &c : ask_json("clients")) {
         const auto a = c.value("address", "");
         if (before.contains(a) || !c.value("mapped", false)) continue;
-        if (std::to_string(c["workspace"].value("id", 0)) != *workspace) continue;
-        address = a;
-        break;
+        if (std::to_string(c["workspace"].value("id", 0)) == *workspace) {
+          address = a;
+          break;
+        }
+        if (by_class.empty() && (classes.contains(lower(c.value("class", ""))) ||
+                                 classes.contains(lower(c.value("initialClass", ""))))) {
+          by_class = a;
+        }
       }
+      if (address.empty() && !by_class.empty()) address = by_class, found_by = " (by its class: it opened elsewhere)";
     }
     guard.lock();
     const auto it = hosted.find(output);
@@ -692,7 +704,7 @@ namespace platf::hyprland_windows {
       return std::nullopt;
     }
     hosted[output].refade_at = clock::now() + 1500ms;
-    BOOST_LOG(info) << "Frametop windows: launched " << app_id << " as " << address << " on " << output;
+    BOOST_LOG(info) << "Frametop windows: launched " << app_id << " as " << address << " on " << output << found_by;
     return nlohmann::json {{"output", output}, {"width", width}, {"height", height}, {"address", address}};
   }
 

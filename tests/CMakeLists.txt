@@ -1378,6 +1378,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND SUNSHINE_TEST_ENABLE_COMPONENT)
         TEST_SOURCE unit/platform/linux/test_secure_open.cpp
         PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/linux/secure_open.cpp")
 
+    add_executable(test_linux_app_window_class
+        "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_app_window_class.cpp")
+    target_compile_features(test_linux_app_window_class PRIVATE cxx_std_20)
+    add_test(NAME test_component_linux_app_window_class COMMAND test_linux_app_window_class)
+    set_tests_properties(test_component_linux_app_window_class PROPERTIES LABELS "component")
+
     add_executable(test_linux_capability_sanitizer
         "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_capability_sanitizer.cpp")
     target_include_directories(test_linux_capability_sanitizer PRIVATE "${LIBCAP_INCLUDE_DIRS}")
