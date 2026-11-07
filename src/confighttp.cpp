@@ -85,6 +85,8 @@
   #include "platform/linux/capture_status.h"
   #include "platform/linux/private_display.h"
   #include "src/platform/linux/display_backend.h"
+  #include "src/platform/linux/hyprland_windows.h"
+  #include "src/platform/linux/session_backend.h"
 #endif
 
 #include <nlohmann/json.hpp>
@@ -1424,6 +1426,92 @@ namespace confighttp {
     nlohmann::json error = {{"error", error_message}};
     response->write(SimpleWeb::StatusCode::server_error_service_unavailable, error.dump(), headers);
   }
+
+
+#ifdef __linux__
+  // Frametop windows (DEE-347): app windows of the user's Hyprland session as their own
+  // outputs, for Frametop panels. Only a Vibepollo started in that session has them.
+  bool validateContentType(resp_https_t response, req_https_t request, const std::string_view &contentType);
+
+  bool frametop_windows_ready(resp_https_t response) {
+    if (!platf::linux_display::hyprland_wlr_session()) {
+      service_unavailable(response, "This Vibepollo isn't the one in the desktop's Hyprland session (VIBEPOLLO_SESSION_BACKEND=hyprland-wlr)");
+      return false;
+    }
+    if (!platf::hyprland_windows::available()) {
+      service_unavailable(response, "Hyprland's IPC socket doesn't answer");
+      return false;
+    }
+    return true;
+  }
+
+  std::optional<nlohmann::json> frametop_windows_body(resp_https_t response, req_https_t request) {
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    auto body = nlohmann::json::parse(ss.str(), nullptr, false);
+    if (!body.is_object()) {
+      bad_request(response, request, "the body must be a JSON object");
+      return std::nullopt;
+    }
+    return body;
+  }
+
+  int frametop_windows_int(const nlohmann::json &body, const char *key) {
+    const auto it = body.find(key);
+    return it != body.end() && it->is_number_integer() ? it->get<int>() : 0;
+  }
+
+  void getFrametopWindows(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request) || !frametop_windows_ready(response)) return;
+    send_response(response, platf::hyprland_windows::list());
+  }
+
+  void getFrametopWindowApps(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request) || !frametop_windows_ready(response)) return;
+    send_response(response, nlohmann::json {{"apps", platf::hyprland_windows::apps()}});
+  }
+
+  void postFrametopWindowOpen(resp_https_t response, req_https_t request) {
+    if (!validateContentType(response, request, "application/json") || !authenticate(response, request) ||
+        !frametop_windows_ready(response)) return;
+    const auto body = frametop_windows_body(response, request);
+    if (!body) return;
+    std::string error;
+    const auto opened = body->contains("app") ?
+      platf::hyprland_windows::launch(body->value("app", ""), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), &error) :
+      platf::hyprland_windows::open(body->value("address", ""), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), &error);
+    if (!opened) return bad_request(response, request, error);
+    auto out = *opened;
+    out["status"] = true;
+    send_response(response, out);
+  }
+
+  void postFrametopWindowResize(resp_https_t response, req_https_t request) {
+    if (!validateContentType(response, request, "application/json") || !authenticate(response, request) ||
+        !frametop_windows_ready(response)) return;
+    const auto body = frametop_windows_body(response, request);
+    if (!body) return;
+    std::string error;
+    if (!platf::hyprland_windows::resize(body->value("output", ""), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), &error)) {
+      return bad_request(response, request, error);
+    }
+    send_response(response, nlohmann::json {{"status", true}});
+  }
+
+  void postFrametopWindowRelease(resp_https_t response, req_https_t request) {
+    if (!validateContentType(response, request, "application/json") || !authenticate(response, request) ||
+        !frametop_windows_ready(response)) return;
+    const auto body = frametop_windows_body(response, request);
+    if (!body) return;
+    if (body->value("all", false)) {
+      return send_response(response, nlohmann::json {{"status", true}, {"released", platf::hyprland_windows::release_all()}});
+    }
+    std::string error;
+    const auto which = body->value("output", body->value("address", ""));
+    if (!platf::hyprland_windows::release(which, &error)) return bad_request(response, request, error);
+    send_response(response, nlohmann::json {{"status", true}, {"released", 1}});
+  }
+#endif
 
   void conflict(resp_https_t response, const std::string &error_message) {
     SimpleWeb::CaseInsensitiveMultimap headers;
@@ -6473,6 +6561,11 @@ namespace confighttp {
     register_api_route("^/api/steam/force_sync$", "POST", postSteamForceSync);
     register_api_route("^/api/steam/launch$", "POST", postSteamLaunch);
 #ifdef __linux__
+    register_api_route("^/api/frametop/windows$", "GET", getFrametopWindows);
+    register_api_route("^/api/frametop/windows/apps$", "GET", getFrametopWindowApps);
+    register_blocking_api_route("^/api/frametop/windows/open$", "POST", postFrametopWindowOpen);
+    register_api_route("^/api/frametop/windows/resize$", "POST", postFrametopWindowResize);
+    register_api_route("^/api/frametop/windows/release$", "POST", postFrametopWindowRelease);
     register_api_route("^/api/lutris/status$", "GET", getLutrisStatus);
     register_api_route("^/api/lutris/games$", "GET", getLutrisGames);
     register_api_route("^/api/lutris/force_sync$", "POST", postLutrisForceSync);

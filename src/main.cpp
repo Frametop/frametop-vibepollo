@@ -45,6 +45,8 @@
 #include "steam_auto_sync.h"
 #ifdef __linux__
   #include "lutris_auto_sync.h"
+  #include "src/platform/linux/hyprland_windows.h"
+  #include "src/platform/linux/session_backend.h"
 #endif
 #include "webrtc_stream.h"
 #ifdef _WIN32
@@ -1049,6 +1051,12 @@ int main(int argc, char *argv[]) {
   }
 
   std::thread httpThread {nvhttp::start};
+#ifdef __linux__
+  // Frametop windows: put back any a crash left on their own outputs, then watch them.
+  if (platf::linux_display::hyprland_wlr_session() && platf::hyprland_windows::available()) {
+    platf::hyprland_windows::start();
+  }
+#endif
   std::thread rtspThread {rtsp_stream::start};
 
 #ifdef _WIN32

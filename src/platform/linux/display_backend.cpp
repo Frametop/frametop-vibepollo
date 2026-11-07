@@ -3,6 +3,7 @@
  * @brief Linux display backend selection and managed desktop implementation.
  */
 #include "display_backend.h"
+#include "hyprland_windows.h"
 #include "kms_outputs.h"
 #include "private_display.h"
 #include "session_backend.h"
@@ -111,6 +112,68 @@ namespace platf::linux_display {
       bool reset_persistence() const override { return false; }
     };
 
+    // The user's own Hyprland session (hyprland_wlr_session): Hyprland's outputs as it
+    // lists them, physical and headless, captured with wlr-screencopy. Nothing here
+    // changes a display; Frametop windows (hyprland_windows) make and drop the headless ones.
+    class hyprland_wlr_backend_t final : public backend_t {
+    public:
+      prepared_display_t prepare_session(rtsp_stream::launch_session_t &session, bool, bool) const override {
+        const bool virtual_requested = session.virtual_display ||
+          session.client_virtual_display_override.value_or(session.client_requests_virtual_display) ||
+          session.virtual_display_mode_override.value_or(config::video.virtual_display_mode) != config::video_t::virtual_display_mode_e::disabled;
+        if (virtual_requested || rtsp_stream::hdr_capture_required(session, config::video)) {
+          session.virtual_display_failed = true;
+          return {false, {}, "A Hyprland session streams its existing SDR outputs only; disable virtual displays and HDR capture"};
+        }
+        const auto devices = enumerate_devices(display_device::DeviceEnumerationDetail::Full);
+        const auto requested = session.output_name_override.value_or(config::video.output_name);
+        const auto selected = devices && !requested.empty() ? std::ranges::find_if(*devices, [&](const auto &device) {
+          return requested == device.m_device_id;
+        }) : display_device::EnumeratedDeviceList::const_iterator {};
+        if (!devices || requested.empty() || selected == devices->end()) {
+          return {false, {}, "Hyprland has no output named \"" + requested + "\""};
+        }
+        session.output_name_override = selected->m_device_id;
+        session.virtual_display = false;
+        session.virtual_display_failed = false;
+        session.virtual_display_device_id.clear();
+        session.virtual_display_ready_since.reset();
+        session.virtual_display_hdr_enabled.reset();
+        session.virtual_display_recreated_on_demand = false;
+        session.virtual_display_needs_resume_apply = false;
+        return {false, *session.output_name_override, {}};
+      }
+
+      capabilities_t capabilities() const override { return {"hyprland-wlr-sdr"}; }
+
+      std::optional<display_device::EnumeratedDeviceList> enumerate_devices(display_device::DeviceEnumerationDetail) const override {
+        display_device::EnumeratedDeviceList result;
+        for (const auto &m : hyprland_windows::monitors()) {
+          display_device::EnumeratedDevice device;
+          device.m_device_id = m.value("name", "");
+          device.m_display_name = device.m_device_id;
+          const auto description = m.value("description", "");
+          device.m_friendly_name = m.value("window", false) ? "Frametop window " + device.m_device_id :
+                                   description.empty()       ? device.m_device_id :
+                                                               description;
+          display_device::EnumeratedDevice::Info info;
+          info.m_resolution = {static_cast<unsigned int>(m.value("width", 0)), static_cast<unsigned int>(m.value("height", 0))};
+          info.m_resolution_scale = 1.0;
+          if (const auto hz = m.value("refresh", 0.0); hz > 0) {
+            info.m_refresh_rate = display_device::Rational {static_cast<unsigned int>(hz * 1000 + 0.5), 1000};
+          }
+          device.m_info = info;
+          result.push_back(std::move(device));
+        }
+        return result;
+      }
+
+      std::string capture_target(const std::string &requested) const override {
+        return requested;
+      }
+      bool reset_persistence() const override { return false; }
+    };
+
     class desktop_backend_t final : public backend_t {
     public:
       prepared_display_t prepare_session(rtsp_stream::launch_session_t &session, bool no_active_sessions, bool allow_display_changes) const override {
@@ -149,6 +212,10 @@ namespace platf::linux_display {
     if (hyprland_kms_session()) {
       static const hyprland_backend_t hyprland;
       return hyprland;
+    }
+    if (hyprland_wlr_session()) {
+      static const hyprland_wlr_backend_t hyprland_wlr;
+      return hyprland_wlr;
     }
 #ifdef SUNSHINE_BUILD_GAMESCOPE
     if (gamescope_capture_selected()) {

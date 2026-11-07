@@ -10,4 +10,11 @@ namespace platf::linux_display {
     const auto *backend = std::getenv("VIBEPOLLO_SESSION_BACKEND");
     return machine && !std::strcmp(machine, "1") && backend && !std::strcmp(backend, "hyprland-kms");
   }
+
+  // Frametop windows: a Vibepollo in the user's Hyprland session itself, capturing
+  // with wlr-screencopy, whose displays are Hyprland's outputs (headless ones too).
+  inline bool hyprland_wlr_session() {
+    const auto *backend = std::getenv("VIBEPOLLO_SESSION_BACKEND");
+    return backend && !std::strcmp(backend, "hyprland-wlr") && !hyprland_kms_session();
+  }
 }  // namespace platf::linux_display
