@@ -51,10 +51,12 @@ namespace platf::hyprland_windows {
       int fullscreen_client = 0;
       clock::time_point seen;  // last captured by a stream, or opened
       bool launching = false;  // the output waits for a launched app's window (no address yet)
+      std::optional<clock::time_point> refade_at;  // fullscreen again then (see refade)
     };
 
     std::recursive_timed_mutex lock;  // held across a whole operation: one window move at a time
     std::map<std::string, hosted_t> hosted;  // by output name
+    std::map<std::string, int> others_fullscreen;  // other windows' fullscreen state at the last watch
     bool started = false;
     std::atomic<bool> stopping {false};  // process exit: the watcher leaves the windows to release_at_exit
 
@@ -261,6 +263,18 @@ namespace platf::hyprland_windows {
         lua("hl.dispatch(hl.dsp.window.fullscreen_state({window = " + window + ", internal = 2, client = 0}))", error);
     }
 
+    // Hyprland 0.56 fades a monitor's top layers (the desktop's bar and dock) under a fullscreen
+    // window, but lifts them back above it when they map after the window went fullscreen (a new
+    // output's bar comes a moment later) and whenever a window elsewhere leaves fullscreen. They'd
+    // cover the top and bottom of the panel. Going fullscreen again fades them: off and on, as
+    // setting the same state again changes nothing.
+    void refade(const std::string &address) {
+      const auto window = lua_string("address:" + address);
+      lua("hl.dispatch(hl.dsp.window.fullscreen_state({window = " + window + ", internal = 0, client = 0})) "
+          "hl.dispatch(hl.dsp.window.fullscreen_state({window = " + window + ", internal = 2, client = 0}))",
+          nullptr);
+    }
+
     // How a window move names a workspace: its number, or "name:NAME" for a named one (Hyprland
     // numbers those below zero).
     std::string workspace_selector(const nlohmann::json &w) {
@@ -367,6 +381,7 @@ namespace platf::hyprland_windows {
         put_back(output);
         return std::nullopt;
       }
+      hosted[output].refade_at = clock::now() + 1500ms;
       BOOST_LOG(info) << "Frametop windows: " << address << " (" << client.value("class", "") << ") on " << output << ' '
                       << width << 'x' << height;
       return nlohmann::json {{"output", output}, {"width", width}, {"height", height}, {"address", address}};
@@ -445,14 +460,30 @@ namespace platf::hyprland_windows {
       if (stopping || hosted.empty()) return;
       const auto clients = query("clients"), monitors = query("monitors all");
       if (!clients || !monitors) return;  // Hyprland didn't answer: change nothing
-      std::set<std::string> windows, outputs;
+      std::set<std::string> windows, outputs, ours;
+      for (const auto &[output, h] : hosted) ours.insert(h.address);
       for (const auto &c : *clients) windows.insert(c.value("address", ""));
       for (const auto &m : *monitors) outputs.insert(m.value("name", ""));
+      // Another window that left fullscreen (or closed while in it) lifted our bars: refade.
+      std::map<std::string, int> fullscreen;
+      for (const auto &c : *clients) {
+        if (!ours.contains(c.value("address", ""))) fullscreen[c.value("address", "")] = c.value("fullscreen", 0);
+      }
+      bool left = false;
+      for (const auto &[address, state] : others_fullscreen) {
+        const auto now_state = fullscreen.find(address);
+        if (state != 0 && (now_state == fullscreen.end() || now_state->second == 0)) left = true;
+      }
+      others_fullscreen = std::move(fullscreen);
       const auto now = clock::now();
       std::vector<std::string> done;
       for (auto &[output, h] : hosted) {
         if (h.launching) continue;  // launch() owns it until its window comes
         if (video::output_is_captured(output)) h.seen = now;
+        if (windows.contains(h.address) && (left || (h.refade_at && now >= *h.refade_at))) {
+          refade(h.address);
+          h.refade_at.reset();
+        }
         if (!windows.contains(h.address)) {
           BOOST_LOG(info) << "Frametop windows: the window on " << output << " closed";
           done.push_back(output);
@@ -643,6 +674,7 @@ namespace platf::hyprland_windows {
       put_back(output);
       return std::nullopt;
     }
+    hosted[output].refade_at = clock::now() + 1500ms;
     BOOST_LOG(info) << "Frametop windows: launched " << app_id << " as " << address << " on " << output;
     return nlohmann::json {{"output", output}, {"width", width}, {"height", height}, {"address", address}};
   }
