@@ -50,9 +50,10 @@ namespace platf::hyprland_windows {
       int fullscreen = 0;  // its fullscreen state before, internal and client
       int fullscreen_client = 0;
       clock::time_point seen;  // last captured by a stream, or opened
+      bool launching = false;  // the output waits for a launched app's window (no address yet)
     };
 
-    std::recursive_mutex lock;  // held across a whole operation: one window move at a time
+    std::recursive_timed_mutex lock;  // held across a whole operation: one window move at a time
     std::map<std::string, hosted_t> hosted;  // by output name
     bool started = false;
     std::atomic<bool> stopping {false};  // process exit: the watcher leaves the windows to release_at_exit
@@ -108,11 +109,38 @@ namespace platf::hyprland_windows {
       return out;
     }
 
-    nlohmann::json ask_json(const std::string &what) {
+    // Hyprland passes window titles through as they are, and one with bytes that aren't UTF-8
+    // (an old X11 app's) would make the whole answer unreadable: those bytes become '?'.
+    std::string valid_utf8(const std::string &in) {
+      std::string out;
+      out.reserve(in.size());
+      for (size_t i = 0; i < in.size();) {
+        const auto c = static_cast<unsigned char>(in[i]);
+        const size_t n = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 0;
+        bool ok = n > 0 && i + n <= in.size();
+        for (size_t k = 1; ok && k < n; ++k) ok = (static_cast<unsigned char>(in[i + k]) & 0xC0) == 0x80;
+        if (ok) {
+          out.append(in, i, n);
+          i += n;
+        } else {
+          out += '?';
+          ++i;
+        }
+      }
+      return out;
+    }
+
+    // A j/ query's array, or nullopt when Hyprland didn't answer or the answer isn't one.
+    std::optional<nlohmann::json> query(const std::string &what) {
       const auto reply = ask("j/" + what);
-      if (!reply) return nlohmann::json::array();
-      auto parsed = nlohmann::json::parse(*reply, nullptr, false);
-      return parsed.is_discarded() ? nlohmann::json::array() : parsed;
+      if (!reply) return std::nullopt;
+      auto parsed = nlohmann::json::parse(valid_utf8(*reply), nullptr, false);
+      if (parsed.is_discarded() || !parsed.is_array()) return std::nullopt;
+      return parsed;
+    }
+
+    nlohmann::json ask_json(const std::string &what) {
+      return query(what).value_or(nlohmann::json::array());
     }
 
     bool run(const std::string &command, std::string *error) {
@@ -233,6 +261,13 @@ namespace platf::hyprland_windows {
         lua("hl.dispatch(hl.dsp.window.fullscreen_state({window = " + window + ", internal = 2, client = 0}))", error);
     }
 
+    // How a window move names a workspace: its number, or "name:NAME" for a named one (Hyprland
+    // numbers those below zero).
+    std::string workspace_selector(const nlohmann::json &w) {
+      const int id = w.value("id", 0);
+      return id > 0 ? std::to_string(id) : "name:" + w.value("name", "");
+    }
+
     // A real monitor's name by Hyprland's id ("" for a window output or none).
     std::string monitor_name(int id) {
       for (const auto &m : ask_json("monitors")) {
@@ -256,7 +291,7 @@ namespace platf::hyprland_windows {
     // workspace rules) picks: take it to the monitor it came from.
     void home_workspace(const std::string &workspace, const std::string &monitor, std::string *error) {
       for (const auto &w : ask_json("workspaces")) {
-        if (std::to_string(w.value("id", 0)) != workspace || !window_output(w.value("monitor", ""))) continue;
+        if (workspace_selector(w) != workspace || !window_output(w.value("monitor", ""))) continue;
         auto target = monitor.empty() || !find_monitor(monitor) ? focused_monitor() : monitor;
         if (!target.empty()) {
           lua("hl.dispatch(hl.dsp.workspace.move({workspace = " + lua_string(workspace) + ", monitor = " +
@@ -274,13 +309,22 @@ namespace platf::hyprland_windows {
     }
 
     // Puts one hosted window back and removes its output. Holds the lock. No logging at exit:
-    // the log may be gone by then.
-    void put_back(const std::string &output, bool log = true) {
+    // the log may be gone by then. False (and the output stays, for the next try) when Hyprland
+    // doesn't answer.
+    bool put_back(const std::string &output, bool log = true) {
       const auto it = hosted.find(output);
-      if (it == hosted.end()) return;
+      if (it == hosted.end()) return true;
+      const auto clients = query("clients");
+      if (!clients) {
+        if (log) BOOST_LOG(warning) << "Frametop windows: Hyprland didn't answer: " << output << " stays for now";
+        return false;
+      }
       const auto h = it->second;
       hosted.erase(it);
-      if (find_client(h.address)) {
+      const bool open = std::any_of(clients->begin(), clients->end(), [&](const auto &c) {
+        return !h.address.empty() && c.value("address", "") == h.address;
+      });
+      if (open) {
         const auto window = lua_string("address:" + h.address);
         std::string error;
         const auto workspace = h.workspace.empty() ? focused_workspace() : h.workspace;
@@ -298,6 +342,7 @@ namespace platf::hyprland_windows {
       if (find_monitor(output)) run("output remove " + output, nullptr);
       if (log) BOOST_LOG(info) << "Frametop windows: " << output << " released (" << h.address << ")";
       save();
+      return true;
     }
 
     std::optional<nlohmann::json> host(const std::string &address, const nlohmann::json &client, int width, int height,
@@ -377,7 +422,11 @@ namespace platf::hyprland_windows {
             if (!in_entry) continue;
             const auto eq = line.find('=');
             if (eq == std::string::npos) continue;
-            const auto key = line.substr(0, eq), value = line.substr(eq + 1);
+            const auto trim = [](std::string t) {  // "Key = value" is allowed too
+              const auto first = t.find_first_not_of(" \t"), last = t.find_last_not_of(" \t\r");
+              return first == std::string::npos ? std::string {} : t.substr(first, last - first + 1);
+            };
+            const auto key = trim(line.substr(0, eq)), value = trim(line.substr(eq + 1));
             if (key == "Name") app.name = value;
             else if (key == "Icon") app.icon = value;
             else if (key == "Exec") app.exec = strip_field_codes(value);
@@ -391,39 +440,50 @@ namespace platf::hyprland_windows {
       return apps;
     }
 
-    void watch() {
-      for (;;) {
-        std::this_thread::sleep_for(kWatch);
-        if (stopping) return;
-        std::lock_guard guard {lock};
-        if (hosted.empty()) continue;
-        std::set<std::string> windows, outputs;
-        for (const auto &c : ask_json("clients")) windows.insert(c.value("address", ""));
-        for (const auto &m : ask_json("monitors all")) outputs.insert(m.value("name", ""));
-        if (windows.empty() && outputs.empty()) continue;  // Hyprland didn't answer: change nothing
-        const auto now = clock::now();
-        std::vector<std::string> done;
-        for (auto &[output, h] : hosted) {
-          if (video::output_is_captured(output)) h.seen = now;
-          if (!windows.contains(h.address)) {
-            BOOST_LOG(info) << "Frametop windows: the window on " << output << " closed";
-            done.push_back(output);
-          } else if (!outputs.contains(output)) {
-            BOOST_LOG(info) << "Frametop windows: " << output << " went away";
-            done.push_back(output);
-          } else if (now - h.seen > kGrace) {
-            BOOST_LOG(info) << "Frametop windows: no stream of " << output << " for a minute";
-            done.push_back(output);
-          }
+    void watch_once() {
+      std::lock_guard guard {lock};
+      if (stopping || hosted.empty()) return;
+      const auto clients = query("clients"), monitors = query("monitors all");
+      if (!clients || !monitors) return;  // Hyprland didn't answer: change nothing
+      std::set<std::string> windows, outputs;
+      for (const auto &c : *clients) windows.insert(c.value("address", ""));
+      for (const auto &m : *monitors) outputs.insert(m.value("name", ""));
+      const auto now = clock::now();
+      std::vector<std::string> done;
+      for (auto &[output, h] : hosted) {
+        if (h.launching) continue;  // launch() owns it until its window comes
+        if (video::output_is_captured(output)) h.seen = now;
+        if (!windows.contains(h.address)) {
+          BOOST_LOG(info) << "Frametop windows: the window on " << output << " closed";
+          done.push_back(output);
+        } else if (!outputs.contains(output)) {
+          BOOST_LOG(info) << "Frametop windows: " << output << " went away";
+          done.push_back(output);
+        } else if (now - h.seen > kGrace) {
+          BOOST_LOG(info) << "Frametop windows: no stream of " << output << " for a minute";
+          done.push_back(output);
         }
-        for (const auto &output : done) put_back(output);
+      }
+      for (const auto &output : done) put_back(output);
+    }
+
+    void watch() {
+      while (!stopping) {
+        std::this_thread::sleep_for(kWatch);
+        try {
+          watch_once();
+        } catch (const std::exception &e) {
+          BOOST_LOG(warning) << "Frametop windows: the watcher skipped a round: " << e.what();
+        }
       }
     }
 
     void release_at_exit() {
       stopping = true;
-      std::unique_lock guard {lock, std::try_to_lock};
-      if (!guard.owns_lock()) return;
+      // The watcher or a launch may hold the lock for a moment: windows left out stay on
+      // outputs nobody sees until the next start.
+      std::unique_lock guard {lock, std::defer_lock};
+      if (!guard.try_lock_for(3s)) return;
       std::vector<std::string> outputs;
       for (const auto &[output, h] : hosted) outputs.push_back(output);
       for (const auto &output : outputs) put_back(output, false);
@@ -487,9 +547,11 @@ namespace platf::hyprland_windows {
       *error = "address must be a Hyprland window address (0x...)";
       return std::nullopt;
     }
-    for (const auto &[output, h] : hosted) {
+    for (auto &[output, h] : hosted) {
       if (h.address != address) continue;
-      // Already out: the Frame asks again after a restart of its own. Same output, new size.
+      // Already out: the Frame asks again after a restart of its own. Same output, new size,
+      // and its grace starts over (the new stream may take a moment to capture it).
+      h.seen = clock::now();
       if (width > 0 && height > 0 && !resize(output, width, height, error)) return std::nullopt;
       const auto m = find_monitor(output);
       return nlohmann::json {{"output", output},
@@ -502,19 +564,20 @@ namespace platf::hyprland_windows {
       *error = "no window " + address;
       return std::nullopt;
     }
-    if ((*client)["workspace"].value("id", 0) < 0) {
+    const auto &workspace = (*client)["workspace"];
+    if (workspace.value("name", "").rfind("special", 0) == 0) {
       *error = "windows on a special workspace stay there";
       return std::nullopt;
     }
     const auto size = client->value("size", nlohmann::json::array({1280, 800}));
     width = even_clamp(width > 0 ? width : size[0].get<int>(), 320, 7680);
     height = even_clamp(height > 0 ? height : size[1].get<int>(), 240, 4320);
-    return host(address, *client, width, height, std::to_string((*client)["workspace"].value("id", 1)),
-                monitor_name(client->value("monitor", -1)), error);
+    return host(address, *client, width, height, workspace_selector(workspace), monitor_name(client->value("monitor", -1)),
+                error);
   }
 
   std::optional<nlohmann::json> launch(const std::string &app_id, int width, int height, std::string *error) {
-    std::lock_guard guard {lock};
+    std::unique_lock guard {lock};
     const auto apps = desktop_apps();
     const auto app = std::find_if(apps.begin(), apps.end(), [&](const auto &a) { return a.id == app_id; });
     if (app == apps.end()) {
@@ -530,41 +593,68 @@ namespace platf::hyprland_windows {
     }
     const auto workspace = create_output(output, width, height, error);
     if (!workspace) return std::nullopt;
+    const auto clients = query("clients");
+    if (!clients) {
+      run("output remove " + output, nullptr);
+      *error = "Hyprland didn't answer";
+      return std::nullopt;
+    }
     std::set<std::string> before;
-    for (const auto &c : ask_json("clients")) before.insert(c.value("address", ""));
+    for (const auto &c : *clients) before.insert(c.value("address", ""));
     if (!lua("hl.exec_cmd(" + lua_string(app->exec) + ", {workspace = " + lua_string(*workspace + " silent") + "})", error)) {
       run("output remove " + output, nullptr);
       return std::nullopt;
     }
+    // The output is spoken for while the app starts, without holding up the other calls.
+    hosted_t reserved;
+    reserved.launching = true;
+    reserved.seen = clock::now();
+    hosted[output] = reserved;
     const auto deadline = clock::now() + kLaunchWait;
-    while (clock::now() < deadline) {
+    std::string address;
+    guard.unlock();
+    while (address.empty() && clock::now() < deadline) {
       std::this_thread::sleep_for(150ms);
       for (const auto &c : ask_json("clients")) {
-        const auto address = c.value("address", "");
-        if (before.contains(address) || !c.value("mapped", false)) continue;
+        const auto a = c.value("address", "");
+        if (before.contains(a) || !c.value("mapped", false)) continue;
         if (std::to_string(c["workspace"].value("id", 0)) != *workspace) continue;
-        hosted_t h;
-        h.address = address;
-        h.seen = clock::now();
-        hosted[output] = h;  // a launched app goes back to the focused workspace
-        save();
-        if (!place(address, *workspace, error)) {
-          put_back(output);
-          return std::nullopt;
-        }
-        BOOST_LOG(info) << "Frametop windows: launched " << app_id << " as " << address << " on " << output;
-        return nlohmann::json {{"output", output}, {"width", width}, {"height", height}, {"address", address}};
+        address = a;
+        break;
       }
     }
-    run("output remove " + output, nullptr);
-    *error = app->name + " didn't open a window in time";
-    return std::nullopt;
+    guard.lock();
+    const auto it = hosted.find(output);
+    if (it == hosted.end() || !it->second.launching) {  // released while the app started
+      *error = app->name + "'s output was released before its window came";
+      return std::nullopt;
+    }
+    if (address.empty()) {
+      hosted.erase(it);
+      run("output remove " + output, nullptr);
+      *error = app->name + " didn't open a window in time";
+      return std::nullopt;
+    }
+    it->second.launching = false;
+    it->second.address = address;  // no workspace: a launched app goes back to the focused one
+    it->second.seen = clock::now();
+    save();
+    if (!place(address, *workspace, error)) {
+      put_back(output);
+      return std::nullopt;
+    }
+    BOOST_LOG(info) << "Frametop windows: launched " << app_id << " as " << address << " on " << output;
+    return nlohmann::json {{"output", output}, {"width", width}, {"height", height}, {"address", address}};
   }
 
   bool resize(const std::string &output, int width, int height, std::string *error) {
     std::lock_guard guard {lock};
     if (!hosted.contains(output)) {
       *error = "no window output " + output;
+      return false;
+    }
+    if (width <= 0 || height <= 0) {
+      *error = "a resize needs a width and a height";
       return false;
     }
     width = even_clamp(width, 320, 7680);
@@ -577,8 +667,9 @@ namespace platf::hyprland_windows {
     for (const auto &[output, h] : hosted) {
       if (output == output_or_address || h.address == output_or_address) {
         const auto name = output;  // put_back erases the entry
-        put_back(name);
-        return true;
+        if (put_back(name)) return true;
+        *error = "Hyprland didn't answer: " + name + " stays out for now";
+        return false;
       }
     }
     *error = "no window output for " + output_or_address;
@@ -589,8 +680,7 @@ namespace platf::hyprland_windows {
     std::lock_guard guard {lock};
     std::vector<std::string> outputs;
     for (const auto &[output, h] : hosted) outputs.push_back(output);
-    for (const auto &output : outputs) put_back(output);
-    return int(outputs.size());
+    return int(std::count_if(outputs.begin(), outputs.end(), [](const auto &output) { return put_back(output); }));
   }
 
   void start() {

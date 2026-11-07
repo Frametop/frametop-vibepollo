@@ -1442,6 +1442,7 @@ namespace confighttp {
       service_unavailable(response, "Hyprland's IPC socket doesn't answer");
       return false;
     }
+    platf::hyprland_windows::start();  // once: if Hyprland wasn't up when Vibepollo started
     return true;
   }
 
@@ -1461,6 +1462,11 @@ namespace confighttp {
     return it != body.end() && it->is_number_integer() ? it->get<int>() : 0;
   }
 
+  std::string frametop_windows_string(const nlohmann::json &body, const char *key) {
+    const auto it = body.find(key);
+    return it != body.end() && it->is_string() ? it->get<std::string>() : std::string {};
+  }
+
   void getFrametopWindows(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request) || !frametop_windows_ready(response)) return;
     send_response(response, platf::hyprland_windows::list());
@@ -1478,8 +1484,8 @@ namespace confighttp {
     if (!body) return;
     std::string error;
     const auto opened = body->contains("app") ?
-      platf::hyprland_windows::launch(body->value("app", ""), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), &error) :
-      platf::hyprland_windows::open(body->value("address", ""), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), &error);
+      platf::hyprland_windows::launch(frametop_windows_string(*body, "app"), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), &error) :
+      platf::hyprland_windows::open(frametop_windows_string(*body, "address"), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), &error);
     if (!opened) return bad_request(response, request, error);
     auto out = *opened;
     out["status"] = true;
@@ -1492,7 +1498,7 @@ namespace confighttp {
     const auto body = frametop_windows_body(response, request);
     if (!body) return;
     std::string error;
-    if (!platf::hyprland_windows::resize(body->value("output", ""), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), &error)) {
+    if (!platf::hyprland_windows::resize(frametop_windows_string(*body, "output"), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), &error)) {
       return bad_request(response, request, error);
     }
     send_response(response, nlohmann::json {{"status", true}});
@@ -1503,11 +1509,12 @@ namespace confighttp {
         !frametop_windows_ready(response)) return;
     const auto body = frametop_windows_body(response, request);
     if (!body) return;
-    if (body->value("all", false)) {
+    if (const auto all = body->find("all"); all != body->end() && all->is_boolean() && all->get<bool>()) {
       return send_response(response, nlohmann::json {{"status", true}, {"released", platf::hyprland_windows::release_all()}});
     }
     std::string error;
-    const auto which = body->value("output", body->value("address", ""));
+    auto which = frametop_windows_string(*body, "output");
+    if (which.empty()) which = frametop_windows_string(*body, "address");
     if (!platf::hyprland_windows::release(which, &error)) return bad_request(response, request, error);
     send_response(response, nlohmann::json {{"status", true}, {"released", 1}});
   }
