@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -26,6 +27,7 @@
 #include <sstream>
 #include <thread>
 
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -517,15 +519,65 @@ namespace platf::hyprland_windows {
       }
     }
 
+    // Hyprland's event socket (.socket2.sock, beside the one it answers on), or -1.
+    int connect_events() {
+      auto path = socket_path();
+      const std::string answers = ".socket.sock";
+      if (path.size() <= answers.size() || !path.ends_with(answers)) return -1;
+      path.replace(path.size() - answers.size(), answers.size(), ".socket2.sock");
+      sockaddr_un address {};
+      address.sun_family = AF_UNIX;
+      if (path.size() >= sizeof address.sun_path) return -1;
+      std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
+      const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+      if (fd < 0) return -1;
+      if (::connect(fd, reinterpret_cast<sockaddr *>(&address), sizeof address) != 0) {
+        ::close(fd);
+        return -1;
+      }
+      return fd;
+    }
+
+    // A round every kWatch, and one at once when Hyprland says a window closed or a monitor
+    // went: a window closed from its panel (Super+W) showed the output's wallpaper until the
+    // next round, up to kWatch later.
     void watch() {
+      int events = -1;
+      std::string pending;
+      auto next = clock::now() + kWatch;
       while (!stopping) {
-        std::this_thread::sleep_for(kWatch);
+        if (events < 0) events = connect_events(), pending.clear();
+        bool now = false;
+        const auto wait = std::chrono::duration_cast<std::chrono::milliseconds>(next - clock::now());
+        if (events >= 0) {
+          pollfd p {events, POLLIN, 0};
+          if (::poll(&p, 1, std::max<int>(0, int(wait.count()))) > 0) {
+            char buf[4096];
+            const auto n = ::read(events, buf, sizeof buf);
+            if (n <= 0) {
+              ::close(events);
+              events = -1;
+            } else {
+              pending.append(buf, size_t(n));
+              for (size_t end; (end = pending.find('\n')) != std::string::npos; pending.erase(0, end + 1)) {
+                const auto line = std::string_view(pending).substr(0, end);
+                now = now || line.starts_with("closewindow>>") || line.starts_with("monitorremoved>>");
+              }
+              if (pending.size() > 65536) pending.clear();  // no newline in that much: not Hyprland's
+            }
+          }
+        } else if (wait.count() > 0) {
+          std::this_thread::sleep_for(wait);
+        }
+        if (!now && clock::now() < next) continue;
+        next = clock::now() + kWatch;
         try {
           end_streams(watch_once());
         } catch (const std::exception &e) {
           BOOST_LOG(warning) << "Frametop windows: the watcher skipped a round: " << e.what();
         }
       }
+      if (events >= 0) ::close(events);
     }
 
     void release_at_exit() {
