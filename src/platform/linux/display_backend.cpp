@@ -148,19 +148,18 @@ namespace platf::linux_display {
 
       std::optional<display_device::EnumeratedDeviceList> enumerate_devices(display_device::DeviceEnumerationDetail) const override {
         display_device::EnumeratedDeviceList result;
-        for (const auto &m : hyprland_windows::monitors()) {
+        for (const auto &m : hyprland_windows::monitor_list()) {
+          if (m.name.empty() || m.width <= 0 || m.height <= 0) continue;
           display_device::EnumeratedDevice device;
-          device.m_device_id = m.value("name", "");
-          device.m_display_name = device.m_device_id;
-          const auto description = m.value("description", "");
-          device.m_friendly_name = m.value("window", false) ? "Frametop window " + device.m_device_id :
-                                   description.empty()       ? device.m_device_id :
-                                                               description;
+          device.m_device_id = m.name;
+          device.m_display_name = m.name;
+          device.m_friendly_name = m.window ? "Frametop window " + m.name : m.description.empty() ? m.name : m.description;
           display_device::EnumeratedDevice::Info info;
-          info.m_resolution = {static_cast<unsigned int>(m.value("width", 0)), static_cast<unsigned int>(m.value("height", 0))};
+          info.m_resolution.m_width = static_cast<unsigned int>(m.width);
+          info.m_resolution.m_height = static_cast<unsigned int>(m.height);
           info.m_resolution_scale = 1.0;
-          if (const auto hz = m.value("refresh", 0.0); hz > 0) {
-            info.m_refresh_rate = display_device::Rational {static_cast<unsigned int>(hz * 1000 + 0.5), 1000};
+          if (m.refresh > 0) {
+            info.m_refresh_rate = display_device::Rational {static_cast<unsigned int>(m.refresh * 1000 + 0.5), 1000};
           }
           device.m_info = info;
           result.push_back(std::move(device));

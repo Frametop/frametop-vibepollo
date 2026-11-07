@@ -84,6 +84,11 @@ std::vector<kms_output_t> kms_outputs() {
  }
  return result;
 }
+namespace hyprland_windows {
+struct monitor_t { std::string name, description; int width=0, height=0; double refresh=0; bool window=false; };
+std::vector<monitor_t> monitors={{"DP-2","Microstep MPG491CX OLED",5120,1440,240.0,false},{"FT-W1","",1000,700,60.0,true},{"HDMI-A-1","",0,0,0,false}};
+std::vector<monitor_t> monitor_list() { return monitors; }
+}
 namespace linux_private_display {
 int mutations=0;
 struct prepared { bool active; std::string output_name, error; };
@@ -108,6 +113,33 @@ int main() {
  setenv("VIBEPOLLO_SESSION_BACKEND","hyprland-kms",1);
  assert(!linux_display::hyprland_kms_session());
  assert(std::string(linux_display::backend().capabilities().backend_name)=="kscreen-vkms");
+ {
+  // Frametop windows: the user session's own instance lists Hyprland's outputs, window ones too.
+  setenv("VIBEPOLLO_SESSION_BACKEND","hyprland-wlr",1);
+  assert(linux_display::hyprland_wlr_session());
+  auto& wlr=linux_display::backend();
+  assert(std::string(wlr.capabilities().backend_name)=="hyprland-wlr-sdr");
+  const auto listed=wlr.enumerate_devices(display_device::DeviceEnumerationDetail::Full);
+  assert(listed && listed->size()==2);  // one without a size isn't listed
+  assert((*listed)[0].m_friendly_name=="Microstep MPG491CX OLED" && (*listed)[1].m_friendly_name=="Frametop window FT-W1");
+  const auto& window=(*listed)[1].m_info;
+  assert(window && window->m_resolution.m_width==1000 && window->m_resolution.m_height==700);
+  assert(std::get<display_device::Rational>(window->m_refresh_rate).m_numerator==60000);
+  rtsp_stream::launch_session_t s; s.output_name_override="FT-W1";
+  const auto prepared=wlr.prepare_session(s,true,true);
+  assert(prepared.error.empty() && prepared.output_name=="FT-W1" && !prepared.owns_output);
+  s={}; s.output_name_override="FT-W9";
+  assert(!wlr.prepare_session(s,true,true).error.empty());
+  s={}; s.output_name_override="FT-W1"; s.virtual_display=true;
+  assert(!wlr.prepare_session(s,true,true).error.empty());
+  s={}; assert(!wlr.prepare_session(s,true,true).error.empty());  // nothing named
+  assert(wlr.capture_target("FT-W1")=="FT-W1");
+  setenv("VIBEPOLLO_MACHINE_HOST","1",1);  // the machine service is never the wlr one
+  assert(!linux_display::hyprland_wlr_session());
+  unsetenv("VIBEPOLLO_MACHINE_HOST");
+  setenv("VIBEPOLLO_SESSION_BACKEND","hyprland-kms",1);
+  assert(!linux_private_display::mutations);
+ }
  setenv("VIBEPOLLO_MACHINE_HOST","1",1);
  auto& backend=linux_display::backend();
  assert(!backend.capabilities().independent_outputs);
@@ -166,7 +198,7 @@ int main() {
  setenv("VIBEPOLLO_SESSION_BACKEND","kwin",1);
  assert(linux_display::backend().capabilities().independent_outputs);
  assert(linux_display::backend().initialize() && linux_private_display::mutations==1);
- std::cout << "PASS: production Hyprland physical output selection, unsupported requests, no topology mutation and KWin fallback\n";
+ std::cout << "PASS: production Hyprland physical output selection, the user session's wlr outputs, unsupported requests, no topology mutation and KWin fallback\n";
 }
 '''
 with tempfile.TemporaryDirectory() as directory:

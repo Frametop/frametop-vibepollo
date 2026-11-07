@@ -17,6 +17,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace platf::hyprland_windows {
   /** The session's Hyprland answers its IPC socket. */
@@ -28,8 +29,16 @@ namespace platf::hyprland_windows {
   /** Installed desktop apps a launch can name: [{"id", "name", "icon"}]. */
   nlohmann::json apps();
 
-  /** The monitors, physical and window outputs, for the display list: [{name, width, height, refresh}]. */
-  nlohmann::json monitors();
+  /** A Hyprland output, physical or a window's, for the display list. */
+  struct monitor_t {
+    std::string name, description;
+    int width = 0, height = 0;
+    double refresh = 0;  // Hz
+    bool window = false;  // a Frametop window's (FT-W1, ...)
+  };
+
+  /** Hyprland's outputs as it lists them now. */
+  std::vector<monitor_t> monitor_list();
 
   /**
    * Gives the window (a Hyprland address, 0x...) its own output, width x height (0: the window's

@@ -431,15 +431,12 @@ namespace platf::hyprland_windows {
     return out;
   }
 
-  nlohmann::json monitors() {
-    nlohmann::json out = nlohmann::json::array();
+  std::vector<monitor_t> monitor_list() {
+    std::vector<monitor_t> out;
     for (const auto &m : ask_json("monitors")) {
-      out.push_back({{"name", m.value("name", "")},
-                     {"description", m.value("description", "")},
-                     {"width", m.value("width", 0)},
-                     {"height", m.value("height", 0)},
-                     {"refresh", m.value("refreshRate", 0.0)},
-                     {"window", window_output(m.value("name", ""))}});
+      const auto name = m.value("name", "");
+      out.push_back({name, m.value("description", ""), m.value("width", 0), m.value("height", 0),
+                     m.value("refreshRate", 0.0), window_output(name)});
     }
     return out;
   }
