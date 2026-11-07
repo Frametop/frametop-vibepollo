@@ -9,6 +9,7 @@
 
 #include "src/config.h"
 #include "src/logging.h"
+#include "src/rtsp.h"
 #include "src/video.h"
 
 #include <algorithm>
@@ -455,11 +456,13 @@ namespace platf::hyprland_windows {
       return apps;
     }
 
-    void watch_once() {
+    // The outputs it released whose window closed or that went away: their streams end
+    // (watch(), outside the lock), or the panel would keep the window's last picture.
+    std::vector<std::string> watch_once() {
       std::lock_guard guard {lock};
-      if (stopping || hosted.empty()) return;
+      if (stopping || hosted.empty()) return {};
       const auto clients = query("clients"), monitors = query("monitors all");
-      if (!clients || !monitors) return;  // Hyprland didn't answer: change nothing
+      if (!clients || !monitors) return {};  // Hyprland didn't answer: change nothing
       std::set<std::string> windows, outputs, ours;
       for (const auto &[output, h] : hosted) ours.insert(h.address);
       for (const auto &c : *clients) windows.insert(c.value("address", ""));
@@ -476,7 +479,7 @@ namespace platf::hyprland_windows {
       }
       others_fullscreen = std::move(fullscreen);
       const auto now = clock::now();
-      std::vector<std::string> done;
+      std::vector<std::string> done, ended;
       for (auto &[output, h] : hosted) {
         if (h.launching) continue;  // launch() owns it until its window comes
         if (video::output_is_captured(output)) h.seen = now;
@@ -487,22 +490,36 @@ namespace platf::hyprland_windows {
         if (!windows.contains(h.address)) {
           BOOST_LOG(info) << "Frametop windows: the window on " << output << " closed";
           done.push_back(output);
+          ended.push_back(output);
         } else if (!outputs.contains(output)) {
           BOOST_LOG(info) << "Frametop windows: " << output << " went away";
           done.push_back(output);
+          ended.push_back(output);
         } else if (now - h.seen > kGrace) {
           BOOST_LOG(info) << "Frametop windows: no stream of " << output << " for a minute";
           done.push_back(output);
         }
       }
       for (const auto &output : done) put_back(output);
+      return ended;
+    }
+
+    // Ends the streams of outputs that went. The client asks for its window again, hears "no
+    // window", and its panel shows that instead of a frozen picture.
+    void end_streams(const std::vector<std::string> &outputs) {
+      for (const auto &output : outputs) {
+        for (const auto &client : rtsp_stream::client_uuids_capturing(output)) {
+          BOOST_LOG(info) << "Frametop windows: ending the stream of " << output;
+          rtsp_stream::disconnect_client_sessions_with_result(client, true);
+        }
+      }
     }
 
     void watch() {
       while (!stopping) {
         std::this_thread::sleep_for(kWatch);
         try {
-          watch_once();
+          end_streams(watch_once());
         } catch (const std::exception &e) {
           BOOST_LOG(warning) << "Frametop windows: the watcher skipped a round: " << e.what();
         }

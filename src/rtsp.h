@@ -407,6 +407,10 @@ namespace rtsp_stream {
    * @return True if one or more sessions were stopped.
    */
   bool disconnect_client_sessions(const std::string &client_uuid);
+  /**
+   * @brief The clients with a session that captures this exact output.
+   */
+  std::list<std::string> client_uuids_capturing(const std::string &output);
   // Preserve abrupt cancellation for administrative callers unless requested.
   client_disconnect_result_t disconnect_client_sessions_with_result(const std::string &client_uuid, bool graceful = false);
 

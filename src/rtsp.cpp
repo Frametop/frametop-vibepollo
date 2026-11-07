@@ -1323,6 +1323,17 @@ namespace rtsp_stream {
       return out;
     }
 
+    std::list<std::string> client_uuids_capturing(const std::string &output) {
+      std::list<std::string> out;
+      auto lg = _session_state.lock();
+      for (const auto &session : _session_state->sessions) {
+        const auto uuid = _session_state->client_uuids.find(session.get());
+        if (uuid == _session_state->client_uuids.end() || uuid->second.empty()) continue;
+        if (stream::session::capture_output(*session) == output) out.push_back(uuid->second);
+      }
+      return out;
+    }
+
     client_disconnect_result_t disconnect_client(const std::string &client_uuid, const bool graceful) {
       host_stream_control::activity_guard_t activity;
       if (!activity) return {};
@@ -1916,6 +1927,11 @@ namespace rtsp_stream {
   std::list<std::string> get_all_session_client_uuids() {
     server.clear(false);
     return server.get_all_client_uuids();
+  }
+
+  std::list<std::string> client_uuids_capturing(const std::string &output) {
+    server.clear(false);
+    return server.client_uuids_capturing(output);
   }
 
   bool disconnect_client_sessions(const std::string &client_uuid) {

@@ -83,6 +83,12 @@ namespace wl {
             break;
           }
         }
+        if (!matched && display_name.rfind("FT-W", 0) == 0) {
+          // A Frametop window output that went (its window closed): never stream another
+          // monitor in its place, which would show the PC's real screen on the window's panel.
+          BOOST_LOG(warning) << "[wlgrab] Window output "sv << display_name << " is gone"sv;
+          return -1;
+        }
         if (!matched) {
           auto streamedMonitor = util::from_view(display_name);
           if (streamedMonitor >= 0 && streamedMonitor < interface.monitors.size()) {

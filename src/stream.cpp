@@ -4037,6 +4037,10 @@ namespace stream {
       return session.device_uuid;
     }
 
+    std::optional<std::string> capture_output(const session_t &session) {
+      return session.config.monitor.capture_output;
+    }
+
     bool uuid_match(const session_t &session, const std::string_view &uuid) {
       return session.device_uuid == uuid || session.history_uuid == uuid;
     }
