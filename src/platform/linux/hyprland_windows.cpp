@@ -46,6 +46,7 @@ namespace platf::hyprland_windows {
     struct hosted_t {
       std::string address;
       std::string workspace;  // where it goes back to ("" for a launched app: the focused one)
+      std::string monitor;  // the monitor that workspace was on ("": the focused one)
       int fullscreen = 0;  // its fullscreen state before, internal and client
       int fullscreen_client = 0;
       clock::time_point seen;  // last captured by a stream, or opened
@@ -171,7 +172,8 @@ namespace platf::hyprland_windows {
     void save() {
       nlohmann::json out = nlohmann::json::object();
       for (const auto &[output, h] : hosted) {
-        out[output] = {{"address", h.address}, {"workspace", h.workspace}, {"fullscreen", h.fullscreen},
+        out[output] = {{"address", h.address}, {"workspace", h.workspace}, {"monitor", h.monitor},
+                       {"fullscreen", h.fullscreen},
                        {"fullscreen_client", h.fullscreen_client}};
       }
       const auto path = state_path();
@@ -231,6 +233,40 @@ namespace platf::hyprland_windows {
         lua("hl.dispatch(hl.dsp.window.fullscreen_state({window = " + window + ", internal = 2, client = 0}))", error);
     }
 
+    // A real monitor's name by Hyprland's id ("" for a window output or none).
+    std::string monitor_name(int id) {
+      for (const auto &m : ask_json("monitors")) {
+        if (m.value("id", -1) == id) {
+          const auto name = m.value("name", "");
+          return window_output(name) ? "" : name;
+        }
+      }
+      return {};
+    }
+
+    std::string focused_monitor() {
+      for (const auto &m : ask_json("monitors")) {
+        if (m.value("focused", false) && !window_output(m.value("name", ""))) return m.value("name", "");
+      }
+      return {};
+    }
+
+    // A workspace the window went back to that didn't exist any more is made on the window
+    // output, and would leave with it to whichever monitor Hyprland (or the desktop's own
+    // workspace rules) picks: take it to the monitor it came from.
+    void home_workspace(const std::string &workspace, const std::string &monitor, std::string *error) {
+      for (const auto &w : ask_json("workspaces")) {
+        if (std::to_string(w.value("id", 0)) != workspace || !window_output(w.value("monitor", ""))) continue;
+        auto target = monitor.empty() || !find_monitor(monitor) ? focused_monitor() : monitor;
+        if (!target.empty()) {
+          lua("hl.dispatch(hl.dsp.workspace.move({workspace = " + lua_string(workspace) + ", monitor = " +
+                lua_string(target) + "}))",
+              error);
+        }
+        return;
+      }
+    }
+
     std::string focused_workspace() {
       const auto reply = ask("j/activeworkspace");
       const auto w = reply ? nlohmann::json::parse(*reply, nullptr, false) : nlohmann::json {};
@@ -257,6 +293,7 @@ namespace platf::hyprland_windows {
             log) {
           BOOST_LOG(warning) << "Frametop windows: can't put " << h.address << " back: " << error;
         }
+        home_workspace(workspace, h.monitor, &error);
       }
       if (find_monitor(output)) run("output remove " + output, nullptr);
       if (log) BOOST_LOG(info) << "Frametop windows: " << output << " released (" << h.address << ")";
@@ -264,7 +301,7 @@ namespace platf::hyprland_windows {
     }
 
     std::optional<nlohmann::json> host(const std::string &address, const nlohmann::json &client, int width, int height,
-                                       std::string workspace_back, std::string *error) {
+                                       std::string workspace_back, std::string monitor_back, std::string *error) {
       const auto output = free_output_name();
       if (output.empty()) {
         *error = "every window output is in use";
@@ -275,6 +312,7 @@ namespace platf::hyprland_windows {
       hosted_t h;
       h.address = address;
       h.workspace = std::move(workspace_back);
+      h.monitor = std::move(monitor_back);
       h.fullscreen = client.value("fullscreen", 0);
       h.fullscreen_client = client.value("fullscreenClient", 0);
       h.seen = clock::now();
@@ -422,7 +460,9 @@ namespace platf::hyprland_windows {
     }
     nlohmann::json outputs = nlohmann::json::array();
     for (const auto &[output, h] : hosted) outputs.push_back({{"output", output}, {"address", h.address}});
-    return {{"windows", windows}, {"outputs", outputs}};
+    // Locked, the desktop draws only its lock screen: window outputs stream black until it's unlocked.
+    const auto locked = ask("locked");
+    return {{"windows", windows}, {"outputs", outputs}, {"locked", locked && locked->rfind("true", 0) == 0}};
   }
 
   nlohmann::json apps() {
@@ -469,7 +509,8 @@ namespace platf::hyprland_windows {
     const auto size = client->value("size", nlohmann::json::array({1280, 800}));
     width = even_clamp(width > 0 ? width : size[0].get<int>(), 320, 7680);
     height = even_clamp(height > 0 ? height : size[1].get<int>(), 240, 4320);
-    return host(address, *client, width, height, std::to_string((*client)["workspace"].value("id", 1)), error);
+    return host(address, *client, width, height, std::to_string((*client)["workspace"].value("id", 1)),
+                monitor_name(client->value("monitor", -1)), error);
   }
 
   std::optional<nlohmann::json> launch(const std::string &app_id, int width, int height, std::string *error) {
@@ -562,8 +603,14 @@ namespace platf::hyprland_windows {
     if (saved.is_object()) {
       for (const auto &[output, h] : saved.items()) {
         if (!window_output(output) || !h.is_object()) continue;
-        hosted[output] = {h.value("address", ""), h.value("workspace", ""), h.value("fullscreen", 0),
-                          h.value("fullscreen_client", 0), clock::now()};
+        hosted_t back;
+        back.address = h.value("address", "");
+        back.workspace = h.value("workspace", "");
+        back.monitor = h.value("monitor", "");
+        back.fullscreen = h.value("fullscreen", 0);
+        back.fullscreen_client = h.value("fullscreen_client", 0);
+        back.seen = clock::now();
+        hosted[output] = back;
       }
       if (!hosted.empty()) BOOST_LOG(info) << "Frametop windows: putting back " << hosted.size() << " left from before";
       release_all();

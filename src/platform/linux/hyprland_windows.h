@@ -23,7 +23,10 @@ namespace platf::hyprland_windows {
   /** The session's Hyprland answers its IPC socket. */
   bool available();
 
-  /** {"windows": [...], "outputs": [...]}: every mapped window and the window outputs open now. */
+  /**
+   * {"windows": [...], "outputs": [...], "locked": bool}: every mapped window, the window outputs
+   * open now, and whether the session is locked (window outputs show nothing until it isn't).
+   */
   nlohmann::json list();
 
   /** Installed desktop apps a launch can name: [{"id", "name", "icon"}]. */
