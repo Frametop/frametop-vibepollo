@@ -21,6 +21,9 @@
 #include <objbase.h>
 #include <shlobj.h>
 #include <shobjidl.h>
+#include <appmodel.h>
+#include <propidl.h>
+#include <propsys.h>
 #include <userenv.h>
 
 #include <algorithm>
@@ -210,6 +213,31 @@ namespace platf::frametop_windows {
         CloseHandle(process);
       }
       return lower(out);
+    }
+
+    // A window's app id (AUMID), the one Store apps are named by: the window's own (a Store
+    // app's frame window says whose it is), else its packaged process's. Empty for others.
+    std::string aumid_of(HWND hwnd) {
+      // PKEY_AppUserModel_ID, here so no property-key library is needed.
+      static constexpr PROPERTYKEY app_id_key {{0x9F4C2855, 0x9F79, 0x4B39, {0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}}, 5};
+      std::wstring out;
+      IPropertyStore *store = nullptr;
+      if (SUCCEEDED(SHGetPropertyStoreForWindow(hwnd, IID_PPV_ARGS(&store))) && store) {
+        PROPVARIANT value;
+        PropVariantInit(&value);
+        if (SUCCEEDED(store->GetValue(app_id_key, &value)) && value.vt == VT_LPWSTR && value.pwszVal) out = value.pwszVal;
+        PropVariantClear(&value);
+        store->Release();
+      }
+      if (out.empty()) {
+        if (const auto process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid_of(hwnd))) {
+          wchar_t id[APPLICATION_USER_MODEL_ID_MAX_LENGTH] {};
+          UINT32 size = UINT32(std::size(id));
+          if (GetApplicationUserModelId(process, &size, id) == ERROR_SUCCESS) out = id;
+          CloseHandle(process);
+        }
+      }
+      return utf_utils::to_utf8(out);
     }
 
     bool cloaked(HWND hwnd) {
@@ -535,6 +563,11 @@ namespace platf::frametop_windows {
       return out;
     }
 
+    bool store_app(const std::string &id) {
+      std::lock_guard guard {store_lock};
+      return std::any_of(store_apps.begin(), store_apps.end(), [&](const auto &app) { return lower(app.id) == lower(id); });
+    }
+
     // Lists Store apps again in the background, when they're older than ten minutes.
     void refresh_store_apps() {
       {
@@ -730,7 +763,11 @@ namespace platf::frametop_windows {
                           {"shown", !IsIconic(hwnd)},
                           {"at", {rect.left, rect.top}},
                           {"app", nullptr}};
-        if (const auto app = app_of(exe)) w["app"] = *app;
+        if (const auto app = app_of(exe)) {
+          w["app"] = *app;
+        } else if (const auto id = aumid_of(hwnd); is_aumid(id) && store_app(id)) {
+          w["app"] = id;  // a Store app's window
+        }
         if (const auto it = output_of.find(hwnd); it != output_of.end()) w["output"] = it->second;
         out.push_back(std::move(w));
       }
@@ -814,6 +851,7 @@ namespace platf::frametop_windows {
         for (const auto hwnd : windows) {
           if (start_app.before.contains(hwnd)) continue;
           if (!start_app.app->exe.empty() && exe_of(pid_of(hwnd)) == start_app.app->exe) return hwnd;
+          if (start_app.app->link.empty() && lower(aumid_of(hwnd)) == lower(start_app.app->id)) return hwnd;  // a Store app
         }
         // A shortcut to a launcher (Update.exe, a console that Terminal takes over) opens its
         // window from another exe, and one Windows can't resolve names none: then the new window
