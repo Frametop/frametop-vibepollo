@@ -176,6 +176,46 @@ static std::atomic<bool> g_capture_item_closed {false};
  * frame pool and shared texture of the new size.
  */
 static bool g_window_target = false;
+static HWND g_target_window = nullptr;
+
+/**
+ * @brief A Frametop window someone moved by hand: the host aims its input at the rectangle it
+ * read when capture began, so once the window stays put somewhere new for a moment, capture
+ * restarts (as a resize does) and input follows. Minimizing doesn't count. Main loop, every
+ * millisecond; reads the window's place every 100 ms.
+ */
+static void watch_window_moves() {
+  using clock = std::chrono::steady_clock;
+  static std::optional<POINT> origin;
+  static std::optional<POINT> moved_to;
+  static clock::time_point last_read, moved_at;
+  if (!g_window_target || !g_target_window) return;
+  const auto now = clock::now();
+  if (now - last_read < std::chrono::milliseconds(100)) return;
+  last_read = now;
+  if (IsIconic(g_target_window)) return;
+  const auto rect = platf::frametop_window_target::capture_rect(g_target_window);
+  if (!rect) return;
+  const POINT at {rect->left, rect->top};
+  if (!origin) {
+    origin = at;
+    return;
+  }
+  if (at.x == origin->x && at.y == origin->y) {
+    moved_to.reset();
+    return;
+  }
+  if (!moved_to || moved_to->x != at.x || moved_to->y != at.y) {
+    moved_to = at;  // still moving
+    moved_at = now;
+    return;
+  }
+  if (now - moved_at >= std::chrono::milliseconds(300) &&
+      !g_capture_item_closed.exchange(true, std::memory_order_acq_rel)) {
+    BOOST_LOG(info) << "Frametop window moved " << origin->x << ',' << origin->y << " -> " << at.x << ',' << at.y
+                    << "; restarting capture";
+  }
+}
 
 /**
  * @brief Pending verification deadline for desktop switches that were not immediately secure.
@@ -671,6 +711,7 @@ public:
       }
       _window = *window;
       g_window_target = true;
+      g_target_window = _window;
       _selected_monitor = MonitorFromWindow(_window, MONITOR_DEFAULTTONEAREST);
       return _selected_monitor != nullptr;
     }
@@ -2745,6 +2786,7 @@ int main(int argc, char *argv[]) {
 
     poll_pending_secure_desktop_transition();
     wgc_capture_manager.update_cursor_capture();
+    watch_window_moves();
 
     std::this_thread::sleep_for(std::chrono::milliseconds(1));  // Reduced from 5ms for lower IPC jitter
   }

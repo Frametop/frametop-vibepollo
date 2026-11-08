@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -470,6 +471,108 @@ namespace platf::frametop_windows {
       return app_cache;
     }
 
+    // Store apps (packaged ones): no Start menu shortcut names them, and only the signed-in
+    // user's shell lists them, so PowerShell's Get-StartApps runs as the user now and then, off
+    // the window thread. Their ids are AUMIDs (Family_publisher!App); Explorer starts them.
+    std::mutex store_lock;
+    std::condition_variable store_loaded;
+    std::vector<app_t> store_apps;  // under store_lock
+    std::optional<clock::time_point> store_at;  // under store_lock: when they were listed
+    bool store_loading = false;  // under store_lock
+
+    bool is_aumid(const std::string &id) {
+      const auto bang = id.find('!');
+      if (bang == std::string::npos || bang == 0 || bang + 1 == id.size() || id.size() > 300) return false;
+      const auto family = id.substr(0, bang);
+      const auto underscore = family.rfind('_');
+      if (underscore == std::string::npos || family.size() - underscore - 1 != 13) return false;  // the publisher id
+      return std::all_of(id.begin(), id.end(), [](unsigned char c) {
+        return std::isalnum(c) || c == '.' || c == '_' || c == '-' || c == '!';
+      });
+    }
+
+    std::vector<app_t> load_store_apps() {
+      const auto out_path = state_path().parent_path() / "frametop_store_apps.json";
+      FILE *file = _wfopen(out_path.c_str(), L"wb");
+      if (!file) return {};
+      boost::filesystem::path working_dir;
+      std::error_code ec;
+      auto child = run_command(false, false,
+                               "powershell.exe -NoProfile -NonInteractive -Command \"[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+                               "Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress\"",
+                               working_dir, bp::this_process::env(), file, ec, nullptr);
+      std::fclose(file);
+      if (ec) {
+        BOOST_LOG(warning) << "Frametop windows: couldn't list Store apps: " << ec.message();
+        return {};
+      }
+      const auto deadline = clock::now() + 30s;
+      while (child.running() && clock::now() < deadline) std::this_thread::sleep_for(100ms);
+      if (child.running()) {
+        child.terminate();
+        BOOST_LOG(warning) << "Frametop windows: listing Store apps took too long";
+        return {};
+      }
+      std::ifstream in {out_path, std::ios::binary};
+      std::string text {std::istreambuf_iterator<char> {in}, {}};
+      if (text.starts_with("\xEF\xBB\xBF")) text.erase(0, 3);
+      auto listed = nlohmann::json::parse(text, nullptr, false);
+      if (listed.is_object()) listed = nlohmann::json::array({listed});  // one app: no array
+      std::vector<app_t> out;
+      if (!listed.is_array()) return out;
+      for (const auto &a : listed) {
+        if (!a.is_object() || !a.contains("AppID") || !a["AppID"].is_string() || !a.contains("Name") || !a["Name"].is_string()) continue;
+        const auto id = a["AppID"].get<std::string>();
+        const auto name = a["Name"].get<std::string>();
+        if (!is_aumid(id) || name.empty()) continue;
+        out.push_back(app_t {id, name, {}, {}});
+      }
+      return out;
+    }
+
+    // Lists Store apps again in the background, when they're older than ten minutes.
+    void refresh_store_apps() {
+      {
+        std::lock_guard guard {store_lock};
+        if (store_loading || (store_at && clock::now() - *store_at < 10min)) return;
+        store_loading = true;
+      }
+      std::thread([] {
+        std::vector<app_t> loaded;
+        try {
+          loaded = load_store_apps();
+        } catch (const std::exception &e) {
+          BOOST_LOG(warning) << "Frametop windows: listing Store apps failed: " << e.what();
+        }
+        {
+          std::lock_guard guard {store_lock};
+          // A failure (no one signed in yet) keeps the last list and tries again in a minute.
+          const bool failed = loaded.empty();
+          if (!failed || !store_at) store_apps = std::move(loaded);
+          store_at = failed ? clock::now() - 9min : clock::now();
+          store_loading = false;
+        }
+        store_loaded.notify_all();
+      }).detach();
+    }
+
+    // Shortcuts, then Store apps no shortcut has the name of. Under the lock, window thread.
+    std::vector<app_t> all_apps() {
+      std::vector<app_t> out = cached_apps();
+      std::set<std::string> names;
+      for (const auto &app : out) names.insert(lower(app.name));
+      std::vector<app_t> store;
+      {
+        std::lock_guard guard {store_lock};
+        store = store_apps;
+      }
+      for (auto &app : store) {
+        if (names.insert(lower(app.name)).second) out.push_back(std::move(app));
+      }
+      std::sort(out.begin(), out.end(), [](const auto &a, const auto &b) { return lower(a.name) < lower(b.name); });
+      return out;
+    }
+
     std::optional<std::string> app_of(const std::wstring &exe) {
       if (exe.empty()) return std::nullopt;
       for (const auto &app : cached_apps()) {
@@ -508,7 +611,16 @@ namespace platf::frametop_windows {
       } else {
         hosted_windows[output].seen = clock::now();
       }
-      if (IsIconic(hwnd) || IsZoomed(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+      if (IsIconic(hwnd) || IsZoomed(hwnd)) {
+        // Restored to its normal size without coming to the front: the desktop's focus stays put.
+        WINDOWPLACEMENT p {sizeof(WINDOWPLACEMENT)};
+        if (GetWindowPlacement(hwnd, &p)) {
+          p.showCmd = SW_SHOWNOACTIVATE;
+          p.flags &= ~UINT(WPF_RESTORETOMAXIMIZED);
+          SetWindowPlacement(hwnd, &p);
+        }
+        if (IsIconic(hwnd) || IsZoomed(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+      }
       size_window(hwnd, width, height);
       save();
       const auto rect = target::capture_rect(hwnd);
@@ -519,7 +631,7 @@ namespace platf::frametop_windows {
       }
       const int w = int(rect->right - rect->left) & ~1, h = int(rect->bottom - rect->top) & ~1;
       BOOST_LOG(info) << "Frametop windows: " << target::address(hwnd) << " (" << utf_utils::to_utf8(title_of(hwnd)) << ") is " << output << ", " << w << 'x' << h;
-      return nlohmann::json {{"output", output}, {"width", w}, {"height", h}, {"address", target::address(hwnd)}};
+      return nlohmann::json {{"output", output}, {"width", w}, {"height", h}, {"address", target::address(hwnd)}, {"title", title_of_utf8(hwnd)}};
     }
 
     void end_streams(const std::vector<std::string> &outputs) {
@@ -624,10 +736,16 @@ namespace platf::frametop_windows {
   }
 
   nlohmann::json apps() {
+    refresh_store_apps();
+    {
+      // The first list waits a little for the Store apps.
+      std::unique_lock guard {store_lock};
+      store_loaded.wait_for(guard, 8s, [] { return store_at.has_value(); });
+    }
     return window_thread().run([] {
       std::lock_guard guard {lock};
       nlohmann::json out = nlohmann::json::array();
-      for (const auto &app : cached_apps()) out.push_back({{"id", app.id}, {"name", app.name}, {"icon", ""}});
+      for (const auto &app : all_apps()) out.push_back({{"id", app.id}, {"name", app.name}, {"icon", ""}});
       return out;
     });
   }
@@ -654,7 +772,7 @@ namespace platf::frametop_windows {
       started_t s;
       {
         std::lock_guard guard {lock};
-        for (const auto &app : cached_apps()) {
+        for (const auto &app : all_apps()) {
           if (app.id == app_id) s.app = app;
         }
       }
@@ -668,7 +786,8 @@ namespace platf::frametop_windows {
       boost::filesystem::path working_dir;
       std::error_code ec;
       const auto env = bp::this_process::env();
-      auto child = run_command(false, false, "explorer.exe \"" + utf_utils::to_utf8(s.app->link) + "\"", working_dir, env, nullptr, ec, nullptr);
+      const auto what = s.app->link.empty() ? "shell:AppsFolder\\" + s.app->id : utf_utils::to_utf8(s.app->link);
+      auto child = run_command(false, false, "explorer.exe \"" + what + "\"", working_dir, env, nullptr, ec, nullptr);
       if (ec) {
         s.error = "couldn't start " + s.app->name + ": " + ec.message();
         return s;
@@ -835,6 +954,7 @@ namespace platf::frametop_windows {
     });
     window_thread().every(std::chrono::duration_cast<std::chrono::milliseconds>(kWatch), watch_once);
     std::atexit(release_at_exit);
+    refresh_store_apps();  // ready by the first app list
   }
 
   bool hosted(const std::string &output) {

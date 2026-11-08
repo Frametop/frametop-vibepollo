@@ -57,8 +57,12 @@
   #include "platform/windows/service_constants.h"
   #include "process.h"
   #include "src/entry_handler.h"
+  #include "system_tray.h"
   #include "system_tray_lifecycle.h"
   #include "update.h"
+  #ifdef _WIN32
+    #include "platform/windows/frametop_windows.h"
+  #endif
 
 using namespace std::literals;
 
@@ -109,6 +113,21 @@ namespace system_tray {
     proc::proc.terminate(true);
   }
 
+#ifdef _WIN32
+  // Frametop window panels (DEE-348): every window a panel holds goes back where it was.
+  void tray_windows_back_cb([[maybe_unused]] struct tray_menu *item) {
+    BOOST_LOG(info) << "Bringing Frametop windows back from system tray"sv;
+    // Off the tray thread: putting windows back waits on the window thread.
+    std::thread([] {
+      const int back = platf::frametop_windows::release_all();
+      const auto text = back == 0 ? "No Frametop panel held a window"s :
+                        back == 1 ? "1 window is back on the desktop"s :
+                                    std::to_string(back) + " windows are back on the desktop";
+      tray_notify("Frametop", text.c_str(), nullptr);
+    }).detach();
+  }
+#endif
+
   void tray_restart_cb([[maybe_unused]] struct tray_menu *item) {
     BOOST_LOG(info) << "Restarting from system tray"sv;
 
@@ -157,6 +176,10 @@ namespace system_tray {
            BOOST_LOG(info) << "Manual update check requested from tray"sv;
            update::trigger_check(true);
          }},
+  #ifdef _WIN32
+        // After the entries code changes by index (0 to 2).
+        {.text = "Bring windows back", .cb = tray_windows_back_cb},
+  #endif
 
         {.text = "Restart", .cb = tray_restart_cb},
         {.text = "Quit", .cb = tray_quit_cb},
