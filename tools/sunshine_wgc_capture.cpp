@@ -17,6 +17,7 @@
 #include <array>
 #include <chrono>
 #include <condition_variable>
+#include <cstring>
 #include <deque>
 #include <filesystem>
 #include <functional>
@@ -39,6 +40,7 @@
 
 // platform includes
 #include <d3d11.h>
+#include <d3dcompiler.h>
 #include <dxgi1_2.h>
 #include <inspectable.h>  // For IInspectable
 #include <KnownFolders.h>
@@ -231,9 +233,14 @@ public:
       _device(std::move(device)),
       _format(format) {}
 
-  /** Set when a popup came, went, moved or drew something new: the frame goes out again. */
+  /** Set when a popup came, went, moved or drew something new; cleared by any frame drawn with them. */
   std::atomic<bool> changed {false};
   std::atomic<uint32_t> resent {0};
+
+  /** Whether the window has any popup now: only then is its last frame kept to send again. */
+  bool active() const {
+    return _count.load(std::memory_order_acquire) > 0;
+  }
 
   /** Main loop: every 50 ms, which windows are the target's popups, and where. */
   void watch(HWND target) {
@@ -241,7 +248,14 @@ public:
     if (now - _last_watch < std::chrono::milliseconds(50)) return;
     _last_watch = now;
     const auto target_rect = platf::frametop_window_target::capture_rect(target);
-    if (!target_rect) return;
+    if (!target_rect) {
+      // Hidden or closed: the helper ends with it, but nothing of it is drawn meanwhile.
+      if (active()) {
+        stop();
+        changed = true;
+      }
+      return;
+    }
     DWORD pid = 0;
     GetWindowThreadProcessId(target, &pid);
 
@@ -250,15 +264,11 @@ public:
       DWORD pid;
       RECT target_rect;
       std::vector<std::pair<HWND, RECT>> found;  // top first
-      bool reached = false;
-    } search {target, pid, *target_rect, {}, false};
+    } search {target, pid, *target_rect, {}};
     EnumWindows(
       [](HWND hwnd, LPARAM param) -> BOOL {
         auto &s = *reinterpret_cast<search_t *>(param);
-        if (hwnd == s.target) {
-          s.reached = true;
-          return FALSE;  // only what's above the window covers it
-        }
+        if (hwnd == s.target) return FALSE;  // only what's above the window covers it
         if (s.found.size() >= kMaxPopups || !IsWindowVisible(hwnd) || IsIconic(hwnd) || !popup_of(hwnd, s.target, s.pid)) return TRUE;
         BOOL cloaked = FALSE;
         if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) return TRUE;
@@ -271,8 +281,10 @@ public:
     );
     std::reverse(search.found.begin(), search.found.end());  // drawn bottom first
 
+    std::erase_if(_refused, [&](const auto &r) { return now - r.second > std::chrono::seconds(1); });
     std::vector<std::shared_ptr<popup_t>> gone, next;
     bool moved = false;
+    int started = 0;
     {
       std::lock_guard guard {_lock};
       moved = _origin.x != target_rect->left || _origin.y != target_rect->top;
@@ -293,12 +305,12 @@ public:
           p->rect = rect;
         }
       }
-      if (!p && std::find(_refused.begin(), _refused.end(), hwnd) == _refused.end()) {
+      const bool refused = std::any_of(_refused.begin(), _refused.end(), [&](const auto &r) { return r.first == hwnd; });
+      // Starting a capture takes a while: at most two a tick, so the main loop keeps up.
+      if (!p && !refused && started < 2) {
+        ++started;
         p = start(hwnd, rect);
-        if (!p) {
-          if (_refused.size() > 64) _refused.erase(_refused.begin());
-          _refused.push_back(hwnd);
-        }
+        if (!p) _refused.emplace_back(hwnd, now);  // tried again in a second
       }
       if (p) next.push_back(std::move(p));
     }
@@ -306,6 +318,7 @@ public:
       std::lock_guard guard {_lock};
       const bool unchanged = next.size() == _popups.size() && std::equal(next.begin(), next.end(), _popups.begin());
       _popups = next;
+      _count = _popups.size();
       return unchanged;
     }();
     for (const auto &p : gone) {
@@ -316,9 +329,14 @@ public:
     if (!same || moved) changed = true;
   }
 
-  /** Under the D3D context lock, right after the window's frame went into `into`. */
-  void draw(ID3D11DeviceContext *context, ID3D11Texture2D *into, UINT width, UINT height) {
+  /**
+   * Under the D3D context lock, right after the window's frame went into `into`: draws each
+   * popup's latest picture over it, clipped to the window. Returns whether it drew any.
+   */
+  bool draw(ID3D11DeviceContext *context, ID3D11Texture2D *into, UINT width, UINT height) {
     std::lock_guard guard {_lock};
+    changed = false;  // this frame has every picture there is so far
+    bool drew = false;
     for (const auto &p : _popups) {
       if (!p->frame) continue;
       winrt::com_ptr<ID3D11Texture2D> texture;
@@ -334,26 +352,21 @@ public:
       D3D11_TEXTURE2D_DESC desc {};
       texture->GetDesc(&desc);
       if (desc.Format != _format) continue;
-      const auto content = p->content;
-      LONG dx = p->rect.left - _origin.x, dy = p->rect.top - _origin.y;
-      LONG sx = 0, sy = 0;
-      LONG w = std::min<LONG>(content.Width, LONG(desc.Width)), h = std::min<LONG>(content.Height, LONG(desc.Height));
-      if (dx < 0) {
-        sx = -dx;
-        w -= sx;
-        dx = 0;
+      const LONG ox = p->rect.left - _origin.x, oy = p->rect.top - _origin.y;  // where its top left goes
+      const LONG cw = std::min<LONG>(p->content.Width, LONG(desc.Width)), ch = std::min<LONG>(p->content.Height, LONG(desc.Height));
+      const LONG left = std::max<LONG>(ox, 0), top = std::max<LONG>(oy, 0);
+      const LONG right = std::min<LONG>(ox + cw, LONG(width)), bottom = std::min<LONG>(oy + ch, LONG(height));
+      if (right <= left || bottom <= top) continue;
+      if (p->blend && (desc.BindFlags & D3D11_BIND_SHADER_RESOURCE) &&
+          blend_over(context, into, texture.get(), D3D11_RECT {left, top, right, bottom}, ox, oy, cw, ch)) {
+        drew = true;
+        continue;
       }
-      if (dy < 0) {
-        sy = -dy;
-        h -= sy;
-        dy = 0;
-      }
-      w = std::min<LONG>(w, LONG(width) - dx);
-      h = std::min<LONG>(h, LONG(height) - dy);
-      if (w <= 0 || h <= 0) continue;
-      const D3D11_BOX box {UINT(sx), UINT(sy), 0, UINT(sx + w), UINT(sy + h), 1};
-      context->CopySubresourceRegion(into, 0, UINT(dx), UINT(dy), 0, texture.get(), 0, &box);
+      const D3D11_BOX box {UINT(left - ox), UINT(top - oy), 0, UINT(right - ox), UINT(bottom - oy), 1};
+      context->CopySubresourceRegion(into, 0, UINT(left), UINT(top), 0, texture.get(), 0, &box);
+      drew = true;
     }
+    return drew;
   }
 
   /** Ends every popup's capture and waits for their callbacks. */
@@ -362,6 +375,7 @@ public:
     {
       std::lock_guard guard {_lock};
       all.swap(_popups);
+      _count = 0;
     }
     for (const auto &p : all) close(*p);
   }
@@ -376,6 +390,7 @@ private:
   struct popup_t {
     HWND hwnd = nullptr;
     RECT rect {};  // under _lock: where it is, in screen pixels
+    bool blend = false;  // see-through in places (a layered or composited window): drawn over, not copied
     Direct3D11CaptureFramePool pool {nullptr};
     GraphicsCaptureSession session {nullptr};
     winrt::event_token token {};
@@ -387,28 +402,44 @@ private:
     std::atomic<uint32_t> frames {0};
   };
 
-  /** A popup: one of its own windows, or a captionless popup (a menu, a dropdown) no window owns. */
+  /**
+   * A popup: one of the window's own (owned by it or by one of its controls), or something that
+   * looks like a menu, dropdown list or tooltip of its process. Never a window of its own, one
+   * Frametop would list (Steam's or an Electron app's frameless windows), nor the taskbar.
+   */
   static bool popup_of(HWND hwnd, HWND target, DWORD pid) {
     DWORD owner_pid = 0;
     GetWindowThreadProcessId(hwnd, &owner_pid);
     if (owner_pid != pid) return false;
-    wchar_t name[32] {};
-    if (GetClassNameW(hwnd, name, 32) && wcscmp(name, L"SysShadow") == 0) return false;  // a menu's see-through shadow
-    // Something owned by a control (a child of the window) counts as the window's too.
+    wchar_t name[64] {};
+    GetClassNameW(hwnd, name, 64);
+    static constexpr const wchar_t *never[] {L"SysShadow", L"Shell_TrayWnd", L"Shell_SecondaryTrayWnd", L"Progman", L"WorkerW", L"Windows.UI.Core.CoreWindow"};
+    for (const auto *n : never) {
+      if (wcscmp(name, n) == 0) return false;
+    }
+    const auto ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    if (ex & WS_EX_APPWINDOW) return false;  // on the taskbar: a window of its own
     const HWND owner = GetWindow(hwnd, GW_OWNER);
     for (HWND o = owner; o; o = GetWindow(o, GW_OWNER)) {
       if (o == target || GetAncestor(o, GA_ROOT) == target) return true;
     }
     if (owner) return false;  // another window's
+    static constexpr const wchar_t *transient[] {L"#32768", L"ComboLBox", L"tooltips_class32"};
+    for (const auto *n : transient) {
+      if (wcscmp(name, n) == 0) return true;
+    }
+    // Unowned: a dropdown list is even a child of the desktop. Only a captionless one that
+    // stays off the taskbar and out of the window list (a tool window, topmost or never active).
     const auto style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-    // A dropdown list is a child of the desktop itself, owned by nothing.
-    return (style & (WS_POPUP | WS_CHILD)) && (style & WS_CAPTION) != WS_CAPTION;
+    return (style & (WS_POPUP | WS_CHILD)) && (style & WS_CAPTION) != WS_CAPTION &&
+           (ex & (WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE));
   }
 
   std::shared_ptr<popup_t> start(HWND hwnd, const RECT &rect) {
     auto p = std::make_shared<popup_t>();
     p->hwnd = hwnd;
     p->rect = rect;
+    p->blend = (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & (WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP)) != 0;
     try {
       GraphicsCaptureItem item {nullptr};
       auto interop = winrt::get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
@@ -475,13 +506,123 @@ private:
     p.frame = nullptr;
   }
 
+  /**
+   * Draws a see-through popup over the window (premultiplied alpha, as Windows composes it), so
+   * its shadow and rounded corners don't come out black. False if that can't be set up; the
+   * caller copies it instead.
+   */
+  bool blend_over(ID3D11DeviceContext *context, ID3D11Texture2D *into, ID3D11Texture2D *popup, const D3D11_RECT &clip, LONG ox, LONG oy, LONG cw, LONG ch) {
+    if (!pipeline(context)) return false;
+    if (_target_of_rtv != into) {
+      _rtv = nullptr;
+      winrt::com_ptr<ID3D11Device> device;
+      context->GetDevice(device.put());
+      if (FAILED(device->CreateRenderTargetView(into, nullptr, _rtv.put()))) return false;
+      _target_of_rtv = into;
+    }
+    winrt::com_ptr<ID3D11Device> device;
+    context->GetDevice(device.put());
+    winrt::com_ptr<ID3D11ShaderResourceView> srv;
+    if (FAILED(device->CreateShaderResourceView(popup, nullptr, srv.put()))) return false;
+    D3D11_MAPPED_SUBRESOURCE mapped {};
+    if (FAILED(context->Map(_constants.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) return false;
+    const int32_t values[4] {int32_t(ox), int32_t(oy), int32_t(cw), int32_t(ch)};
+    std::memcpy(mapped.pData, values, sizeof(values));
+    context->Unmap(_constants.get(), 0);
+
+    const D3D11_VIEWPORT viewport {float(clip.left), float(clip.top), float(clip.right - clip.left), float(clip.bottom - clip.top), 0.0f, 1.0f};
+    ID3D11RenderTargetView *rtv = _rtv.get();
+    ID3D11ShaderResourceView *view = srv.get();
+    ID3D11Buffer *constants = _constants.get();
+    context->IASetInputLayout(nullptr);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+    context->VSSetShader(_vs.get(), nullptr, 0);
+    context->PSSetShader(_ps.get(), nullptr, 0);
+    context->PSSetShaderResources(0, 1, &view);
+    context->PSSetConstantBuffers(0, 1, &constants);
+    context->RSSetState(nullptr);
+    context->RSSetViewports(1, &viewport);
+    context->OMSetBlendState(_blend.get(), nullptr, 0xffffffff);
+    context->OMSetRenderTargets(1, &rtv, nullptr);
+    context->Draw(4, 0);
+    // Nothing stays bound: the shared texture and the popup's pool buffer are used elsewhere.
+    ID3D11ShaderResourceView *no_view = nullptr;
+    context->PSSetShaderResources(0, 1, &no_view);
+    context->OMSetRenderTargets(0, nullptr, nullptr);
+    return true;
+  }
+
+  /** The shaders, blend state and constants for blend_over, made once. */
+  bool pipeline(ID3D11DeviceContext *context) {
+    if (_pipeline_failed) return false;
+    if (_ps) return true;
+    _pipeline_failed = true;
+    static constexpr char source[] = R"(
+cbuffer popup : register(b0) { int2 origin; int2 size; };
+Texture2D picture : register(t0);
+float4 vs(uint id : SV_VertexID) : SV_Position {
+  float2 corner = float2(id & 1, id >> 1);
+  return float4(corner.x * 2 - 1, 1 - corner.y * 2, 0, 1);
+}
+float4 ps(float4 position : SV_Position) : SV_Target {
+  int2 at = int2(position.xy) - origin;
+  if (any(at < 0) || any(at >= size)) discard;
+  return picture.Load(int3(at, 0));
+}
+)";
+    winrt::com_ptr<ID3DBlob> vs_code, ps_code, errors;
+    if (FAILED(D3DCompile(source, sizeof(source) - 1, "frametop_popup", nullptr, nullptr, "vs", "vs_4_0", 0, 0, vs_code.put(), errors.put())) ||
+        FAILED(D3DCompile(source, sizeof(source) - 1, "frametop_popup", nullptr, nullptr, "ps", "ps_4_0", 0, 0, ps_code.put(), errors.put()))) {
+      BOOST_LOG(warning) << "Frametop window popups: shaders didn't compile; popups are copied, not blended";
+      return false;
+    }
+    winrt::com_ptr<ID3D11Device> device;
+    context->GetDevice(device.put());
+    D3D11_BLEND_DESC blend {};
+    auto &target = blend.RenderTarget[0];
+    target.BlendEnable = TRUE;
+    target.SrcBlend = D3D11_BLEND_ONE;  // Windows' pictures are premultiplied
+    target.DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+    target.BlendOp = D3D11_BLEND_OP_ADD;
+    target.SrcBlendAlpha = D3D11_BLEND_ONE;
+    target.DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+    target.BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    target.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    D3D11_BUFFER_DESC constants {};
+    constants.ByteWidth = 16;
+    constants.Usage = D3D11_USAGE_DYNAMIC;
+    constants.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    constants.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    if (!device || FAILED(device->CreateVertexShader(vs_code->GetBufferPointer(), vs_code->GetBufferSize(), nullptr, _vs.put())) ||
+        FAILED(device->CreatePixelShader(ps_code->GetBufferPointer(), ps_code->GetBufferSize(), nullptr, _ps.put())) ||
+        FAILED(device->CreateBlendState(&blend, _blend.put())) ||
+        FAILED(device->CreateBuffer(&constants, nullptr, _constants.put()))) {
+      _vs = nullptr;
+      _ps = nullptr;
+      _blend = nullptr;
+      _constants = nullptr;
+      return false;
+    }
+    _pipeline_failed = false;
+    return true;
+  }
+
   IDirect3DDevice _device;
   DXGI_FORMAT _format;
   std::mutex _lock;
   std::vector<std::shared_ptr<popup_t>> _popups;  // under _lock: drawn in this order
+  std::atomic<std::size_t> _count {0};  // _popups.size()
   POINT _origin {};  // under _lock: the window's top left, in screen pixels
-  std::vector<HWND> _refused;  // main loop: popups that can't be captured
+  std::vector<std::pair<HWND, std::chrono::steady_clock::time_point>> _refused;  // main loop: captures that failed lately
   std::chrono::steady_clock::time_point _last_watch;
+  // Under the D3D context lock (draw's caller holds it): blend_over's pipeline.
+  winrt::com_ptr<ID3D11VertexShader> _vs;
+  winrt::com_ptr<ID3D11PixelShader> _ps;
+  winrt::com_ptr<ID3D11BlendState> _blend;
+  winrt::com_ptr<ID3D11Buffer> _constants;
+  winrt::com_ptr<ID3D11RenderTargetView> _rtv;
+  ID3D11Texture2D *_target_of_rtv = nullptr;
+  bool _pipeline_failed = false;
 };
 
 /**
@@ -1476,8 +1617,12 @@ private:
   UINT _height = 0;  ///< Capture height in pixels
   UINT _width = 0;  ///< Capture width in pixels
   std::shared_ptr<WindowPopups> _popups;  ///< A Frametop window's popups, drawn over it
-  winrt::com_ptr<ID3D11Texture2D> _window_base;  ///< Under the context lock: the window's last frame
-  bool _has_window_base = false;  ///< Under the context lock
+  /// Frames come from the frame callback and, for popups, the main loop: one at a time, in order.
+  std::mutex _producer_mutex;
+  winrt::com_ptr<ID3D11Texture2D> _window_base;  ///< Under the producer lock: the window's last frame
+  bool _has_window_base = false;  ///< Under the producer lock: kept only while it has popups
+  uint64_t _last_delivered_qpc = 0;  ///< Under the producer lock
+  bool _shared_has_popups = false;  ///< Under the context lock: popups drawn into the shared texture
   std::chrono::steady_clock::time_point _last_popup_publish;  ///< Main loop
 
 public:
@@ -2200,42 +2345,83 @@ private:
       return;
     }
 
+    std::lock_guard producer(_producer_mutex);
     keep_window_base(frame_tex);
     deliver_texture(frame_tex, frame_qpc);
   }
 
   /** Under the context lock, after a frame went into the shared texture. */
   void draw_popups() {
-    if (_popups) _popups->draw(_deps->d3d_context.get(), _deps->resource_manager.get_shared_texture().get(), _width, _height);
+    _shared_has_popups = _popups && _popups->draw(_deps->d3d_context.get(), _deps->resource_manager.get_shared_texture().get(), _width, _height);
   }
 
-  /** A Frametop window's frame, kept to send again when only a popup over it changes. */
-  void keep_window_base(const winrt::com_ptr<ID3D11Texture2D> &frame_tex) {
-    if (!_popups) return;
-    std::lock_guard context_lock(_d3d_context_mutex);
-    if (!_window_base) {
-      winrt::com_ptr<ID3D11Device> device;
-      _deps->d3d_context->GetDevice(device.put());
-      D3D11_TEXTURE2D_DESC desc = {};
-      desc.Width = _width;
-      desc.Height = _height;
-      desc.MipLevels = 1;
-      desc.ArraySize = 1;
-      desc.Format = _capture_format;
-      desc.SampleDesc.Count = 1;
-      desc.Usage = D3D11_USAGE_DEFAULT;
-      desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-      if (!device || FAILED(device->CreateTexture2D(&desc, nullptr, _window_base.put()))) {
-        _window_base = nullptr;
-        return;
-      }
+  /** Under the producer lock: a texture to keep the window's last frame in. */
+  bool ensure_window_base() {
+    if (_window_base) return true;
+    winrt::com_ptr<ID3D11Device> device;
+    _deps->d3d_context->GetDevice(device.put());
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = _width;
+    desc.Height = _height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = _capture_format;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    if (!device || FAILED(device->CreateTexture2D(&desc, nullptr, _window_base.put()))) {
+      _window_base = nullptr;
+      return false;
     }
+    return true;
+  }
+
+  /**
+   * Under the producer lock: while a Frametop window has popups, its frame is kept to send again
+   * when only a popup over it changes. Without popups (nearly always) it costs nothing.
+   */
+  void keep_window_base(const winrt::com_ptr<ID3D11Texture2D> &frame_tex) {
+    if (!_popups || !_popups->active()) {
+      _has_window_base = false;
+      return;
+    }
+    std::lock_guard context_lock(_d3d_context_mutex);
+    if (!ensure_window_base()) return;
     _deps->d3d_context->CopyResource(_window_base.get(), frame_tex.get());
     _has_window_base = true;
   }
 
-  /** Into the shared texture now, or through a scratch texture and the delivery thread. */
+  /**
+   * Under the producer lock, when popups came while the window didn't draw: the last frame
+   * published, if nothing is drawn on it and no newer one is on its way. Never waits.
+   */
+  bool window_base_from_shared() {
+    {
+      std::lock_guard lock(_delivery_mutex);
+      // A queued frame draws the popups when it goes out anyway.
+      if (_pending_delivery_frame || std::any_of(_scratch_textures.begin(), _scratch_textures.end(), [](const auto &scratch) {
+            return scratch.state != scratch_state_e::free;
+          })) {
+        return false;
+      }
+    }
+    std::unique_lock context_lock(_d3d_context_mutex, std::try_to_lock);
+    if (!context_lock.owns_lock() || _shared_has_popups || _published_frames.load(std::memory_order_relaxed) == 0) return false;
+    const auto &keyed_mutex = _deps->resource_manager.get_keyed_mutex();
+    const HRESULT hr = keyed_mutex ? keyed_mutex->AcquireSync(0, 0) : E_FAIL;
+    if (hr != S_OK && hr != WAIT_ABANDONED) return false;
+    const bool made = ensure_window_base();
+    if (made) _deps->d3d_context->CopyResource(_window_base.get(), _deps->resource_manager.get_shared_texture().get());
+    keyed_mutex->ReleaseSync(0);
+    _has_window_base = made;
+    return made;
+  }
+
+  /** Under the producer lock: into the shared texture now, or through a scratch texture and the delivery thread. */
   void deliver_texture(const winrt::com_ptr<ID3D11Texture2D> &frame_tex, uint64_t frame_qpc) {
+    // A frame sent again goes out stamped "now", which can be after the next frame's capture time.
+    frame_qpc = std::max(frame_qpc, _last_delivered_qpc + 1);
+    _last_delivered_qpc = frame_qpc;
     if (try_publish_directly(frame_tex, frame_qpc)) {
       return;
     }
@@ -2471,19 +2657,19 @@ public:
   void pump_popups() {
     if (!_popups || !_popups->changed.load(std::memory_order_acquire)) return;
     const auto now = std::chrono::steady_clock::now();
-    const auto fps = std::max<int>(1, g_config.target_fps ? int(g_config.target_fps) : 60);
-    if (now - _last_popup_publish < std::chrono::microseconds(1'000'000 / fps)) return;
-    _popups->changed = false;
+    // No faster than the stream, nor than the admission cap while a game is active.
+    int fps = g_config.target_fps ? int(g_config.target_fps) : 60;
+    if (const auto admission = g_activity_admission_fps.load(std::memory_order_relaxed); admission > 0) fps = std::min(fps, int(admission));
+    if (now - _last_popup_publish < std::chrono::microseconds(1'000'000 / std::max(fps, 1))) return;
+    std::lock_guard producer(_producer_mutex);
+    // A window frame drawn with the popups since clears this: nothing to send then.
+    if (!_popups->changed.load(std::memory_order_acquire)) return;
+    if (!_has_window_base && !window_base_from_shared()) return;  // tried again next tick
     _last_popup_publish = now;
-    winrt::com_ptr<ID3D11Texture2D> base;
-    {
-      std::lock_guard context_lock(_d3d_context_mutex);
-      if (!_has_window_base) return;
-      base = _window_base;
-    }
+    _popups->changed = false;
     LARGE_INTEGER qpc {};
     QueryPerformanceCounter(&qpc);
-    deliver_texture(base, uint64_t(qpc.QuadPart));
+    deliver_texture(_window_base, uint64_t(qpc.QuadPart));
     ++_popups->resent;
   }
 
