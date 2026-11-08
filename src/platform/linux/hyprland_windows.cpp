@@ -7,6 +7,7 @@
  */
 #include "hyprland_windows.h"
 #include "app_window_class.h"
+#include "window_cursor.h"
 
 #include "src/config.h"
 #include "src/logging.h"
@@ -54,6 +55,7 @@ namespace platf::hyprland_windows {
       int fullscreen = 0;  // its fullscreen state before, internal and client
       int fullscreen_client = 0;
       clock::time_point seen;  // last captured by a stream, or opened
+      bool captured = false;  // a stream captured it at the last watch round
       bool launching = false;  // the output waits for a launched app's window (no address yet)
       std::optional<clock::time_point> refade_at;  // fullscreen again then (see refade)
     };
@@ -460,6 +462,32 @@ namespace platf::hyprland_windows {
       return apps;
     }
 
+    // A window output's stream ended (the Frame went, or its Wi-Fi did) while the cursor was on
+    // it: the mouse on the PC would move a cursor nobody sees for the minute's grace.
+    void cursor_off_ended(const nlohmann::json &monitors, const std::set<std::string> &ended, const std::string &home) {
+      const auto reply = ask("j/cursorpos");
+      if (!reply) return;
+      const auto at = nlohmann::json::parse(valid_utf8(*reply), nullptr, false);
+      if (at.is_discarded() || !at.is_object()) return;
+      std::vector<monitor_rect_t> rects;
+      for (const auto &m : monitors) {
+        if (m.value("disabled", false)) continue;
+        const auto name = m.value("name", "");
+        rects.push_back({name, m.value("x", 0), m.value("y", 0), m.value("width", 0), m.value("height", 0),
+                         m.value("scale", 1.0), m.value("transform", 0), m.value("focused", false), window_output(name)});
+      }
+      const auto to = cursor_off(at.value("x", 0), at.value("y", 0), rects, ended, home);
+      if (!to) return;
+      std::string error;
+      if (lua("hl.dispatch(hl.dsp.cursor.move({x = " + std::to_string(to->first) + ", y = " + std::to_string(to->second) + "}))", &error)) {
+        BOOST_LOG(info) << "Frametop windows: the cursor left a window output whose stream ended";
+      } else {
+        BOOST_LOG(warning) << "Frametop windows: couldn't move the cursor off a window output: " << error;
+      }
+    }
+
+    // Ends the streams of outputs that went. The client asks for its window again, hears "no
+    // window", and its panel shows that instead of a frozen picture.
     // The outputs it released whose window closed or that went away: their streams end
     // (watch(), outside the lock), or the panel would keep the window's last picture.
     std::vector<std::string> watch_once() {
@@ -484,9 +512,14 @@ namespace platf::hyprland_windows {
       others_fullscreen = std::move(fullscreen);
       const auto now = clock::now();
       std::vector<std::string> done, ended;
+      std::set<std::string> uncaptured;
+      std::string home;
       for (auto &[output, h] : hosted) {
         if (h.launching) continue;  // launch() owns it until its window comes
-        if (video::output_is_captured(output)) h.seen = now;
+        const bool captured = video::output_is_captured(output);
+        if (captured) h.seen = now;
+        if (h.captured && !captured) uncaptured.insert(output), home = h.monitor;
+        h.captured = captured;
         if (windows.contains(h.address) && (left || (h.refade_at && now >= *h.refade_at))) {
           refade(h.address);
           h.refade_at.reset();
@@ -504,12 +537,11 @@ namespace platf::hyprland_windows {
           done.push_back(output);
         }
       }
+      if (!uncaptured.empty()) cursor_off_ended(*monitors, uncaptured, home);
       for (const auto &output : done) put_back(output);
       return ended;
     }
 
-    // Ends the streams of outputs that went. The client asks for its window again, hears "no
-    // window", and its panel shows that instead of a frozen picture.
     void end_streams(const std::vector<std::string> &outputs) {
       for (const auto &output : outputs) {
         for (const auto &client : rtsp_stream::client_uuids_capturing(output)) {

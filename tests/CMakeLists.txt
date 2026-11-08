@@ -1384,6 +1384,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND SUNSHINE_TEST_ENABLE_COMPONENT)
     add_test(NAME test_component_linux_app_window_class COMMAND test_linux_app_window_class)
     set_tests_properties(test_component_linux_app_window_class PROPERTIES LABELS "component")
 
+    add_executable(test_linux_window_cursor
+        "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_window_cursor.cpp")
+    target_compile_features(test_linux_window_cursor PRIVATE cxx_std_20)
+    add_test(NAME test_component_linux_window_cursor COMMAND test_linux_window_cursor)
+    set_tests_properties(test_component_linux_window_cursor PROPERTIES LABELS "component")
+
     add_executable(test_linux_capability_sanitizer
         "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_capability_sanitizer.cpp")
     target_include_directories(test_linux_capability_sanitizer PRIVATE "${LIBCAP_INCLUDE_DIRS}")
