@@ -441,8 +441,14 @@ namespace platf::frametop_windows {
     }
 
     std::optional<nlohmann::json> open_locked(HWND hwnd, int width, int height, std::string *error) {
+      // "no window ADDRESS" as the Hyprland side says it: ft-stream drops a panel whose window
+      // has gone on that, and only on that.
+      if (!IsWindow(hwnd)) {
+        *error = "no window " + target::address(hwnd);
+        return std::nullopt;
+      }
       if (!app_window(hwnd)) {
-        *error = "no app window " + target::address(hwnd);
+        *error = target::address(hwnd) + " isn't an app window";
         return std::nullopt;
       }
       const auto output = target::output_name(hwnd);
