@@ -509,7 +509,12 @@ namespace platf::frametop_windows {
       const auto deadline = clock::now() + 30s;
       while (child.running() && clock::now() < deadline) std::this_thread::sleep_for(100ms);
       if (child.running()) {
-        child.terminate();
+        if (const HANDLE process = OpenProcess(PROCESS_TERMINATE, FALSE, DWORD(child.id()))) {
+          TerminateProcess(process, 1);
+          CloseHandle(process);
+        }
+        std::error_code wait_ec;
+        child.wait(wait_ec);
         BOOST_LOG(warning) << "Frametop windows: listing Store apps took too long";
         return {};
       }
