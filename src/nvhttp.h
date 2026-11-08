@@ -94,6 +94,9 @@ namespace nvhttp {
   void notify_remote_monitor_released(std::string_view client_uuid, std::uint64_t generation);
   void notify_remote_display_ended(std::string_view client_uuid, std::uint64_t generation);
   void reconcile_remote_monitor_owners();
+  // After a host-owned display (Frametop windows' own) is released: the virtual display cleanup
+  // and display revert that streams ending while it was held deferred.
+  void cleanup_after_owned_display_release();
   // Conservative ownership observation for automatic display recovery. Call
   // under stream_lifecycle_mutex() so a fresh remote-role launch cannot enter
   // between this check and a guarded display mutation.

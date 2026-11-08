@@ -8104,4 +8104,9 @@ launch_session->exact_target_hold.reset();
 
     return removed && save_state();
   }
+  void cleanup_after_owned_display_release() {
+#if defined(_WIN32) || defined(__linux__)
+    cleanup_virtual_display_if_idle();
+#endif
+  }
 }  // namespace nvhttp

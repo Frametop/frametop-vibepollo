@@ -10,6 +10,8 @@
 #include "src/platform/windows/frametop_window_target.h"
 #include "src/platform/windows/misc.h"
 #include "src/platform/windows/utf_utils.h"
+#include "src/nvhttp.h"
+#include "src/remote_display_topology.h"
 #include "src/remote_session.h"
 #include "src/rtsp.h"
 #include "src/video.h"
@@ -669,25 +671,35 @@ namespace platf::frametop_windows {
     std::atomic<bool> display_releasing {false};
     clock::time_point last_hosted;  // under `lock`
 
-    void release_display_locked(reserved_t &r, std::string_view reason) {
-      if (!r.held) return;
-      if (!remote_session::release_monitor(kDisplayId, r.generation, reason)) {
-        BOOST_LOG(warning) << "Frametop windows: their display's release is incomplete; trying again later";
-        return;
-      }
-      BOOST_LOG(info) << "Frametop windows: their display " << r.output << " is gone (" << reason << ')';
+    // True when the display went now. One whose release waits on another stream's capture
+    // draining counts as let go too: the coordinator finishes it, and a new hold (a newer
+    // generation) takes it back.
+    bool release_display_locked(reserved_t &r, std::string_view reason) {
+      if (!r.held) return false;
+      const bool released = remote_session::release_monitor(kDisplayId, r.generation, reason);
+      BOOST_LOG(info) << "Frametop windows: their display " << r.output << (released ? " is gone (" : " goes once other streams drain (") << reason << ')';
       r.held = false;
       r.output.clear();
       display_held = false;
+      return released;
     }
 
     // The windows' display, made or kept (off the window thread: it can take seconds).
     std::optional<std::string> hold_display() {
       auto &r = reserved();
-      std::lock_guard guard {r.lock};
+      std::unique_lock guard {r.lock};
       r.last_use = clock::now();
       if (r.held && !r.output.empty() && find_monitor(r.output)) return r.output;
-      if (!r.held) ++r.generation;  // a new hold; a gone display resumes the same one
+      const bool was_held = r.held;
+      if (!was_held) {
+        // The last Remote Display slot stays a client's.
+        const auto capacity = std::size_t(std::max(0, int(config::video.virtual_display_max_clients)));
+        if (remote_display_topology::instance().managed_client_identity_count() + 2 > capacity) {
+          BOOST_LOG(info) << "Frametop windows: no Remote Display slot to spare for their display; windows stay on their monitors";
+          return std::nullopt;
+        }
+        ++r.generation;  // a new hold; a display that vanished resumes the same one
+      }
       remote_session::monitor_runtime_state_t state;
       const auto deadline = clock::now() + 8s;
       while (true) {
@@ -697,7 +709,10 @@ namespace platf::frametop_windows {
         if (!state.accepted || clock::now() >= deadline) {
           BOOST_LOG(warning) << "Frametop windows: no display of their own (" << (state.error.empty() ? "not ready in time" : state.error)
                              << "); windows stay on their monitors";
-          release_display_locked(r, "not ready");
+          // Only a hold made here goes: windows already out may still be on it.
+          const bool released = !was_held && release_display_locked(r, "not ready");
+          guard.unlock();
+          if (released) nvhttp::cleanup_after_owned_display_release();
           return std::nullopt;
         }
         std::this_thread::sleep_for(500ms);
@@ -710,16 +725,19 @@ namespace platf::frametop_windows {
 
     // From the watcher: the display goes once no window has been out for kDisplayIdle.
     void release_display_if_idle() {
-      auto &r = reserved();
-      {
+      bool released = false;
+      if (!stopping) {
+        auto &r = reserved();
         std::lock_guard guard {r.lock};
         bool none_out;
         {
           std::lock_guard windows {lock};
           none_out = hosted_windows.empty() && clock::now() - last_hosted > kDisplayIdle;
         }
-        if (none_out && clock::now() - r.last_use > kDisplayIdle) release_display_locked(r, "no windows out");
+        if (none_out && clock::now() - r.last_use > kDisplayIdle) released = release_display_locked(r, "no windows out");
       }
+      // What streams that ended while it was held left for later (display revert, cleanup).
+      if (released) nvhttp::cleanup_after_owned_display_release();
       display_releasing = false;
     }
 
