@@ -2892,6 +2892,22 @@ namespace confighttp {
     }
   }
 
+  // The layout editor anchors placements to the nodes it's shown, and a layout may only name
+  // paired clients: displays of no paired client (the Frametop windows' own) aren't shown.
+  static nlohmann::json layout_snapshot(const std::vector<nlohmann::json> &client_nodes) {
+    auto output = remote_display_topology::instance().snapshot(client_nodes);
+    std::set<std::string> paired;
+    for (const auto &client : client_nodes) {
+      if (client.is_object() && client.contains("uuid") && client["uuid"].is_string()) paired.insert(client["uuid"].get<std::string>());
+    }
+    auto &nodes = output["nodes"];
+    for (auto it = nodes.begin(); it != nodes.end();) {
+      const bool unpaired = it->value("kind", "") == "client" && !paired.contains(it->value("id", ""));
+      it = unpaired ? nodes.erase(it) : std::next(it);
+    }
+    return output;
+  }
+
   void getClientDisplayLayout(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request)) return;
     print_req(request);
@@ -2899,7 +2915,7 @@ namespace confighttp {
     const auto clients = nvhttp::get_all_clients();
     std::vector<nlohmann::json> client_nodes;
     for (const auto &client : clients) client_nodes.push_back(client);
-    auto output = remote_display_topology::instance().snapshot(client_nodes);
+    auto output = layout_snapshot(client_nodes);
     output["layout"] = nvhttp::get_remote_display_layout();
     send_response(response, output, "no-store");
   }
@@ -2920,7 +2936,7 @@ namespace confighttp {
       const auto clients = nvhttp::get_all_clients();
       std::vector<nlohmann::json> client_nodes;
       for (const auto &client : clients) client_nodes.push_back(client);
-      auto output = remote_display_topology::instance().snapshot(client_nodes);
+      auto output = layout_snapshot(client_nodes);
       output["layout"] = nvhttp::get_remote_display_layout();
       output["applies_on_next_activation"] = true;
       send_response(response, output, "no-store");

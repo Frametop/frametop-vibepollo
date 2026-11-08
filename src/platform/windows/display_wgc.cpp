@@ -340,6 +340,9 @@ namespace platf::dxgi {
       BOOST_LOG(info) << "Capture size changed ["sv << width_before_rotation << 'x' << height_before_rotation << " -> "sv << desc.Width << 'x' << desc.Height << ']';
       return capture_e::reinit;
     }
+    if (frametop_window_moved_before_first_frame()) {
+      return capture_e::reinit;
+    }
 
     // The capture format can change on the fly; if so, reinit to refresh the
     // image pool and detection state.
@@ -711,6 +714,10 @@ namespace platf::dxgi {
     // captures textures in unrotated physical pixel dimensions, same as VRAM path
     if (desc.Width != width_before_rotation || desc.Height != height_before_rotation) {
       BOOST_LOG(info) << "Capture size changed [" << width_before_rotation << 'x' << height_before_rotation << " -> " << desc.Width << 'x' << desc.Height << ']';
+      _ipc_session->release();
+      return capture_e::reinit;
+    }
+    if (frametop_window_moved_before_first_frame()) {
       _ipc_session->release();
       return capture_e::reinit;
     }

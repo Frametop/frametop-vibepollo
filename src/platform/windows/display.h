@@ -257,6 +257,16 @@ namespace platf::dxgi {
     DXGI_FORMAT capture_format;
     D3D_FEATURE_LEVEL feature_level;
 
+    // A Frametop window output: the window, and where it was when init read it. The capture
+    // helper restarts on moves it sees, but it only starts watching once it runs, so the first
+    // frame checks the window hasn't moved in between (input aims at the rectangle read here).
+    HWND frametop_window_hwnd = nullptr;
+    POINT frametop_window_origin {};
+    bool frametop_window_checked = false;
+
+    /** True, once, if the Frametop window moved between init and the first frame. */
+    bool frametop_window_moved_before_first_frame();
+
     std::unique_ptr<high_precision_timer> timer = create_high_precision_timer();
 
     typedef enum _D3DKMT_SCHEDULINGPRIORITYCLASS {

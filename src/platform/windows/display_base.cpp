@@ -769,6 +769,17 @@ namespace platf::dxgi {
     }
   }
 
+  bool display_base_t::frametop_window_moved_before_first_frame() {
+    if (!frametop_window_hwnd || frametop_window_checked) return false;
+    frametop_window_checked = true;
+    if (IsIconic(frametop_window_hwnd)) return false;
+    const auto rect = frametop_window_target::capture_rect(frametop_window_hwnd);
+    if (!rect || (rect->left == frametop_window_origin.x && rect->top == frametop_window_origin.y)) return false;
+    BOOST_LOG(info) << "Frametop window moved " << frametop_window_origin.x << ',' << frametop_window_origin.y << " -> "
+                    << rect->left << ',' << rect->top << " before its first frame; restarting capture";
+    return true;
+  }
+
   int display_base_t::init(
     const ::video::config_t &config,
     const std::string &display_name,
@@ -1036,6 +1047,9 @@ namespace platf::dxgi {
       height = height_before_rotation = r.bottom - r.top;
       display_rotation = DXGI_MODE_ROTATION_IDENTITY;  // a window's capture isn't turned with its monitor
       input_output_name = display_name;  // input raises the window first (input.cpp)
+      frametop_window_hwnd = *frametop_window;
+      frametop_window_origin = {r.left, r.top};
+      frametop_window_checked = false;
       BOOST_LOG(info) << "Frametop window " << display_name << ": " << width << 'x' << height << " at "
                       << r.left << ',' << r.top << " on " << utf_utils::to_utf8(output_name);
     }

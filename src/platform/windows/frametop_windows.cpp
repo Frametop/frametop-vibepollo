@@ -75,11 +75,9 @@ namespace platf::frametop_windows {
       std::wstring exe;  // its target, lower case, if it's an .exe
     };
 
-    // Guards hosted_windows and the app cache. Every desktop call runs on the window thread.
+    // Guards hosted_windows. Every desktop call runs on the window thread.
     std::mutex lock;
     std::map<std::string, hosted_t> hosted_windows;
-    std::vector<app_t> app_cache;
-    clock::time_point app_cache_at;
     std::atomic<bool> started {false}, stopping {false};
 
     // One thread of ours on the user's Default desktop, where app windows are: HTTP pool threads
@@ -493,13 +491,56 @@ namespace platf::frametop_windows {
       return out;
     }
 
-    // Under the lock, window thread.
-    const std::vector<app_t> &cached_apps() {
-      if (app_cache.empty() || clock::now() - app_cache_at > 60s) {
-        app_cache = load_apps();
-        app_cache_at = clock::now();
+    // Start menu shortcuts, read again each minute on a thread of their own: resolving every
+    // shortcut takes a while, and neither the window thread nor `lock` should wait on it.
+    struct shortcuts_t {
+      std::mutex lock;
+      std::condition_variable loaded;
+      std::vector<app_t> apps;  // under lock
+      std::optional<clock::time_point> at;  // under lock: when they were read
+      bool loading = false;  // under lock
+    };
+
+    // Never destroyed: a read still running at exit outlives the statics.
+    shortcuts_t &shortcuts() {
+      static auto &it = *new shortcuts_t;
+      return it;
+    }
+
+    void refresh_shortcuts() {
+      {
+        std::lock_guard guard {shortcuts().lock};
+        if (shortcuts().loading || (shortcuts().at && clock::now() - *shortcuts().at < 60s)) return;
+        shortcuts().loading = true;
       }
-      return app_cache;
+      std::thread([] {
+        std::vector<app_t> loaded;
+        const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+        try {
+          loaded = load_apps();
+        } catch (const std::exception &e) {
+          BOOST_LOG(warning) << "Frametop windows: reading the Start menu failed: " << e.what();
+        }
+        if (com) CoUninitialize();
+        {
+          std::lock_guard guard {shortcuts().lock};
+          // Nothing read (no one signed in yet) keeps the last list and tries again soon.
+          const bool failed = loaded.empty();
+          if (!failed || !shortcuts().at) shortcuts().apps = std::move(loaded);
+          shortcuts().at = failed ? clock::now() - 50s : clock::now();
+          shortcuts().loading = false;
+        }
+        shortcuts().loaded.notify_all();
+      }).detach();
+    }
+
+    // The shortcuts read last (refreshing them when they're old), waiting up to 8 s for the
+    // first read when `wait`. Never under `lock` with `wait`.
+    std::vector<app_t> shortcut_apps(bool wait) {
+      refresh_shortcuts();
+      std::unique_lock guard {shortcuts().lock};
+      if (wait) shortcuts().loaded.wait_for(guard, 8s, [] { return shortcuts().at.has_value(); });
+      return shortcuts().apps;
     }
 
     // Store apps (packaged ones): no Start menu shortcut names them, and only the signed-in
@@ -619,9 +660,10 @@ namespace platf::frametop_windows {
       }).detach();
     }
 
-    // Shortcuts, then Store apps no shortcut has the name of. Under the lock, window thread.
+    // Shortcuts, then Store apps no shortcut has the name of. Doesn't wait: callers that want
+    // the first lists await them first.
     std::vector<app_t> all_apps() {
-      std::vector<app_t> out = cached_apps();
+      std::vector<app_t> out = shortcut_apps(false);
       std::set<std::string> names;
       for (const auto &app : out) names.insert(lower(app.name));
       std::vector<app_t> listed;
@@ -636,9 +678,9 @@ namespace platf::frametop_windows {
       return out;
     }
 
-    std::optional<std::string> app_of(const std::wstring &exe) {
+    std::optional<std::string> app_of(const std::vector<app_t> &apps, const std::wstring &exe) {
       if (exe.empty()) return std::nullopt;
-      for (const auto &app : cached_apps()) {
+      for (const auto &app : apps) {
         if (app.exe == exe) return app.id;
       }
       return std::nullopt;
@@ -668,8 +710,9 @@ namespace platf::frametop_windows {
     }
 
     std::atomic<bool> display_held {false};
-    std::atomic<bool> display_releasing {false};
+    std::atomic<bool> display_releasing {false};  // a release or a recovery is running
     clock::time_point last_hosted;  // under `lock`
+    std::string display_output;  // under `lock`: reserved().output, for the watcher
 
     // True when the display went now. One whose release waits on another stream's capture
     // draining counts as let go too: the coordinator finishes it, and a new hold (a newer
@@ -681,6 +724,10 @@ namespace platf::frametop_windows {
       r.held = false;
       r.output.clear();
       display_held = false;
+      {
+        std::lock_guard windows {lock};
+        display_output.clear();
+      }
       return released;
     }
 
@@ -720,6 +767,10 @@ namespace platf::frametop_windows {
       if (r.output != state.output) BOOST_LOG(info) << "Frametop windows: their display is " << state.output;
       r.output = state.output;
       r.last_use = clock::now();
+      {
+        std::lock_guard windows {lock};
+        display_output = r.output;
+      }
       return r.output;
     }
 
@@ -751,6 +802,45 @@ namespace platf::frametop_windows {
       const int k = int(hosted_windows.size() + 7) % 8;
       const auto &work = onto->rcWork;
       SetWindowPos(hwnd, nullptr, work.left + 40 * k, work.top + 40 * k, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    }
+
+    // From the watcher: the display went while windows were out on it (a host end-stream, which
+    // ends every stream and drops every Remote Display, or the driver). Windows put the windows
+    // on the PC's own monitors then. Those still streamed go onto a new display; the rest go back.
+    void recover_display() {
+      if (!stopping) {
+        bool gone = false, released = false;
+        {
+          auto &r = reserved();
+          std::lock_guard guard {r.lock};
+          if (r.held && !r.output.empty() && !find_monitor(r.output)) {  // not made again meanwhile
+            gone = true;
+            BOOST_LOG(info) << "Frametop windows: their display " << r.output << " went away with windows out";
+            released = release_display_locked(r, "went away");  // the next hold is a new one
+          }
+        }
+        if (released) nvhttp::cleanup_after_owned_display_release();
+        std::vector<std::string> streamed;
+        if (gone) {
+          window_thread().run([&] {
+            std::lock_guard guard {lock};
+            std::vector<std::string> unseen;
+            for (const auto &[output, h] : hosted_windows) (video::output_is_captured(output) ? streamed : unseen).push_back(output);
+            for (const auto &output : unseen) put_back(output);
+            return 0;
+          });
+        }
+        if (const auto display = streamed.empty() ? std::nullopt : hold_display()) {
+          window_thread().run([&] {
+            std::lock_guard guard {lock};
+            for (const auto &output : streamed) {
+              if (const auto it = hosted_windows.find(output); it != hosted_windows.end()) place_on(it->second.hwnd, *display);
+            }
+            return 0;
+          });
+        }
+      }
+      display_releasing = false;
     }
 
     std::optional<nlohmann::json> open_locked(HWND hwnd, int width, int height, std::string *error, const std::optional<std::string> &display) {
@@ -827,6 +917,10 @@ namespace platf::frametop_windows {
         const auto now = clock::now();
         if (!hosted_windows.empty()) {
           last_hosted = now;
+          if (display_held && !display_output.empty() && !display_releasing && !find_monitor(display_output) &&
+              !display_releasing.exchange(true)) {
+            std::thread(recover_display).detach();
+          }
         } else if (display_held && now - last_hosted > kDisplayIdle && !display_releasing.exchange(true)) {
           std::thread(release_display_if_idle).detach();
         }
@@ -849,6 +943,8 @@ namespace platf::frametop_windows {
       end_streams(ended);
     }
 
+    // The display needs nothing here: Vibepollo's shutdown already dropped every Remote Display
+    // (notify_monitor_shutdown and the cleanup after it, at the end of nvhttp::start).
     void release_at_exit() {
       stopping = true;  // and the log may be gone by now: put_back says nothing
       auto done = std::make_shared<std::promise<void>>();
@@ -876,7 +972,8 @@ namespace platf::frametop_windows {
 
   nlohmann::json list() {
     refresh_store_apps();  // when they're old: a Store window is named by its app
-    return window_thread().run([] {
+    const auto apps = shortcut_apps(true);  // and the others by their shortcut
+    return window_thread().run([&apps] {
       std::lock_guard guard {lock};
       std::map<HWND, std::string> output_of;
       for (const auto &[output, h] : hosted_windows) output_of[h.hwnd] = output;
@@ -905,7 +1002,7 @@ namespace platf::frametop_windows {
                           {"shown", !IsIconic(hwnd)},
                           {"at", {rect.left, rect.top}},
                           {"app", nullptr}};
-        if (const auto app = app_of(exe)) {
+        if (const auto app = app_of(apps, exe)) {
           w["app"] = *app;
         } else if (const auto id = has_store_apps() ? aumid_of(hwnd) : std::string {}; !id.empty() && store_app(id)) {
           w["app"] = id;  // a Store app's window
@@ -920,13 +1017,11 @@ namespace platf::frametop_windows {
   }
 
   nlohmann::json apps() {
-    await_store_apps();  // the first list waits a little for them
-    return window_thread().run([] {
-      std::lock_guard guard {lock};
-      nlohmann::json out = nlohmann::json::array();
-      for (const auto &app : all_apps()) out.push_back({{"id", app.id}, {"name", app.name}, {"icon", ""}});
-      return out;
-    });
+    shortcut_apps(true);  // the first list waits a little for them
+    await_store_apps();
+    nlohmann::json out = nlohmann::json::array();
+    for (const auto &app : all_apps()) out.push_back({{"id", app.id}, {"name", app.name}, {"icon", ""}});
+    return out;
   }
 
   std::optional<nlohmann::json> open(const std::string &address, int width, int height, std::string *error) {
@@ -945,7 +1040,11 @@ namespace platf::frametop_windows {
   }
 
   std::optional<nlohmann::json> launch(const std::string &app_id, int width, int height, std::string *error) {
-    if (app_id.find('!') != std::string::npos) await_store_apps();  // a Store app's AUMID
+    if (app_id.find('!') != std::string::npos) {
+      await_store_apps();  // a Store app's AUMID
+    } else {
+      shortcut_apps(true);
+    }
     struct started_t {
       std::optional<app_t> app;
       std::set<HWND> before;
@@ -953,11 +1052,8 @@ namespace platf::frametop_windows {
     };
     auto start_app = window_thread().run([&] {
       started_t s;
-      {
-        std::lock_guard guard {lock};
-        for (const auto &app : all_apps()) {
-          if (app.id == app_id) s.app = app;
-        }
+      for (const auto &app : all_apps()) {
+        if (app.id == app_id) s.app = app;
       }
       if (!s.app) {
         s.error = "no app " + app_id;
@@ -1095,8 +1191,10 @@ namespace platf::frametop_windows {
   }
 
   int release_all() {
+    if (stopping) return 0;  // the tray's thread, at exit: release_at_exit has them
     return window_thread().run([] {
       std::lock_guard guard {lock};
+      if (stopping) return 0;
       std::vector<std::string> outputs;
       for (const auto &[output, h] : hosted_windows) outputs.push_back(output);
       for (const auto &output : outputs) put_back(output);
@@ -1139,7 +1237,8 @@ namespace platf::frametop_windows {
     });
     window_thread().every(std::chrono::duration_cast<std::chrono::milliseconds>(kWatch), watch_once);
     std::atexit(release_at_exit);
-    refresh_store_apps();  // ready by the first app list
+    refresh_shortcuts();  // ready by the first app list
+    refresh_store_apps();
   }
 
   bool hosted(const std::string &output) {
