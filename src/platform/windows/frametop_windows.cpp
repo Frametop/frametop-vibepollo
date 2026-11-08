@@ -21,10 +21,12 @@
 #include <objbase.h>
 #include <shlobj.h>
 #include <shobjidl.h>
+#include <userenv.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdlib>
 #include <deque>
@@ -33,7 +35,9 @@
 #include <functional>
 #include <future>
 #include <map>
+#include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <thread>
 #include <vector>
@@ -53,6 +57,7 @@ namespace platf::frametop_windows {
 
     struct hosted_t {
       HWND hwnd = nullptr;
+      DWORD pid = 0;  // its process: an address a closed window freed may name another one later
       WINDOWPLACEMENT before {sizeof(WINDOWPLACEMENT)};  // where it was, restored on release
       clock::time_point seen;  // last time a stream captured it (or when it opened)
     };
@@ -96,10 +101,10 @@ namespace platf::frametop_windows {
       }
 
     private:
-      void ensure_started() {
-        if (thread.joinable()) return;
-        thread = std::thread([this] { loop(); });
-        thread.detach();
+      void ensure_started() {  // under queue_lock
+        if (running) return;
+        running = true;
+        std::thread([this] { loop(); }).detach();
       }
 
       // Vibepollo may start before anyone signs in: until the Default desktop is there, each job
@@ -154,7 +159,7 @@ namespace platf::frametop_windows {
       std::deque<std::function<void()>> queue;
       std::function<void()> tick;
       std::chrono::milliseconds tick_interval {kWatch};
-      std::thread thread;
+      bool running = false;  // under queue_lock
       bool bound = false, warned = false;  // window thread only
     };
 
@@ -176,6 +181,11 @@ namespace platf::frametop_windows {
     std::wstring class_of(HWND hwnd) {
       wchar_t name[256] {};
       return GetClassNameW(hwnd, name, int(std::size(name))) > 0 ? name : L"";
+    }
+
+    std::wstring title_of(HWND hwnd);
+    std::string title_of_utf8(HWND hwnd) {
+      return utf_utils::to_utf8(title_of(hwnd));
     }
 
     std::wstring title_of(HWND hwnd) {
@@ -208,6 +218,24 @@ namespace platf::frametop_windows {
 
     // An app window, as Alt+Tab lists them: shown (or minimized), not a tool window, not owned
     // by another (unless it asks to be on the taskbar), not cloaked, and titled.
+    // The window it hosts is still there (and its address names no other window since).
+    bool still(const hosted_t &h) {
+      return IsWindow(h.hwnd) && pid_of(h.hwnd) == h.pid;
+    }
+
+    // How a window comes back without taking the focus from what the user is doing now.
+    UINT quietly(UINT show) {
+      switch (show) {
+        case SW_SHOWMINIMIZED:
+        case SW_MINIMIZE:
+          return SW_SHOWMINNOACTIVE;
+        case SW_SHOWMAXIMIZED:
+          return SW_SHOWMAXIMIZED;  // Windows has no maximize that keeps the focus elsewhere
+        default:
+          return SW_SHOWNOACTIVATE;
+      }
+    }
+
     bool app_window(HWND hwnd) {
       if (!hwnd || !IsWindow(hwnd) || !IsWindowVisible(hwnd) || cloaked(hwnd)) return false;
       const auto ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
@@ -289,6 +317,8 @@ namespace platf::frametop_windows {
       for (const auto &[output, h] : hosted_windows) {
         const auto &p = h.before;
         out[output] = {{"address", target::address(h.hwnd)},
+                       {"pid", h.pid},
+                       {"class", utf_utils::to_utf8(class_of(h.hwnd))},
                        {"show", p.showCmd},
                        {"flags", p.flags},
                        {"normal", {p.rcNormalPosition.left, p.rcNormalPosition.top, p.rcNormalPosition.right, p.rcNormalPosition.bottom}},
@@ -343,11 +373,15 @@ namespace platf::frametop_windows {
       const auto h = it->second;
       hosted_windows.erase(it);
       save();
-      if (!IsWindow(h.hwnd)) return true;
+      if (!still(h)) return true;
       const auto onto = drop ? find_monitor(drop->monitor) : std::nullopt;
       if (!onto) {
-        SetWindowPlacement(h.hwnd, &h.before);
-        BOOST_LOG(info) << "Frametop windows: " << output << " back where it was";
+        // Asynchronously: a window that stopped answering mustn't hold up the role.
+        auto before = h.before;
+        before.showCmd = quietly(before.showCmd);
+        before.flags |= WPF_ASYNCWINDOWPLACEMENT;
+        SetWindowPlacement(h.hwnd, &before);
+        if (!stopping) BOOST_LOG(info) << "Frametop windows: " << output << " back where it was";
         return true;
       }
       // Dropped on one of this PC's displays: there, held where it was held.
@@ -361,7 +395,7 @@ namespace platf::frametop_windows {
       int y = int(m.top + drop->v * (m.bottom - m.top) - drop->fy * ht);
       x = std::clamp<int>(x, work.left, std::max<int>(work.left, work.right - w));
       y = std::clamp<int>(y, work.top, std::max<int>(work.top, work.bottom - ht));
-      SetWindowPos(h.hwnd, HWND_TOP, x - (frame->left - outer.left), y - (frame->top - outer.top), 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+      SetWindowPos(h.hwnd, HWND_TOP, x - (frame->left - outer.left), y - (frame->top - outer.top), 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
       BOOST_LOG(info) << "Frametop windows: " << output << " dropped onto " << drop->monitor;
       return true;
     }
@@ -372,10 +406,11 @@ namespace platf::frametop_windows {
       if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_CommonPrograms, 0, nullptr, &path))) roots.emplace_back(path, "");
       CoTaskMemFree(path);
       path = nullptr;
-      if (const auto token = retrieve_users_token(false)) {
-        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Programs, 0, token, &path))) roots.emplace_back(path, "");
+      const HANDLE user_token = retrieve_users_token(false);
+      const std::unique_ptr<void, decltype(&CloseHandle)> close_token {user_token, &CloseHandle};
+      if (user_token) {
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Programs, 0, user_token, &path))) roots.emplace_back(path, "");
         CoTaskMemFree(path);
-        CloseHandle(token);
       }
       IShellLinkW *link = nullptr;
       if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW, reinterpret_cast<void **>(&link)))) return {};
@@ -400,7 +435,10 @@ namespace platf::frametop_windows {
           if (SUCCEEDED(file->Load(it->path().c_str(), STGM_READ)) &&
               SUCCEEDED(link->GetPath(target_path, int(std::size(target_path)), nullptr, SLGP_RAWPATH))) {
             wchar_t expanded[MAX_PATH * 2] {};
-            ExpandEnvironmentStringsW(target_path, expanded, DWORD(std::size(expanded)));
+            // The user's %LOCALAPPDATA%, not the service's.
+            if (!user_token || !ExpandEnvironmentStringsForUserW(user_token, target_path, expanded, DWORD(std::size(expanded)))) {
+              ExpandEnvironmentStringsW(target_path, expanded, DWORD(std::size(expanded)));
+            }
             exe = lower(std::wstring {expanded});
           }
           if (!exe.empty() && !exe.ends_with(L".exe")) continue;  // documents, web links
@@ -451,10 +489,16 @@ namespace platf::frametop_windows {
         *error = target::address(hwnd) + " isn't an app window";
         return std::nullopt;
       }
+      // Sizing waits for the window's app: one that has stopped answering would hold the role.
+      if (IsHungAppWindow(hwnd)) {
+        *error = title_of_utf8(hwnd) + " isn't answering";
+        return std::nullopt;
+      }
       const auto output = target::output_name(hwnd);
       if (!hosted_windows.contains(output)) {
         hosted_t h;
         h.hwnd = hwnd;
+        h.pid = pid_of(hwnd);
         if (!GetWindowPlacement(hwnd, &h.before)) {
           *error = "Windows didn't say where " + target::address(hwnd) + " is";
           return std::nullopt;
@@ -498,7 +542,7 @@ namespace platf::frametop_windows {
         const auto now = clock::now();
         std::vector<std::string> done;
         for (auto &[output, h] : hosted_windows) {
-          if (!IsWindow(h.hwnd)) {
+          if (!still(h)) {
             BOOST_LOG(info) << "Frametop windows: the window on " << output << " closed";
             done.push_back(output);
             ended.push_back(output);
@@ -515,17 +559,23 @@ namespace platf::frametop_windows {
     }
 
     void release_at_exit() {
-      stopping = true;
-      auto done = std::async(std::launch::async, [] {
-        return window_thread().run([] {
-          std::lock_guard guard {lock};
-          std::vector<std::string> outputs;
-          for (const auto &[output, h] : hosted_windows) outputs.push_back(output);
-          for (const auto &output : outputs) put_back(output);
-          return int(outputs.size());
-        });
-      });
-      done.wait_for(3s);  // windows left out go back at the next start
+      stopping = true;  // and the log may be gone by now: put_back says nothing
+      auto done = std::make_shared<std::promise<void>>();
+      auto finished = done->get_future();
+      std::thread([done] {
+        try {
+          window_thread().run([] {
+            std::lock_guard guard {lock};
+            std::vector<std::string> outputs;
+            for (const auto &[output, h] : hosted_windows) outputs.push_back(output);
+            for (const auto &output : outputs) put_back(output);
+            return 0;
+          });
+        } catch (...) {
+        }
+        done->set_value();
+      }).detach();
+      finished.wait_for(3s);  // windows left out go back at the next start
     }
   }  // namespace
 
@@ -639,10 +689,11 @@ namespace platf::frametop_windows {
         const auto windows = app_windows();
         for (const auto hwnd : windows) {
           if (start_app.before.contains(hwnd)) continue;
-          if (start_app.app->exe.empty() || exe_of(pid_of(hwnd)) == start_app.app->exe) return hwnd;
+          if (!start_app.app->exe.empty() && exe_of(pid_of(hwnd)) == start_app.app->exe) return hwnd;
         }
         // A shortcut to a launcher (Update.exe, a console that Terminal takes over) opens its
-        // window from another exe: then the new window in front, once the exe's own is late.
+        // window from another exe, and one Windows can't resolve names none: then the new window
+        // in front, once the exe's own is late.
         const auto front = GetForegroundWindow();
         if (any_new && front && !start_app.before.contains(front) && std::find(windows.begin(), windows.end(), front) != windows.end()) return front;
         return std::nullopt;
@@ -672,23 +723,41 @@ namespace platf::frametop_windows {
         *error = "no window output " + output;
         return false;
       }
+      if (!still(it->second)) {
+        *error = "the window closed";
+        return false;
+      }
+      if (IsHungAppWindow(it->second.hwnd)) {
+        *error = title_of_utf8(it->second.hwnd) + " isn't answering";
+        return false;
+      }
       size_window(it->second.hwnd, width, height);
       return true;
     });
   }
 
   bool release(const std::string &output_or_address, std::string *error, const drop_t *drop) {
-    return window_thread().run([&] {
+    std::optional<drop_t> onto;
+    if (drop && !drop->monitor.empty()) {
+      onto = *drop;
+      for (auto *f : {&onto->u, &onto->v, &onto->fx, &onto->fy}) *f = std::isfinite(*f) ? std::clamp(*f, 0.0, 1.0) : 0.5;
+    }
+    std::string released;
+    const bool ok = window_thread().run([&] {
       std::lock_guard guard {lock};
       for (const auto &[output, h] : hosted_windows) {
         if (output == output_or_address || boost::iequals(target::address(h.hwnd), output_or_address)) {
-          const auto name = output;  // put_back erases the entry
-          return put_back(name, drop && !drop->monitor.empty() ? drop : nullptr);
+          released = output;  // put_back erases the entry
+          return put_back(released, onto ? &*onto : nullptr);
         }
       }
       *error = "no window output for " + output_or_address;
       return false;
     });
+    // Back on its desktop, the window is no output any more: a stream of it would send input
+    // to where it was. (Linux removes the output, which ends it.)
+    if (ok) end_streams({released});
+    return ok;
   }
 
   std::optional<nlohmann::json> at(const std::string &monitor, double u, double v, std::string *error) {
@@ -727,6 +796,7 @@ namespace platf::frametop_windows {
       std::vector<std::string> outputs;
       for (const auto &[output, h] : hosted_windows) outputs.push_back(output);
       for (const auto &output : outputs) put_back(output);
+      end_streams(outputs);
       return int(outputs.size());
     });
   }
@@ -740,16 +810,23 @@ namespace platf::frametop_windows {
       const auto saved = file ? nlohmann::json::parse(file, nullptr, false) : nlohmann::json {};
       if (!saved.is_object()) return 0;
       int back = 0;
-      for (const auto &[output, s] : saved.items()) {
+      for (const auto &[output, s] : saved.items()) try {
         const auto hwnd = target::parse(output);
         if (!hwnd || !s.is_object() || !IsWindow(*hwnd)) continue;
+        // After a sign-out or a restart, the address may name another window now.
+        if (!s.contains("pid") || s.value("pid", DWORD(0)) != pid_of(*hwnd) ||
+            s.value("class", std::string {}) != utf_utils::to_utf8(class_of(*hwnd))) continue;
         WINDOWPLACEMENT p {sizeof(WINDOWPLACEMENT)};
         p.showCmd = s.value("show", UINT(SW_SHOWNORMAL));
         p.flags = s.value("flags", UINT(0));
         if (const auto n = s.value("normal", nlohmann::json::array()); n.size() == 4) p.rcNormalPosition = {n[0].get<LONG>(), n[1].get<LONG>(), n[2].get<LONG>(), n[3].get<LONG>()};
         if (const auto mn = s.value("min", nlohmann::json::array()); mn.size() == 2) p.ptMinPosition = {mn[0].get<LONG>(), mn[1].get<LONG>()};
         if (const auto mx = s.value("max", nlohmann::json::array()); mx.size() == 2) p.ptMaxPosition = {mx[0].get<LONG>(), mx[1].get<LONG>()};
+        p.showCmd = quietly(p.showCmd);
+        p.flags |= WPF_ASYNCWINDOWPLACEMENT;
         if (SetWindowPlacement(*hwnd, &p)) ++back;
+      } catch (const std::exception &e) {
+        BOOST_LOG(warning) << "Frametop windows: " << output << " in the state file: " << e.what();
       }
       hosted_windows.clear();
       save();
@@ -775,14 +852,14 @@ namespace platf::frametop_windows {
     if (GetForegroundWindow() == *hwnd || (last == *hwnd && now - last_at < 250ms)) return;
     last = *hwnd;
     last_at = now;
-    if (!IsWindow(*hwnd) || !syncThreadDesktop()) return;
-    if (IsIconic(*hwnd)) ShowWindow(*hwnd, SW_RESTORE);
+    if (!hosted(output) || !IsWindow(*hwnd) || IsHungAppWindow(*hwnd) || !syncThreadDesktop()) return;
+    if (IsIconic(*hwnd)) ShowWindowAsync(*hwnd, SW_RESTORE);
     // A process may only take the foreground from the one that has it while their input is joined.
     const auto foreground = GetForegroundWindow();
     const auto ours = GetCurrentThreadId();
     const auto theirs = foreground ? GetWindowThreadProcessId(foreground, nullptr) : 0;
-    const bool joined = theirs && theirs != ours && AttachThreadInput(ours, theirs, TRUE);
-    SetWindowPos(*hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    const bool joined = theirs && theirs != ours && !IsHungAppWindow(foreground) && AttachThreadInput(ours, theirs, TRUE);
+    SetWindowPos(*hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS);
     SetForegroundWindow(*hwnd);
     if (joined) AttachThreadInput(ours, theirs, FALSE);
   }
