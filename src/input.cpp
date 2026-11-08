@@ -30,6 +30,9 @@ extern "C" {
 #include "platform/common.h"
 #include "thread_pool.h"
 #include "utility.h"
+#ifdef _WIN32
+  #include "platform/windows/frametop_windows.h"
+#endif
 
 // Win32 WHEEL_DELTA constant
 #ifndef WHEEL_DELTA
@@ -653,6 +656,14 @@ namespace input {
     }
   }
 
+  // A Frametop window output's stream (window:0x..., DEE-348): its window comes to the front
+  // before a press, a key or a scroll reaches it, or that lands on whatever covers it.
+  void raise_window_output(const input_t &input) {
+#ifdef _WIN32
+    platf::frametop_windows::raise_for_input(input.touch_port.output_name);
+#endif
+  }
+
   void passthrough(std::shared_ptr<input_t> &input, PNV_REL_MOUSE_MOVE_PACKET packet) {
     if (!config::input.mouse) {
       return;
@@ -867,6 +878,7 @@ namespace input {
     if (button <= 0 || button >= mouse_press.size()) {
       return;
     }
+    if (!release) raise_window_output(*input);
     if (button > 0 && button < mouse_press.size()) {
       // An overlapping press from another client may have been ignored below.
       // Its release must not change the accepted owner's logical state or
@@ -1115,6 +1127,7 @@ namespace input {
     if (input->shortcutFlags == input_t::SHORTCUT && apply_shortcut(key_code) > 0) {
       return;
     }
+    raise_window_output(*input);
 
     uint8_t synthetic_modifiers = 0;
     if (!is_modifier(key_code)) {
@@ -1170,6 +1183,7 @@ namespace input {
     if (!config::input.mouse) {
       return;
     }
+    raise_window_output(*input);
 
     if (config::input.high_resolution_scrolling) {
       platf::scroll(platf_input, util::endian::big(packet->scrollAmt1));

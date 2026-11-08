@@ -81,6 +81,7 @@
   #include "platform/windows/virtual_display_cleanup.h"
   #include "platform/windows/display_helper_v2/win_scheduled_task_manager.h"
   #include "platform/windows/virtual_display.h"
+  #include "src/platform/windows/frametop_windows.h"
 #elif defined(__linux__)
   #include "platform/linux/capture_status.h"
   #include "platform/linux/private_display.h"
@@ -1428,10 +1429,25 @@ namespace confighttp {
   }
 
 
-#ifdef __linux__
-  // Frametop windows (DEE-347): app windows of the user's Hyprland session as their own
-  // outputs, for Frametop panels. Only a Vibepollo started in that session has them.
+#if defined(__linux__) || defined(_WIN32)
+  // Frametop windows (DEE-347, DEE-348): app windows of the user's desktop as their own
+  // outputs, for Frametop panels: on Linux a Hyprland session's (only a Vibepollo started in
+  // that session has them), on Windows the signed-in user's.
   bool validateContentType(resp_https_t response, req_https_t request, const std::string_view &contentType);
+
+  #ifdef _WIN32
+  namespace frametop_windows = platf::frametop_windows;
+
+  bool frametop_windows_ready(resp_https_t response) {
+    if (!frametop_windows::available()) {
+      service_unavailable(response, "No one is signed in to this PC's desktop");
+      return false;
+    }
+    frametop_windows::start();  // once
+    return true;
+  }
+  #else
+  namespace frametop_windows = platf::hyprland_windows;
 
   bool frametop_windows_ready(resp_https_t response) {
     if (!platf::linux_display::hyprland_wlr_session()) {
@@ -1445,6 +1461,7 @@ namespace confighttp {
     platf::hyprland_windows::start();  // once: if Hyprland wasn't up when Vibepollo started
     return true;
   }
+  #endif
 
   std::optional<nlohmann::json> frametop_windows_body(resp_https_t response, req_https_t request) {
     std::stringstream ss;
@@ -1474,12 +1491,12 @@ namespace confighttp {
 
   void getFrametopWindows(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request) || !frametop_windows_ready(response)) return;
-    send_response(response, platf::hyprland_windows::list());
+    send_response(response, frametop_windows::list());
   }
 
   void getFrametopWindowApps(resp_https_t response, req_https_t request) {
     if (!authenticate(response, request) || !frametop_windows_ready(response)) return;
-    send_response(response, nlohmann::json {{"apps", platf::hyprland_windows::apps()}});
+    send_response(response, nlohmann::json {{"apps", frametop_windows::apps()}});
   }
 
   void postFrametopWindowOpen(resp_https_t response, req_https_t request) {
@@ -1489,8 +1506,8 @@ namespace confighttp {
     if (!body) return;
     std::string error;
     const auto opened = body->contains("app") ?
-      platf::hyprland_windows::launch(frametop_windows_string(*body, "app"), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), &error) :
-      platf::hyprland_windows::open(frametop_windows_string(*body, "address"), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), &error);
+      frametop_windows::launch(frametop_windows_string(*body, "app"), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), &error) :
+      frametop_windows::open(frametop_windows_string(*body, "address"), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), &error);
     if (!opened) return bad_request(response, request, error);
     auto out = *opened;
     out["status"] = true;
@@ -1505,7 +1522,7 @@ namespace confighttp {
     const auto body = frametop_windows_body(response, request);
     if (!body) return;
     std::string error;
-    const auto hit = platf::hyprland_windows::at(frametop_windows_string(*body, "monitor"), frametop_windows_number(*body, "x", -1),
+    const auto hit = frametop_windows::at(frametop_windows_string(*body, "monitor"), frametop_windows_number(*body, "x", -1),
                                                  frametop_windows_number(*body, "y", -1), &error);
     if (!hit) return bad_request(response, request, error);
     auto out = *hit;
@@ -1519,7 +1536,7 @@ namespace confighttp {
     const auto body = frametop_windows_body(response, request);
     if (!body) return;
     std::string error;
-    if (!platf::hyprland_windows::resize(frametop_windows_string(*body, "output"), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), &error)) {
+    if (!frametop_windows::resize(frametop_windows_string(*body, "output"), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), &error)) {
       return bad_request(response, request, error);
     }
     send_response(response, nlohmann::json {{"status", true}});
@@ -1531,19 +1548,19 @@ namespace confighttp {
     const auto body = frametop_windows_body(response, request);
     if (!body) return;
     if (const auto all = body->find("all"); all != body->end() && all->is_boolean() && all->get<bool>()) {
-      return send_response(response, nlohmann::json {{"status", true}, {"released", platf::hyprland_windows::release_all()}});
+      return send_response(response, nlohmann::json {{"status", true}, {"released", frametop_windows::release_all()}});
     }
     std::string error;
     auto which = frametop_windows_string(*body, "output");
     if (which.empty()) which = frametop_windows_string(*body, "address");
     // Dropped onto one of this PC's displays in Frametop: onto that monitor instead.
-    platf::hyprland_windows::drop_t drop;
+    frametop_windows::drop_t drop;
     drop.monitor = frametop_windows_string(*body, "monitor");
     drop.u = frametop_windows_number(*body, "x", 0.5);
     drop.v = frametop_windows_number(*body, "y", 0.5);
     drop.fx = frametop_windows_number(*body, "grab_x", 0.5);
     drop.fy = frametop_windows_number(*body, "grab_y", 0.5);
-    if (!platf::hyprland_windows::release(which, &error, drop.monitor.empty() ? nullptr : &drop)) {
+    if (!frametop_windows::release(which, &error, drop.monitor.empty() ? nullptr : &drop)) {
       return bad_request(response, request, error);
     }
     send_response(response, nlohmann::json {{"status", true}, {"released", 1}});
@@ -6597,13 +6614,15 @@ namespace confighttp {
     register_api_route("^/api/steam/games$", "GET", getSteamGames);
     register_api_route("^/api/steam/force_sync$", "POST", postSteamForceSync);
     register_api_route("^/api/steam/launch$", "POST", postSteamLaunch);
-#ifdef __linux__
+#if defined(__linux__) || defined(_WIN32)
     register_api_route("^/api/frametop/windows$", "GET", getFrametopWindows);
     register_api_route("^/api/frametop/windows/apps$", "GET", getFrametopWindowApps);
     register_blocking_api_route("^/api/frametop/windows/open$", "POST", postFrametopWindowOpen);
     register_api_route("^/api/frametop/windows/resize$", "POST", postFrametopWindowResize);
     register_api_route("^/api/frametop/windows/at$", "POST", postFrametopWindowAt);
     register_api_route("^/api/frametop/windows/release$", "POST", postFrametopWindowRelease);
+#endif
+#ifdef __linux__
     register_api_route("^/api/lutris/status$", "GET", getLutrisStatus);
     register_api_route("^/api/lutris/games$", "GET", getLutrisGames);
     register_api_route("^/api/lutris/force_sync$", "POST", postLutrisForceSync);

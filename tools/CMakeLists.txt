@@ -110,6 +110,7 @@ target_link_libraries(sunshine_wgc_capture
         avrt
         shcore
         wtsapi32
+        dwmapi
         ${PLATFORM_LIBRARIES})
 target_compile_options(sunshine_wgc_capture PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
 

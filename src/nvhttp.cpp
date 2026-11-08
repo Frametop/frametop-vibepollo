@@ -86,6 +86,8 @@
   #include "platform/windows/display_helper_request_helpers.h"
   #include "platform/windows/misc.h"
   #include "platform/windows/virtual_display.h"
+  #include "src/platform/windows/frametop_window_target.h"
+  #include "src/platform/windows/frametop_windows.h"
   #include "platform/windows/virtual_display_cleanup.h"
 #elif defined(__linux__)
   #include "platform/linux/private_display.h"
@@ -423,6 +425,10 @@ namespace nvhttp {
     // /api/display-devices) or its display name (\\.\DISPLAYn).
     std::optional<std::string> existing_display_capture_output(const std::string &requested) {
       if (requested.empty()) return std::nullopt;
+      // A Frametop window output (DEE-348): the window alone, while the window role has it out.
+      if (platf::frametop_window_target::is_window_output(requested)) {
+        return platf::frametop_windows::hosted(requested) ? std::optional<std::string> {requested} : std::nullopt;
+      }
       const auto devices = display_helper_integration::enumerate_devices(display_device::DeviceEnumerationDetail::Minimal);
       if (!devices) return std::nullopt;
       const auto capture_outputs = platf::display_names(platf::mem_type_e::dxgi);

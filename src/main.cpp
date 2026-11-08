@@ -50,6 +50,7 @@
 #endif
 #include "webrtc_stream.h"
 #ifdef _WIN32
+  #include "src/platform/windows/frametop_windows.h"
   #include <shobjidl.h>
 
   #include "src/display_helper_integration.h"
@@ -1056,6 +1057,9 @@ int main(int argc, char *argv[]) {
   if (platf::linux_display::hyprland_wlr_session() && platf::hyprland_windows::available()) {
     platf::hyprland_windows::start();
   }
+#elif defined(_WIN32)
+  // Frametop windows: put back any a crash left out, then watch them.
+  platf::frametop_windows::start();
 #endif
   std::thread rtspThread {rtsp_stream::start};
 

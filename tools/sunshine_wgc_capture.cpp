@@ -30,6 +30,7 @@
 // local includes
 #include "src/logging.h"
 #include "src/platform/windows/ipc/misc_utils.h"
+#include "src/platform/windows/frametop_window_target.h"
 #include "src/platform/windows/ipc/pipes.h"
 #include "src/platform/windows/wgc_capture_policy.h"
 #include "src/utility.h"  // For RAII utilities
@@ -168,6 +169,13 @@ static bool g_secure_desktop_detected = false;
  * helper must exit and let the main process reinitialize capture.
  */
 static std::atomic<bool> g_capture_item_closed {false};
+
+/**
+ * @brief Set when the host asked for a Frametop window ("window:0x..."), not a monitor. Its
+ * capture is the window's size, so a resize restarts capture (as a closed item does) for a new
+ * frame pool and shared texture of the new size.
+ */
+static bool g_window_target = false;
 
 /**
  * @brief Pending verification deadline for desktop switches that were not immediately secure.
@@ -639,6 +647,7 @@ public:
 class DisplayManager {
 private:
   HMONITOR _selected_monitor = nullptr;  ///< Handle to the selected monitor for capture
+  HWND _window = nullptr;  ///< A Frametop window to capture instead of the monitor (it's on that monitor)
   MONITORINFO _monitor_info = {sizeof(MONITORINFO)};  ///< Information about the selected monitor
   UINT _width = 0;  ///< Final capture width in pixels
   UINT _height = 0;  ///< Final capture height in pixels
@@ -654,6 +663,17 @@ public:
    * @return true if a monitor was successfully selected; false if monitor selection failed.
    */
   bool select_monitor(const platf::dxgi::config_data_t &config) {
+    const std::wstring_view requested {config.display_name, wcsnlen(config.display_name, std::size(config.display_name))};
+    if (const auto window = platf::frametop_window_target::parse(requested)) {
+      if (!IsWindow(*window)) {
+        BOOST_LOG(warning) << "Frametop window '" << winrt::to_string(requested) << "' is gone";
+        return false;
+      }
+      _window = *window;
+      g_window_target = true;
+      _selected_monitor = MonitorFromWindow(_window, MONITOR_DEFAULTTONEAREST);
+      return _selected_monitor != nullptr;
+    }
     auto find_requested_monitor = [&]() -> HMONITOR {
       struct EnumData {
         const wchar_t *target_name;
@@ -742,6 +762,14 @@ public:
     }
 
     auto activation_factory = winrt::get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
+    if (_window) {
+      const HRESULT window_hr = activation_factory->CreateForWindow(_window, winrt::guid_of<GraphicsCaptureItem>(), winrt::put_abi(item));
+      if (FAILED(window_hr)) {
+        BOOST_LOG(error) << "Failed to create GraphicsCaptureItem for the Frametop window: " << window_hr;
+        return false;
+      }
+      return true;
+    }
     HRESULT hr = activation_factory->CreateForMonitor(_selected_monitor, winrt::guid_of<GraphicsCaptureItem>(), winrt::put_abi(item));
     if (FAILED(hr)) {
       BOOST_LOG(error) << "Failed to create GraphicsCaptureItem for monitor: " << hr;
@@ -1392,6 +1420,17 @@ public:
     } else {
       // Frame successfully retrieved
       try {
+        if (g_window_target) {
+          const auto size = frame.ContentSize();
+          if (size.Width > 0 && size.Height > 0 &&
+              (static_cast<UINT>(size.Width) != _width || static_cast<UINT>(size.Height) != _height)) {
+            if (!g_capture_item_closed.exchange(true, std::memory_order_acq_rel)) {
+              BOOST_LOG(info) << "Frametop window resized " << _width << 'x' << _height << " -> " << size.Width << 'x'
+                              << size.Height << "; restarting capture";
+            }
+            return;
+          }
+        }
         auto surface = frame.Surface();
 
         // Get frame timing information from the WGC frame. The consumer treats

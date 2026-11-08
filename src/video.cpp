@@ -2957,6 +2957,15 @@ namespace video {
     const bool log_failure = true
   ) {
     if (require_exact_output) {
+#ifdef _WIN32
+      // A Frametop window output (window:0x..., DEE-348) is no display DXGI lists: its window is
+      // captured alone, on the monitor it's on (display_base_t::init).
+      if (required_output && required_output->starts_with("window:")) {
+        display_names = {*required_output};
+        current_display_index = 0;
+        return;
+      }
+#endif
       display_names = platf::display_names(dev_type);
       if (!required_output || required_output->empty()) {
         BOOST_LOG(error) << "Remote monitor capture has no assigned output; refusing global display selection.";

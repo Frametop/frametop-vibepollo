@@ -47,6 +47,7 @@ typedef enum _D3DKMT_GPU_PREFERENCE_QUERY_STATE : DWORD {
 #include "src/platform/windows/display_frame_push.h"
 #endif
 #include "src/platform/windows/frame_push_capture_policy.h"
+#include "src/platform/windows/frametop_window_target.h"
 #include "src/platform/windows/virtual_display.h"
 #include "src/video.h"
 #include "utf_utils.h"
@@ -823,6 +824,21 @@ namespace platf::dxgi {
 
     auto adapter_name = utf_utils::from_utf8(config::video.adapter_name);
     auto output_name = utf_utils::from_utf8(display_name);
+    // A Frametop window output ("window:0x...") captures one window: the GPU and output are those
+    // of the monitor it's on, the geometry (and with it absolute input) its own rectangle.
+    const auto frametop_window = frametop_window_target::parse(display_name);
+    std::optional<RECT> frametop_window_rect;
+    if (frametop_window) {
+      frametop_window_rect = frametop_window_target::capture_rect(*frametop_window);
+      MONITORINFOEXW monitor_info {};
+      monitor_info.cbSize = sizeof(monitor_info);
+      if (!frametop_window_rect ||
+          !GetMonitorInfoW(MonitorFromWindow(*frametop_window, MONITOR_DEFAULTTONEAREST), &monitor_info)) {
+        BOOST_LOG(error) << "Frametop window " << display_name << " is gone or on no monitor";
+        return -1;
+      }
+      output_name = monitor_info.szDevice;
+    }
 
     const auto adapter_luid_override = dxgi::get_dxgi_adapter_luid_override();
     std::optional<LUID> selected_adapter_luid;
@@ -1010,6 +1026,18 @@ namespace platf::dxgi {
       }
       BOOST_LOG(error) << "Failed to locate an output device"sv;
       return -1;
+    }
+
+    if (frametop_window_rect) {
+      const auto &r = *frametop_window_rect;
+      offset_x = r.left - GetSystemMetrics(SM_XVIRTUALSCREEN);
+      offset_y = r.top - GetSystemMetrics(SM_YVIRTUALSCREEN);
+      width = width_before_rotation = r.right - r.left;
+      height = height_before_rotation = r.bottom - r.top;
+      display_rotation = DXGI_MODE_ROTATION_IDENTITY;  // a window's capture isn't turned with its monitor
+      input_output_name = display_name;  // input raises the window first (input.cpp)
+      BOOST_LOG(info) << "Frametop window " << display_name << ": " << width << 'x' << height << " at "
+                      << r.left << ',' << r.top << " on " << utf_utils::to_utf8(output_name);
     }
 
     D3D_FEATURE_LEVEL featureLevels[] {
@@ -1208,7 +1236,8 @@ namespace platf::dxgi {
       return -1;
     }
 
-    output_monitor = std::make_unique<display_output_monitor_t>(captured_adapter_luid, captured_output_desc,
+    // The output monitor keeps input on the monitor's rectangle; a window's stays its own.
+    if (!frametop_window) output_monitor = std::make_unique<display_output_monitor_t>(captured_adapter_luid, captured_output_desc,
       captured_hdr_state_valid, captured_hdr_state, offset_x, offset_y, env_width, env_height,
       preserve_capture_for_input_geometry);
 
