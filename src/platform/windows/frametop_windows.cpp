@@ -10,6 +10,7 @@
 #include "src/platform/windows/frametop_window_target.h"
 #include "src/platform/windows/misc.h"
 #include "src/platform/windows/utf_utils.h"
+#include "src/remote_session.h"
 #include "src/rtsp.h"
 #include "src/video.h"
 
@@ -641,7 +642,100 @@ namespace platf::frametop_windows {
       return std::nullopt;
     }
 
-    std::optional<nlohmann::json> open_locked(HWND hwnd, int width, int height, std::string *error) {
+    // The windows' own display: a virtual display, held while any window is out, as a Remote
+    // Monitor of its own identity, so streams ending (theirs or others') leave it alone. Windows
+    // opened go onto it, out of the way of the PC's own monitors and its user; put back, they
+    // return to where they were. Without it (no driver, no room), windows stay on their monitors.
+    constexpr std::string_view kDisplayId = "frametop-windows";
+    constexpr std::string_view kDisplayLabel = "Frametop windows";
+    constexpr std::string_view kDisplayMode = "2560x1600@60";
+    constexpr auto kDisplayIdle = 15s;  // no window out this long: the display goes
+
+    struct reserved_t {
+      std::mutex lock;  // taken before `lock`, never under it
+      std::uint64_t generation = 0;
+      bool held = false;
+      std::string output;  // \\.\DISPLAYn
+      clock::time_point last_use;
+    };
+
+    // Never destroyed: a release can still be running at exit.
+    reserved_t &reserved() {
+      static auto &it = *new reserved_t;
+      return it;
+    }
+
+    std::atomic<bool> display_held {false};
+    std::atomic<bool> display_releasing {false};
+    clock::time_point last_hosted;  // under `lock`
+
+    void release_display_locked(reserved_t &r, std::string_view reason) {
+      if (!r.held) return;
+      if (!remote_session::release_monitor(kDisplayId, r.generation, reason)) {
+        BOOST_LOG(warning) << "Frametop windows: their display's release is incomplete; trying again later";
+        return;
+      }
+      BOOST_LOG(info) << "Frametop windows: their display " << r.output << " is gone (" << reason << ')';
+      r.held = false;
+      r.output.clear();
+      display_held = false;
+    }
+
+    // The windows' display, made or kept (off the window thread: it can take seconds).
+    std::optional<std::string> hold_display() {
+      auto &r = reserved();
+      std::lock_guard guard {r.lock};
+      r.last_use = clock::now();
+      if (r.held && !r.output.empty() && find_monitor(r.output)) return r.output;
+      if (!r.held) ++r.generation;  // a new hold; a gone display resumes the same one
+      remote_session::monitor_runtime_state_t state;
+      const auto deadline = clock::now() + 8s;
+      while (true) {
+        state = remote_session::activate_or_resume_monitor(kDisplayId, kDisplayLabel, kDisplayMode, false, r.generation);
+        if (state.accepted) r.held = display_held = true;
+        if (state.ready && !state.output.empty() && find_monitor(state.output)) break;
+        if (!state.accepted || clock::now() >= deadline) {
+          BOOST_LOG(warning) << "Frametop windows: no display of their own (" << (state.error.empty() ? "not ready in time" : state.error)
+                             << "); windows stay on their monitors";
+          release_display_locked(r, "not ready");
+          return std::nullopt;
+        }
+        std::this_thread::sleep_for(500ms);
+      }
+      if (r.output != state.output) BOOST_LOG(info) << "Frametop windows: their display is " << state.output;
+      r.output = state.output;
+      r.last_use = clock::now();
+      return r.output;
+    }
+
+    // From the watcher: the display goes once no window has been out for kDisplayIdle.
+    void release_display_if_idle() {
+      auto &r = reserved();
+      {
+        std::lock_guard guard {r.lock};
+        bool none_out;
+        {
+          std::lock_guard windows {lock};
+          none_out = hosted_windows.empty() && clock::now() - last_hosted > kDisplayIdle;
+        }
+        if (none_out && clock::now() - r.last_use > kDisplayIdle) release_display_locked(r, "no windows out");
+      }
+      display_releasing = false;
+    }
+
+    // Onto the windows' display, cascaded, unless it's there already. Under the lock.
+    void place_on(HWND hwnd, const std::string &display) {
+      const auto onto = find_monitor(display);
+      if (!onto) return;
+      MONITORINFOEXW now {};
+      now.cbSize = sizeof(now);
+      if (GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &now) && _wcsicmp(now.szDevice, onto->szDevice) == 0) return;
+      const int k = int(hosted_windows.size() + 7) % 8;
+      const auto &work = onto->rcWork;
+      SetWindowPos(hwnd, nullptr, work.left + 40 * k, work.top + 40 * k, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    }
+
+    std::optional<nlohmann::json> open_locked(HWND hwnd, int width, int height, std::string *error, const std::optional<std::string> &display) {
       // "no window ADDRESS" as the Hyprland side says it: ft-stream drops a panel whose window
       // has gone on that, and only on that.
       if (!IsWindow(hwnd)) {
@@ -681,6 +775,7 @@ namespace platf::frametop_windows {
         }
         if (IsIconic(hwnd) || IsZoomed(hwnd)) ShowWindow(hwnd, SW_RESTORE);
       }
+      if (display) place_on(hwnd, *display);
       size_window(hwnd, width, height);
       save();
       const auto rect = target::capture_rect(hwnd);
@@ -710,8 +805,14 @@ namespace platf::frametop_windows {
       std::vector<std::string> ended;
       {
         std::lock_guard guard {lock};
-        if (stopping || hosted_windows.empty()) return;
+        if (stopping) return;
         const auto now = clock::now();
+        if (!hosted_windows.empty()) {
+          last_hosted = now;
+        } else if (display_held && now - last_hosted > kDisplayIdle && !display_releasing.exchange(true)) {
+          std::thread(release_display_if_idle).detach();
+        }
+        if (hosted_windows.empty()) return;
         std::vector<std::string> done;
         for (auto &[output, h] : hosted_windows) {
           if (!still(h)) {
@@ -816,9 +917,12 @@ namespace platf::frametop_windows {
       *error = "address must be a window address (0x...)";
       return std::nullopt;
     }
+    // The display first, for a window that can come out (not under the lock: it takes time).
+    const bool can_open = window_thread().run([&] { return IsWindow(*hwnd) && app_window(*hwnd) && !IsHungAppWindow(*hwnd); });
+    const auto display = can_open ? hold_display() : std::nullopt;
     return window_thread().run([&] {
       std::lock_guard guard {lock};
-      return open_locked(*hwnd, width, height, error);
+      return open_locked(*hwnd, width, height, error, display);
     });
   }
 
@@ -881,9 +985,10 @@ namespace platf::frametop_windows {
       });
       if (!found) continue;
       std::this_thread::sleep_for(300ms);  // let it finish placing itself before it's sized
+      const auto display = hold_display();
       auto opened = window_thread().run([&] {
         std::lock_guard guard {lock};
-        return open_locked(*found, width, height, error);
+        return open_locked(*found, width, height, error, display);
       });
       if (opened) BOOST_LOG(info) << "Frametop windows: launched " << app_id << " as " << (*opened)["address"].get<std::string>();
       return opened;
