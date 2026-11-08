@@ -1311,7 +1311,9 @@ namespace platf::frametop_windows {
     thread_local HWND last = nullptr;
     thread_local clock::time_point last_at;
     const auto now = clock::now();
-    if (GetForegroundWindow() == *hwnd || (last == *hwnd && now - last_at < 250ms)) return;
+    // In front already, or one of its own windows is (a dialog it opened: clicks go to that).
+    const auto front = GetForegroundWindow();
+    if (front == *hwnd || (front && GetAncestor(front, GA_ROOTOWNER) == *hwnd) || (last == *hwnd && now - last_at < 250ms)) return;
     last = *hwnd;
     last_at = now;
     if (!hosted(output) || !IsWindow(*hwnd) || IsHungAppWindow(*hwnd) || !syncThreadDesktop()) return;

@@ -19,6 +19,7 @@
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -26,6 +27,7 @@
 #include <system_error>
 #include <thread>
 #include <utility>
+#include <vector>
 
 // local includes
 #include "src/logging.h"
@@ -216,6 +218,271 @@ static void watch_window_moves() {
                     << "; restarting capture";
   }
 }
+
+/**
+ * @brief A Frametop window's popups: its menus, dropdowns, tooltips and dialogs are windows of
+ * their own, which capturing the window leaves out. Each one over the window gets a capture of
+ * its own, and every frame published has their latest pictures drawn in at their places; what
+ * sticks out past the window's edges is cut off.
+ */
+class WindowPopups: public std::enable_shared_from_this<WindowPopups> {
+public:
+  WindowPopups(IDirect3DDevice device, DXGI_FORMAT format):
+      _device(std::move(device)),
+      _format(format) {}
+
+  /** Set when a popup came, went, moved or drew something new: the frame goes out again. */
+  std::atomic<bool> changed {false};
+  std::atomic<uint32_t> resent {0};
+
+  /** Main loop: every 50 ms, which windows are the target's popups, and where. */
+  void watch(HWND target) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now - _last_watch < std::chrono::milliseconds(50)) return;
+    _last_watch = now;
+    const auto target_rect = platf::frametop_window_target::capture_rect(target);
+    if (!target_rect) return;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(target, &pid);
+
+    struct search_t {
+      HWND target;
+      DWORD pid;
+      RECT target_rect;
+      std::vector<std::pair<HWND, RECT>> found;  // top first
+      bool reached = false;
+    } search {target, pid, *target_rect, {}, false};
+    EnumWindows(
+      [](HWND hwnd, LPARAM param) -> BOOL {
+        auto &s = *reinterpret_cast<search_t *>(param);
+        if (hwnd == s.target) {
+          s.reached = true;
+          return FALSE;  // only what's above the window covers it
+        }
+        if (s.found.size() >= kMaxPopups || !IsWindowVisible(hwnd) || IsIconic(hwnd) || !popup_of(hwnd, s.target, s.pid)) return TRUE;
+        BOOL cloaked = FALSE;
+        if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) return TRUE;
+        const auto rect = platf::frametop_window_target::capture_rect(hwnd);
+        RECT overlap {};
+        if (rect && IntersectRect(&overlap, &*rect, &s.target_rect)) s.found.emplace_back(hwnd, *rect);
+        return TRUE;
+      },
+      reinterpret_cast<LPARAM>(&search)
+    );
+    std::reverse(search.found.begin(), search.found.end());  // drawn bottom first
+
+    std::vector<std::shared_ptr<popup_t>> gone, next;
+    bool moved = false;
+    {
+      std::lock_guard guard {_lock};
+      moved = _origin.x != target_rect->left || _origin.y != target_rect->top;
+      _origin = {target_rect->left, target_rect->top};
+      for (const auto &p : _popups) {
+        if (std::none_of(search.found.begin(), search.found.end(), [&](const auto &f) { return f.first == p->hwnd; })) gone.push_back(p);
+      }
+    }
+    for (const auto &[hwnd, rect] : search.found) {
+      std::shared_ptr<popup_t> p;
+      {
+        std::lock_guard guard {_lock};
+        for (const auto &have : _popups) {
+          if (have->hwnd == hwnd) p = have;
+        }
+        if (p) {
+          moved = moved || !EqualRect(&p->rect, &rect);
+          p->rect = rect;
+        }
+      }
+      if (!p && std::find(_refused.begin(), _refused.end(), hwnd) == _refused.end()) {
+        p = start(hwnd, rect);
+        if (!p) {
+          if (_refused.size() > 64) _refused.erase(_refused.begin());
+          _refused.push_back(hwnd);
+        }
+      }
+      if (p) next.push_back(std::move(p));
+    }
+    const bool same = [&] {
+      std::lock_guard guard {_lock};
+      const bool unchanged = next.size() == _popups.size() && std::equal(next.begin(), next.end(), _popups.begin());
+      _popups = next;
+      return unchanged;
+    }();
+    for (const auto &p : gone) {
+      BOOST_LOG(info) << "Frametop window popup " << p->hwnd << " went after " << p->frames.load() << " frames";
+      close(*p);
+    }
+    if (!same) BOOST_LOG(info) << "Frametop window popups drawn in: " << next.size() << " (window frames sent again: " << resent.load() << ')';
+    if (!same || moved) changed = true;
+  }
+
+  /** Under the D3D context lock, right after the window's frame went into `into`. */
+  void draw(ID3D11DeviceContext *context, ID3D11Texture2D *into, UINT width, UINT height) {
+    std::lock_guard guard {_lock};
+    for (const auto &p : _popups) {
+      if (!p->frame) continue;
+      winrt::com_ptr<ID3D11Texture2D> texture;
+      try {
+        winrt::com_ptr<IDirect3DDxgiInterfaceAccess> access;
+        if (FAILED(winrt::get_unknown(p->frame.Surface())->QueryInterface(__uuidof(IDirect3DDxgiInterfaceAccess), access.put_void())) ||
+            FAILED(access->GetInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<::IUnknown **>(texture.put_void())))) {
+          continue;
+        }
+      } catch (...) {
+        continue;
+      }
+      D3D11_TEXTURE2D_DESC desc {};
+      texture->GetDesc(&desc);
+      if (desc.Format != _format) continue;
+      const auto content = p->content;
+      LONG dx = p->rect.left - _origin.x, dy = p->rect.top - _origin.y;
+      LONG sx = 0, sy = 0;
+      LONG w = std::min<LONG>(content.Width, LONG(desc.Width)), h = std::min<LONG>(content.Height, LONG(desc.Height));
+      if (dx < 0) {
+        sx = -dx;
+        w -= sx;
+        dx = 0;
+      }
+      if (dy < 0) {
+        sy = -dy;
+        h -= sy;
+        dy = 0;
+      }
+      w = std::min<LONG>(w, LONG(width) - dx);
+      h = std::min<LONG>(h, LONG(height) - dy);
+      if (w <= 0 || h <= 0) continue;
+      const D3D11_BOX box {UINT(sx), UINT(sy), 0, UINT(sx + w), UINT(sy + h), 1};
+      context->CopySubresourceRegion(into, 0, UINT(dx), UINT(dy), 0, texture.get(), 0, &box);
+    }
+  }
+
+  /** Ends every popup's capture and waits for their callbacks. */
+  void stop() {
+    std::vector<std::shared_ptr<popup_t>> all;
+    {
+      std::lock_guard guard {_lock};
+      all.swap(_popups);
+    }
+    for (const auto &p : all) close(*p);
+  }
+
+  ~WindowPopups() {
+    stop();
+  }
+
+private:
+  static constexpr std::size_t kMaxPopups = 8;
+
+  struct popup_t {
+    HWND hwnd = nullptr;
+    RECT rect {};  // under _lock: where it is, in screen pixels
+    Direct3D11CaptureFramePool pool {nullptr};
+    GraphicsCaptureSession session {nullptr};
+    winrt::event_token token {};
+    Direct3D11CaptureFrame frame {nullptr};  // under _lock: its latest picture
+    SizeInt32 content {};  // under _lock: that picture's size
+    SizeInt32 pool_size {};
+    std::mutex callback;  // a frame arriving, or the capture closing
+    bool closed = false;  // under callback
+    std::atomic<uint32_t> frames {0};
+  };
+
+  /** A popup: one of its own windows, or a captionless popup (a menu, a dropdown) no window owns. */
+  static bool popup_of(HWND hwnd, HWND target, DWORD pid) {
+    DWORD owner_pid = 0;
+    GetWindowThreadProcessId(hwnd, &owner_pid);
+    if (owner_pid != pid) return false;
+    wchar_t name[32] {};
+    if (GetClassNameW(hwnd, name, 32) && wcscmp(name, L"SysShadow") == 0) return false;  // a menu's see-through shadow
+    // Something owned by a control (a child of the window) counts as the window's too.
+    const HWND owner = GetWindow(hwnd, GW_OWNER);
+    for (HWND o = owner; o; o = GetWindow(o, GW_OWNER)) {
+      if (o == target || GetAncestor(o, GA_ROOT) == target) return true;
+    }
+    if (owner) return false;  // another window's
+    const auto style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    // A dropdown list is a child of the desktop itself, owned by nothing.
+    return (style & (WS_POPUP | WS_CHILD)) && (style & WS_CAPTION) != WS_CAPTION;
+  }
+
+  std::shared_ptr<popup_t> start(HWND hwnd, const RECT &rect) {
+    auto p = std::make_shared<popup_t>();
+    p->hwnd = hwnd;
+    p->rect = rect;
+    try {
+      GraphicsCaptureItem item {nullptr};
+      auto interop = winrt::get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
+      if (FAILED(interop->CreateForWindow(hwnd, winrt::guid_of<GraphicsCaptureItem>(), winrt::put_abi(item))) || !item) return nullptr;
+      p->pool_size = item.Size();
+      if (p->pool_size.Width <= 0 || p->pool_size.Height <= 0) return nullptr;
+      const auto pixel_format = _format == DXGI_FORMAT_R16G16B16A16_FLOAT ? DirectXPixelFormat::R16G16B16A16Float : DirectXPixelFormat::B8G8R8A8UIntNormalized;
+      // Two buffers: one held as its latest picture, one for the next.
+      p->pool = Direct3D11CaptureFramePool::CreateFreeThreaded(_device, pixel_format, 2, p->pool_size);
+      std::weak_ptr<WindowPopups> self = weak_from_this();
+      std::weak_ptr<popup_t> weak = p;
+      p->token = p->pool.FrameArrived([self, weak, pixel_format](Direct3D11CaptureFramePool const &sender, winrt::Windows::Foundation::IInspectable const &) {
+        const auto popups = self.lock();
+        const auto popup = weak.lock();
+        if (!popups || !popup) return;
+        std::lock_guard callback {popup->callback};
+        if (popup->closed) return;
+        try {
+          auto frame = sender.TryGetNextFrame();
+          if (!frame) return;
+          const auto size = frame.ContentSize();
+          {
+            std::lock_guard guard {popups->_lock};
+            popup->frame = frame;  // the one it held goes back to the pool
+            popup->content = size;
+          }
+          ++popup->frames;
+          if (size.Width > popup->pool_size.Width || size.Height > popup->pool_size.Height) {
+            popup->pool_size = {std::max(size.Width, popup->pool_size.Width), std::max(size.Height, popup->pool_size.Height)};
+            sender.Recreate(popups->_device, pixel_format, 2, popup->pool_size);
+          }
+          popups->changed = true;
+        } catch (...) {
+        }
+      });
+      p->session = p->pool.CreateCaptureSession(item);
+      p->session.IsCursorCaptureEnabled(false);  // the window's own capture has the cursor
+      if (auto session3 = p->session.try_as<winrt::Windows::Graphics::Capture::IGraphicsCaptureSession3>()) {
+        try {
+          session3.IsBorderRequired(false);
+        } catch (...) {
+        }
+      }
+      p->session.StartCapture();
+      return p;
+    } catch (const winrt::hresult_error &ex) {
+      BOOST_LOG(debug) << "Frametop window popup " << hwnd << " can't be captured: " << winrt::to_string(ex.message());
+    } catch (...) {
+    }
+    close(*p);
+    return nullptr;
+  }
+
+  void close(popup_t &p) {
+    std::lock_guard callback {p.callback};  // no frame half taken
+    p.closed = true;
+    try {
+      if (p.pool && p.token.value) p.pool.FrameArrived(p.token);
+      if (p.session) p.session.Close();
+      if (p.pool) p.pool.Close();
+    } catch (...) {
+    }
+    std::lock_guard guard {_lock};
+    p.frame = nullptr;
+  }
+
+  IDirect3DDevice _device;
+  DXGI_FORMAT _format;
+  std::mutex _lock;
+  std::vector<std::shared_ptr<popup_t>> _popups;  // under _lock: drawn in this order
+  POINT _origin {};  // under _lock: the window's top left, in screen pixels
+  std::vector<HWND> _refused;  // main loop: popups that can't be captured
+  std::chrono::steady_clock::time_point _last_watch;
+};
 
 /**
  * @brief Pending verification deadline for desktop switches that were not immediately secure.
@@ -1208,6 +1475,10 @@ private:
   DXGI_FORMAT _capture_format = DXGI_FORMAT_UNKNOWN;  ///< DXGI format for captured frames
   UINT _height = 0;  ///< Capture height in pixels
   UINT _width = 0;  ///< Capture width in pixels
+  std::shared_ptr<WindowPopups> _popups;  ///< A Frametop window's popups, drawn over it
+  winrt::com_ptr<ID3D11Texture2D> _window_base;  ///< Under the context lock: the window's last frame
+  bool _has_window_base = false;  ///< Under the context lock
+  std::chrono::steady_clock::time_point _last_popup_publish;  ///< Main loop
 
 public:
   /**
@@ -1888,6 +2159,7 @@ private:
     }
 
     _deps->d3d_context->CopyResource(_deps->resource_manager.get_shared_texture().get(), frame_tex.get());
+    draw_popups();
     _deps->resource_manager.publish_frame_metadata(frame_qpc);
     const HRESULT release_hr = keyed_mutex->ReleaseSync(0);
     context_lock.unlock();
@@ -1909,7 +2181,7 @@ private:
    * @param surface The captured D3D11 surface.
    * @param frame_qpc The QPC timestamp from when the frame was captured.
    */
-  void queue_frame_for_delivery(Direct3D11CaptureFrame frame, winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DSurface surface, uint64_t frame_qpc) {
+  void queue_frame_for_delivery([[maybe_unused]] Direct3D11CaptureFrame frame, winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DSurface surface, uint64_t frame_qpc) {
     if (!_deps) {
       return;
     }
@@ -1928,6 +2200,42 @@ private:
       return;
     }
 
+    keep_window_base(frame_tex);
+    deliver_texture(frame_tex, frame_qpc);
+  }
+
+  /** Under the context lock, after a frame went into the shared texture. */
+  void draw_popups() {
+    if (_popups) _popups->draw(_deps->d3d_context.get(), _deps->resource_manager.get_shared_texture().get(), _width, _height);
+  }
+
+  /** A Frametop window's frame, kept to send again when only a popup over it changes. */
+  void keep_window_base(const winrt::com_ptr<ID3D11Texture2D> &frame_tex) {
+    if (!_popups) return;
+    std::lock_guard context_lock(_d3d_context_mutex);
+    if (!_window_base) {
+      winrt::com_ptr<ID3D11Device> device;
+      _deps->d3d_context->GetDevice(device.put());
+      D3D11_TEXTURE2D_DESC desc = {};
+      desc.Width = _width;
+      desc.Height = _height;
+      desc.MipLevels = 1;
+      desc.ArraySize = 1;
+      desc.Format = _capture_format;
+      desc.SampleDesc.Count = 1;
+      desc.Usage = D3D11_USAGE_DEFAULT;
+      desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+      if (!device || FAILED(device->CreateTexture2D(&desc, nullptr, _window_base.put()))) {
+        _window_base = nullptr;
+        return;
+      }
+    }
+    _deps->d3d_context->CopyResource(_window_base.get(), frame_tex.get());
+    _has_window_base = true;
+  }
+
+  /** Into the shared texture now, or through a scratch texture and the delivery thread. */
+  void deliver_texture(const winrt::com_ptr<ID3D11Texture2D> &frame_tex, uint64_t frame_qpc) {
     if (try_publish_directly(frame_tex, frame_qpc)) {
       return;
     }
@@ -1948,10 +2256,8 @@ private:
     }
 
     // From here on the delivery thread owns only the helper scratch texture, not
-    // the Direct3D11CaptureFrame/WGC frame-pool buffer. The helper can wait for
-    // the main process' shared keyed mutex without starving WGC FrameArrived.
-    frame = nullptr;
-
+    // the Direct3D11CaptureFrame/WGC frame-pool buffer (the caller lets it go on return). The
+    // helper can wait for the main process' shared keyed mutex without starving WGC FrameArrived.
     if (!enqueue_scratch_texture(*scratch_index, frame_qpc)) {
       return;
     }
@@ -2094,6 +2400,7 @@ private:
     // the same mutex before snapshotting this shared texture into a pool-owned frame.
     const auto copy_start = std::chrono::steady_clock::now();
     _deps->d3d_context->CopyResource(_deps->resource_manager.get_shared_texture().get(), frame_tex.get());
+    draw_popups();
     const auto copy_submit = std::chrono::steady_clock::now() - copy_start;
 
     // Publish the metadata while still holding the shared keyed mutex so the
@@ -2152,6 +2459,34 @@ private:
   }
 
 public:
+  /** A Frametop window's popups, drawn into every frame published from now on. */
+  void set_popups(std::shared_ptr<WindowPopups> popups) {
+    _popups = std::move(popups);
+  }
+
+  /**
+   * @brief Main loop: a popup that changed while the window didn't sends the window's last
+   * frame again with it drawn in, at most at the stream's frame rate.
+   */
+  void pump_popups() {
+    if (!_popups || !_popups->changed.load(std::memory_order_acquire)) return;
+    const auto now = std::chrono::steady_clock::now();
+    const auto fps = std::max<int>(1, g_config.target_fps ? int(g_config.target_fps) : 60);
+    if (now - _last_popup_publish < std::chrono::microseconds(1'000'000 / fps)) return;
+    _popups->changed = false;
+    _last_popup_publish = now;
+    winrt::com_ptr<ID3D11Texture2D> base;
+    {
+      std::lock_guard context_lock(_d3d_context_mutex);
+      if (!_has_window_base) return;
+      base = _window_base;
+    }
+    LARGE_INTEGER qpc {};
+    QueryPerformanceCounter(&qpc);
+    deliver_texture(base, uint64_t(qpc.QuadPart));
+    ++_popups->resent;
+  }
+
   /**
    * @brief Creates a capture session for the specified capture item.
    * @returns true if the session was created successfully, false otherwise.
@@ -2771,6 +3106,12 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
+  std::shared_ptr<WindowPopups> window_popups;
+  if (g_window_target && g_target_window) {
+    window_popups = std::make_shared<WindowPopups>(d3d11_manager.get_winrt_device(), capture_format);
+    wgc_capture_manager.set_popups(window_popups);
+  }
+
   // Set up desktop switch hook for secure desktop detection
   setup_desktop_switch_hook();
 
@@ -2787,6 +3128,10 @@ int main(int argc, char *argv[]) {
     poll_pending_secure_desktop_transition();
     wgc_capture_manager.update_cursor_capture();
     watch_window_moves();
+    if (window_popups) {
+      window_popups->watch(g_target_window);
+      wgc_capture_manager.pump_popups();
+    }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(1));  // Reduced from 5ms for lower IPC jitter
   }
@@ -2797,6 +3142,7 @@ int main(int argc, char *argv[]) {
     BOOST_LOG(info) << "Main process disconnected, shutting down...";
   }
 
+  if (window_popups) window_popups->stop();
   pipe_shared->stop();
 
   // Flush logs before exit
