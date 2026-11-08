@@ -55,6 +55,11 @@ namespace platf::hyprland_windows {
       std::string monitor;  // the monitor that workspace was on ("": the focused one)
       int fullscreen = 0;  // its fullscreen state before, internal and client
       int fullscreen_client = 0;
+      // Where it was (Frametop desktopless mode puts it back there): a floating window's place and
+      // size; a tiled one's middle, where the cursor goes for dwindle to split it in beside the same
+      // neighbour.
+      bool floating = false;
+      int x = 0, y = 0, w = 0, h = 0;
       clock::time_point seen;  // last captured by a stream, or opened
       bool captured = false;  // a stream captured it at the last watch round
       bool launching = false;  // the output waits for a launched app's window (no address yet)
@@ -217,7 +222,10 @@ namespace platf::hyprland_windows {
       for (const auto &[output, h] : hosted) {
         out[output] = {{"address", h.address}, {"workspace", h.workspace}, {"monitor", h.monitor},
                        {"fullscreen", h.fullscreen},
-                       {"fullscreen_client", h.fullscreen_client}};
+                       {"fullscreen_client", h.fullscreen_client},
+                       {"floating", h.floating},
+                       {"at", {h.x, h.y}},
+                       {"size", {h.w, h.h}}};
       }
       const auto path = state_path();
       const auto tmp = path.string() + ".tmp";
@@ -335,6 +343,15 @@ namespace platf::hyprland_windows {
       return w.is_object() ? std::to_string(w.value("id", 1)) : "1";
     }
 
+    // A workspace (as workspace_selector names it) some real monitor shows now.
+    bool workspace_shown(const std::string &workspace) {
+      for (const auto &m : ask_json("monitors")) {
+        if (window_output(m.value("name", "")) || !m.contains("activeWorkspace")) continue;
+        if (workspace_selector(m["activeWorkspace"]) == workspace) return true;
+      }
+      return false;
+    }
+
     // Puts one hosted window back and removes its output. Holds the lock. No logging at exit:
     // the log may be gone by then. False (and the output stays, for the next try) when Hyprland
     // doesn't answer.
@@ -370,6 +387,17 @@ namespace platf::hyprland_windows {
                 nullptr);
           }
         }
+        // Not dropped somewhere: where it was. A tiled one splits in where its middle was, when that
+        // workspace shows there (the cursor goes there for dwindle, then back).
+        std::optional<std::pair<int, int>> cursor_was;
+        if (!onto && !h.floating && h.w > 0 && h.h > 0 && workspace_shown(workspace)) {
+          if (const auto reply = ask("j/cursorpos")) {  // an object, not query()'s array
+            const auto c = nlohmann::json::parse(*reply, nullptr, false);
+            if (c.is_object() && c.contains("x")) cursor_was = {c.value("x", 0), c.value("y", 0)};
+          }
+          lua("hl.dispatch(hl.dsp.cursor.move({x = " + std::to_string(h.x + h.w / 2) + ", y = " + std::to_string(h.y + h.h / 2) + "}))",
+              nullptr);
+        }
         if ((!lua("hl.dispatch(hl.dsp.window.fullscreen_state({window = " + window + ", internal = " +
                     std::to_string(h.fullscreen) + ", client = " + std::to_string(h.fullscreen_client) + "}))",
                   &error) ||
@@ -380,6 +408,17 @@ namespace platf::hyprland_windows {
           BOOST_LOG(warning) << "Frametop windows: can't put " << h.address << " back: " << error;
         }
         home_workspace(workspace, monitor, &error);
+        if (!onto && h.floating && h.w > 0 && h.h > 0) {
+          lua("hl.dispatch(hl.dsp.window.resize({window = " + window + ", x = " + std::to_string(h.w) + ", y = " + std::to_string(h.h) +
+                "})) hl.dispatch(hl.dsp.window.move({window = " + window + ", x = " + std::to_string(h.x) + ", y = " +
+                std::to_string(h.y) + "}))",
+              &error);
+        }
+        if (cursor_was) {
+          lua("hl.dispatch(hl.dsp.cursor.move({x = " + std::to_string(cursor_was->first) + ", y = " +
+                std::to_string(cursor_was->second) + "}))",
+              nullptr);
+        }
         if (onto) {
           // A floating window goes where it was let go, held where the panel was held.
           const auto c = find_client(h.address);
@@ -413,6 +452,11 @@ namespace platf::hyprland_windows {
       h.monitor = std::move(monitor_back);
       h.fullscreen = client.value("fullscreen", 0);
       h.fullscreen_client = client.value("fullscreenClient", 0);
+      h.floating = client.value("floating", false);
+      if (const auto at = client.value("at", nlohmann::json::array()); at.size() == 2 && at[0].is_number() && at[1].is_number())
+        h.x = at[0].get<int>(), h.y = at[1].get<int>();
+      if (const auto size = client.value("size", nlohmann::json::array()); size.size() == 2 && size[0].is_number() && size[1].is_number())
+        h.w = size[0].get<int>(), h.h = size[1].get<int>();
       h.seen = clock::now();
       hosted[output] = h;
       save();
@@ -455,6 +499,29 @@ namespace platf::hyprland_windows {
         if (exec[++i] == '%') out += '%';
       }
       return out;
+    }
+
+    std::vector<desktop_app_t> desktop_apps();
+
+    // Window class (lower case) -> the desktop app it belongs to. A StartupWMClass says it best, then
+    // the desktop file's name, then a program on the Exec line. Read again every 30 s.
+    const std::map<std::string, std::string> &app_classes() {
+      static std::map<std::string, std::string> cache;
+      static clock::time_point read_at;
+      if (!cache.empty() && clock::now() - read_at < std::chrono::seconds(30)) return cache;
+      const auto apps = desktop_apps();
+      std::map<std::string, std::string> by_wm, by_stem, by_exec;
+      for (const auto &a : apps) {
+        if (!a.wm_class.empty()) by_wm.emplace(lower(a.wm_class), a.id);
+        const auto stem = a.id.size() > 8 && a.id.ends_with(".desktop") ? a.id.substr(0, a.id.size() - 8) : a.id;
+        by_stem.emplace(lower(stem), a.id);
+        for (const auto &cls : app_window_classes(a.wm_class, a.id, a.exec)) by_exec.emplace(cls, a.id);
+      }
+      cache = by_wm;
+      cache.insert(by_stem.begin(), by_stem.end());
+      cache.insert(by_exec.begin(), by_exec.end());
+      read_at = clock::now();
+      return cache;
     }
 
     std::vector<desktop_app_t> desktop_apps() {
@@ -662,7 +729,16 @@ namespace platf::hyprland_windows {
   nlohmann::json list() {
     std::lock_guard guard {lock};
     std::map<int, std::string> monitor_names;
-    for (const auto &m : ask_json("monitors all")) monitor_names[m.value("id", -1)] = m.value("name", "");
+    std::set<std::string> shown;  // workspaces a monitor shows now (its own and an open special one)
+    for (const auto &m : ask_json("monitors all")) {
+      monitor_names[m.value("id", -1)] = m.value("name", "");
+      if (!m.value("disabled", false) && !window_output(m.value("name", ""))) {
+        for (const auto *key : {"activeWorkspace", "specialWorkspace"}) {
+          if (m.contains(key) && m[key].is_object() && !m[key].value("name", "").empty()) shown.insert(m[key].value("name", ""));
+        }
+      }
+    }
+    const auto &app_of = app_classes();
     std::map<std::string, std::string> output_of;
     for (const auto &[output, h] : hosted) output_of[h.address] = output;
     nlohmann::json windows = nlohmann::json::array();
@@ -679,7 +755,22 @@ namespace platf::hyprland_windows {
                         {"height", size.size() == 2 ? size[1] : nlohmann::json(0)},
                         {"workspace", c.contains("workspace") ? c["workspace"].value("name", "") : ""},
                         {"monitor", monitor_names[c.value("monitor", -1)]},
-                        {"output", nullptr}};
+                        {"output", nullptr},
+                        // For Frametop desktopless mode: which to bring out first (shown, then the
+                        // most recently focused, 0 = focused now), where it sits and whose app it is.
+                        {"focus", c.value("focusHistoryID", -1)},
+                        {"floating", c.value("floating", false)},
+                        {"shown", false},
+                        {"at", c.value("at", nlohmann::json::array({0, 0}))},
+                        {"app", nullptr}};
+      const auto ws = c.contains("workspace") ? c["workspace"].value("name", "") : "";
+      w["shown"] = shown.contains(ws);
+      for (const auto *key : {"class", "initialClass"}) {
+        if (const auto it = app_of.find(lower(c.value(key, ""))); it != app_of.end()) {
+          w["app"] = it->second;
+          break;
+        }
+      }
       if (const auto it = output_of.find(address); it != output_of.end()) w["output"] = it->second;
       windows.push_back(std::move(w));
     }
@@ -913,6 +1004,11 @@ namespace platf::hyprland_windows {
         back.monitor = h.value("monitor", "");
         back.fullscreen = h.value("fullscreen", 0);
         back.fullscreen_client = h.value("fullscreen_client", 0);
+        back.floating = h.value("floating", false);
+        if (const auto at = h.value("at", nlohmann::json::array()); at.size() == 2 && at[0].is_number() && at[1].is_number())
+          back.x = at[0].get<int>(), back.y = at[1].get<int>();
+        if (const auto size = h.value("size", nlohmann::json::array()); size.size() == 2 && size[0].is_number() && size[1].is_number())
+          back.w = size[0].get<int>(), back.h = size[1].get<int>();
         back.seen = clock::now();
         hosted[output] = back;
       }
