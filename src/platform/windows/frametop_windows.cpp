@@ -716,6 +716,7 @@ namespace platf::frametop_windows {
     std::atomic<bool> display_releasing {false};  // a release or a recovery is running
     clock::time_point last_hosted;  // under `lock`
     std::string display_output;  // under `lock`: reserved().output, for the watcher
+    int display_missing = 0;  // under `lock`: watcher ticks in a row it was missing
 
     // True when the display went now. One whose release waits on another stream's capture
     // draining counts as let go too: the coordinator finishes it, and a new hold (a newer
@@ -734,17 +735,30 @@ namespace platf::frametop_windows {
       return released;
     }
 
+    // Ours still: there, and the coordinator still gives our hold that output (a display that
+    // went away can leave its name to a client's new one). Under r.lock.
+    bool still_ours(const reserved_t &r) {
+      if (!r.held || r.output.empty() || !find_monitor(r.output)) return false;
+      const auto state = remote_session::monitor_runtime_snapshot(kDisplayId, r.generation);
+      return state.ready && state.output == r.output;
+    }
+
     // The windows' display, made or kept (off the window thread: it can take seconds).
-    std::optional<std::string> hold_display() {
+    // `still_counted`: a display of ours whose release is still draining, which the
+    // coordinator counts yet.
+    std::optional<std::string> hold_display(bool still_counted = false) {
+      if (stopping) return std::nullopt;
       auto &r = reserved();
       std::unique_lock guard {r.lock};
       r.last_use = clock::now();
-      if (r.held && !r.output.empty() && find_monitor(r.output)) return r.output;
+      if (still_ours(r)) return r.output;
       const bool was_held = r.held;
       if (!was_held) {
         // The last Remote Display slot stays a client's.
         const auto capacity = std::size_t(std::max(0, int(config::video.virtual_display_max_clients)));
-        if (remote_display_topology::instance().managed_client_identity_count() + 2 > capacity) {
+        auto used = remote_display_topology::instance().managed_client_identity_count();
+        if (still_counted && used > 0) --used;
+        if (used + 2 > capacity) {
           BOOST_LOG(info) << "Frametop windows: no Remote Display slot to spare for their display; windows stay on their monitors";
           return std::nullopt;
         }
@@ -770,6 +784,12 @@ namespace platf::frametop_windows {
       if (r.output != state.output) BOOST_LOG(info) << "Frametop windows: their display is " << state.output;
       r.output = state.output;
       r.last_use = clock::now();
+      if (stopping) {  // exiting meanwhile: shutdown's teardown may have run already
+        const bool released = release_display_locked(r, "exiting");
+        guard.unlock();
+        if (released) nvhttp::cleanup_after_owned_display_release();
+        return std::nullopt;
+      }
       {
         std::lock_guard windows {lock};
         display_output = r.output;
@@ -778,7 +798,7 @@ namespace platf::frametop_windows {
     }
 
     // From the watcher: the display goes once no window has been out for kDisplayIdle.
-    void release_display_if_idle() {
+    void release_display_if_idle() try {
       bool released = false;
       if (!stopping) {
         auto &r = reserved();
@@ -792,6 +812,9 @@ namespace platf::frametop_windows {
       }
       // What streams that ended while it was held left for later (display revert, cleanup).
       if (released) nvhttp::cleanup_after_owned_display_release();
+      display_releasing = false;
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "Frametop windows: letting their display go: " << e.what();
       display_releasing = false;
     }
 
@@ -809,14 +832,16 @@ namespace platf::frametop_windows {
 
     // From the watcher: the display went while windows were out on it (a host end-stream, which
     // ends every stream and drops every Remote Display, or the driver). Windows put the windows
-    // on the PC's own monitors then. Those still streamed go onto a new display; the rest go back.
-    void recover_display() {
+    // on the PC's own monitors then. With streams of windows still running, those streamed (or
+    // opened, or between reconnects, within the grace) go onto a new display; with none, or for
+    // the rest, the windows go back.
+    void recover_display() try {
       if (!stopping) {
         bool gone = false, released = false;
         {
           auto &r = reserved();
           std::lock_guard guard {r.lock};
-          if (r.held && !r.output.empty() && !find_monitor(r.output)) {  // not made again meanwhile
+          if (r.held && !still_ours(r)) {  // not made again meanwhile
             gone = true;
             BOOST_LOG(info) << "Frametop windows: their display " << r.output << " went away with windows out";
             released = release_display_locked(r, "went away");  // the next hold is a new one
@@ -827,13 +852,26 @@ namespace platf::frametop_windows {
         if (gone) {
           window_thread().run([&] {
             std::lock_guard guard {lock};
-            std::vector<std::string> unseen;
-            for (const auto &[output, h] : hosted_windows) (video::output_is_captured(output) ? streamed : unseen).push_back(output);
-            for (const auto &output : unseen) put_back(output);
+            const auto now = clock::now();
+            const auto on_display = display_output.empty() ? std::nullopt : find_monitor(display_output);
+            bool any_captured = false;
+            for (const auto &[output, h] : hosted_windows) any_captured = any_captured || video::output_is_captured(output);
+            std::vector<std::string> back;
+            for (const auto &[output, h] : hosted_windows) {
+              MONITORINFOEXW now_on {};
+              now_on.cbSize = sizeof(now_on);
+              if (on_display && GetMonitorInfoW(MonitorFromWindow(h.hwnd, MONITOR_DEFAULTTONEAREST), &now_on) &&
+                  _wcsicmp(now_on.szDevice, on_display->szDevice) == 0) {
+                continue;  // an open meanwhile put it on a new display already
+              }
+              const bool wanted = any_captured && (video::output_is_captured(output) || now - h.seen < kGrace);
+              (wanted ? streamed : back).push_back(output);
+            }
+            for (const auto &output : back) put_back(output);
             return 0;
           });
         }
-        if (const auto display = streamed.empty() ? std::nullopt : hold_display()) {
+        if (const auto display = streamed.empty() ? std::nullopt : hold_display(gone && !released)) {
           window_thread().run([&] {
             std::lock_guard guard {lock};
             for (const auto &output : streamed) {
@@ -843,6 +881,9 @@ namespace platf::frametop_windows {
           });
         }
       }
+      display_releasing = false;
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "Frametop windows: after their display went: " << e.what();
       display_releasing = false;
     }
 
@@ -912,6 +953,16 @@ namespace platf::frametop_windows {
       }).detach();
     }
 
+    // A display job off the window thread; the flag clears if it can't start.
+    void spawn(void (*job)()) {
+      try {
+        std::thread(job).detach();
+      } catch (const std::exception &e) {
+        BOOST_LOG(warning) << "Frametop windows: " << e.what();
+        display_releasing = false;
+      }
+    }
+
     void watch_once() {
       std::vector<std::string> ended;
       {
@@ -920,12 +971,16 @@ namespace platf::frametop_windows {
         const auto now = clock::now();
         if (!hosted_windows.empty()) {
           last_hosted = now;
-          if (display_held && !display_output.empty() && !display_releasing && !find_monitor(display_output) &&
-              !display_releasing.exchange(true)) {
-            std::thread(recover_display).detach();
+          // Missing twice in a row: a monitor can drop out of the list for a moment while the
+          // displays are laid out again.
+          const bool missing = display_held && !display_output.empty() && !find_monitor(display_output);
+          display_missing = missing ? display_missing + 1 : 0;
+          if (display_missing >= 2 && !display_releasing.exchange(true)) {
+            display_missing = 0;
+            spawn(recover_display);
           }
         } else if (display_held && now - last_hosted > kDisplayIdle && !display_releasing.exchange(true)) {
-          std::thread(release_display_if_idle).detach();
+          spawn(release_display_if_idle);
         }
         if (hosted_windows.empty()) return;
         std::vector<std::string> done;
