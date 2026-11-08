@@ -502,11 +502,19 @@ namespace platf::frametop_windows {
     // Store apps (packaged ones): no Start menu shortcut names them, and only the signed-in
     // user's shell lists them, so PowerShell's Get-StartApps runs as the user now and then, off
     // the window thread. Their ids are AUMIDs (Family_publisher!App); Explorer starts them.
-    std::mutex store_lock;
-    std::condition_variable store_loaded;
-    std::vector<app_t> store_apps;  // under store_lock
-    std::optional<clock::time_point> store_at;  // under store_lock: when they were listed
-    bool store_loading = false;  // under store_lock
+    struct store_t {
+      std::mutex lock;
+      std::condition_variable loaded;
+      std::vector<app_t> apps;  // under lock
+      std::optional<clock::time_point> at;  // under lock: when they were listed
+      bool loading = false;  // under lock
+    };
+
+    // Never destroyed: a listing still running at exit outlives the statics.
+    store_t &store() {
+      static auto &it = *new store_t;
+      return it;
+    }
 
     bool is_aumid(const std::string &id) {
       const auto bang = id.find('!');
@@ -526,8 +534,9 @@ namespace platf::frametop_windows {
       boost::filesystem::path working_dir;
       std::error_code ec;
       auto child = run_command(false, false,
-                               "powershell.exe -NoProfile -NonInteractive -Command \"[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
-                               "Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress\"",
+                               // ASCII only (\\u escapes), whatever the console's code page.
+                               "powershell.exe -NoProfile -NonInteractive -Command \"$j = Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Compress; "
+                               "[regex]::Replace($j, '[^\\x00-\\x7F]', { '\\u{0:x4}' -f [int][char]$args[0].Value })\"",
                                working_dir, bp::this_process::env(), file, ec, nullptr);
       std::fclose(file);
       if (ec) {
@@ -548,7 +557,6 @@ namespace platf::frametop_windows {
       }
       std::ifstream in {out_path, std::ios::binary};
       std::string text {std::istreambuf_iterator<char> {in}, {}};
-      if (text.starts_with("\xEF\xBB\xBF")) text.erase(0, 3);
       auto listed = nlohmann::json::parse(text, nullptr, false);
       if (listed.is_object()) listed = nlohmann::json::array({listed});  // one app: no array
       std::vector<app_t> out;
@@ -563,17 +571,31 @@ namespace platf::frametop_windows {
       return out;
     }
 
+    void refresh_store_apps();
+
+    bool has_store_apps() {
+      std::lock_guard guard {store().lock};
+      return !store().apps.empty();
+    }
+
+    // Store apps listed (or tried) once, waiting up to 8 s for the first list.
+    void await_store_apps() {
+      refresh_store_apps();
+      std::unique_lock guard {store().lock};
+      store().loaded.wait_for(guard, 8s, [] { return store().at.has_value(); });
+    }
+
     bool store_app(const std::string &id) {
-      std::lock_guard guard {store_lock};
-      return std::any_of(store_apps.begin(), store_apps.end(), [&](const auto &app) { return lower(app.id) == lower(id); });
+      std::lock_guard guard {store().lock};
+      return std::any_of(store().apps.begin(), store().apps.end(), [&](const auto &app) { return lower(app.id) == lower(id); });
     }
 
     // Lists Store apps again in the background, when they're older than ten minutes.
     void refresh_store_apps() {
       {
-        std::lock_guard guard {store_lock};
-        if (store_loading || (store_at && clock::now() - *store_at < 10min)) return;
-        store_loading = true;
+        std::lock_guard guard {store().lock};
+        if (store().loading || (store().at && clock::now() - *store().at < 10min)) return;
+        store().loading = true;
       }
       std::thread([] {
         std::vector<app_t> loaded;
@@ -583,14 +605,14 @@ namespace platf::frametop_windows {
           BOOST_LOG(warning) << "Frametop windows: listing Store apps failed: " << e.what();
         }
         {
-          std::lock_guard guard {store_lock};
+          std::lock_guard guard {store().lock};
           // A failure (no one signed in yet) keeps the last list and tries again in a minute.
           const bool failed = loaded.empty();
-          if (!failed || !store_at) store_apps = std::move(loaded);
-          store_at = failed ? clock::now() - 9min : clock::now();
-          store_loading = false;
+          if (!failed || !store().at) store().apps = std::move(loaded);
+          store().at = failed ? clock::now() - 9min : clock::now();
+          store().loading = false;
         }
-        store_loaded.notify_all();
+        store().loaded.notify_all();
       }).detach();
     }
 
@@ -599,12 +621,12 @@ namespace platf::frametop_windows {
       std::vector<app_t> out = cached_apps();
       std::set<std::string> names;
       for (const auto &app : out) names.insert(lower(app.name));
-      std::vector<app_t> store;
+      std::vector<app_t> listed;
       {
-        std::lock_guard guard {store_lock};
-        store = store_apps;
+        std::lock_guard guard {store().lock};
+        listed = store().apps;
       }
-      for (auto &app : store) {
+      for (auto &app : listed) {
         if (names.insert(lower(app.name)).second) out.push_back(std::move(app));
       }
       std::sort(out.begin(), out.end(), [](const auto &a, const auto &b) { return lower(a.name) < lower(b.name); });
@@ -734,6 +756,7 @@ namespace platf::frametop_windows {
   }
 
   nlohmann::json list() {
+    refresh_store_apps();  // when they're old: a Store window is named by its app
     return window_thread().run([] {
       std::lock_guard guard {lock};
       std::map<HWND, std::string> output_of;
@@ -765,7 +788,7 @@ namespace platf::frametop_windows {
                           {"app", nullptr}};
         if (const auto app = app_of(exe)) {
           w["app"] = *app;
-        } else if (const auto id = aumid_of(hwnd); is_aumid(id) && store_app(id)) {
+        } else if (const auto id = has_store_apps() ? aumid_of(hwnd) : std::string {}; !id.empty() && store_app(id)) {
           w["app"] = id;  // a Store app's window
         }
         if (const auto it = output_of.find(hwnd); it != output_of.end()) w["output"] = it->second;
@@ -778,12 +801,7 @@ namespace platf::frametop_windows {
   }
 
   nlohmann::json apps() {
-    refresh_store_apps();
-    {
-      // The first list waits a little for the Store apps.
-      std::unique_lock guard {store_lock};
-      store_loaded.wait_for(guard, 8s, [] { return store_at.has_value(); });
-    }
+    await_store_apps();  // the first list waits a little for them
     return window_thread().run([] {
       std::lock_guard guard {lock};
       nlohmann::json out = nlohmann::json::array();
@@ -805,6 +823,7 @@ namespace platf::frametop_windows {
   }
 
   std::optional<nlohmann::json> launch(const std::string &app_id, int width, int height, std::string *error) {
+    if (app_id.find('!') != std::string::npos) await_store_apps();  // a Store app's AUMID
     struct started_t {
       std::optional<app_t> app;
       std::set<HWND> before;
