@@ -231,7 +231,7 @@ namespace platf::frametop_windows {
       }
       if (out.empty()) {
         if (const auto process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid_of(hwnd))) {
-          wchar_t id[APPLICATION_USER_MODEL_ID_MAX_LENGTH] {};
+          wchar_t id[130] {};  // APPLICATION_USER_MODEL_ID_MAX_LENGTH
           UINT32 size = UINT32(std::size(id));
           if (GetApplicationUserModelId(process, &size, id) == ERROR_SUCCESS) out = id;
           CloseHandle(process);
