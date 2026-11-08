@@ -35,6 +35,7 @@ refresh_prefix = source[refresh_start:refresh_end]
 program = r'''
 #include "src/platform/linux/kmsgrab_hdr.h"
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
@@ -75,6 +76,8 @@ void reset(std::vector<read_e> sequence) {
 }
 namespace kms {
 inline std::mutex display_mutex;
+// The Hyprland layout watch refresh() reads (0: not Hyprland, as here).
+inline std::atomic<std::uint64_t> hyprland_layout_size_now {0};
 using prop_t=std::unique_ptr<drmModePropertyRes>;
 using obj_prop_t=std::unique_ptr<drmModeObjectProperties>;
 using prop_blob_t=std::unique_ptr<drmModePropertyBlobRes>;
@@ -148,6 +151,7 @@ struct display_vram_t : display_t {
   unsigned crtc_id=7;
   std::optional<std::uint64_t> hdr_metadata_blob_id;
   hdr::generation_t hdr_metadata_generation;
+  std::uint64_t hyprland_layout_at_start = 0;
   explicit display_vram_t(mem_type_e) {}
   int init(const std::string& name, const video::config_t&) {
     assert(name=="DP-1");
