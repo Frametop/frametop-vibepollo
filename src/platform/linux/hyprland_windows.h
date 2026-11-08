@@ -55,8 +55,28 @@ namespace platf::hyprland_windows {
   /** Resizes a window output, and with it the window. */
   bool resize(const std::string &output, int width, int height, std::string *error);
 
-  /** Puts a window back (named by its output or its address) and removes its output. */
-  bool release(const std::string &output_or_address, std::string *error);
+  /**
+   * Where a released window goes instead of back where it came from: the monitor a window panel
+   * was dropped on in Frametop, at u, v of the way across and down it (0 to 1), held at fx, fy of
+   * the window. A floating window goes there; a tiled one tiles where the cursor is, there.
+   */
+  struct drop_t {
+    std::string monitor;
+    double u = 0.5, v = 0.5, fx = 0.5, fy = 0.5;
+  };
+
+  /**
+   * Puts a window back (named by its output or its address) and removes its output: where it came
+   * from, or onto `drop`'s monitor when it names a real one.
+   */
+  bool release(const std::string &output_or_address, std::string *error, const drop_t *drop = nullptr);
+
+  /**
+   * The window shown at u, v of the way across and down a real monitor (0 to 1):
+   * {"address", "class", "title", "width", "height", "grab": [fx, fy]} (grab: where the point
+   * is in it, 0 to 1), or nullopt with *error set. It doesn't move the window.
+   */
+  std::optional<nlohmann::json> at(const std::string &monitor, double u, double v, std::string *error);
 
   /** Puts every window back ("Bring windows back"). Returns how many. */
   int release_all();

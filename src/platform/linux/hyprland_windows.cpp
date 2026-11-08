@@ -8,6 +8,7 @@
 #include "hyprland_windows.h"
 #include "app_window_class.h"
 #include "window_cursor.h"
+#include "window_pick.h"
 
 #include "src/config.h"
 #include "src/logging.h"
@@ -189,6 +190,12 @@ namespace platf::hyprland_windows {
       return std::nullopt;
     }
 
+    monitor_rect_t monitor_rect(const nlohmann::json &m) {
+      const auto name = m.value("name", "");
+      return {name, m.value("x", 0), m.value("y", 0), m.value("width", 0), m.value("height", 0), m.value("scale", 1.0),
+              m.value("transform", 0), m.value("focused", false), window_output(name)};
+    }
+
     std::optional<nlohmann::json> find_monitor(const std::string &name) {
       for (const auto &m : ask_json("monitors")) {
         if (m.value("name", "") == name) return m;
@@ -331,7 +338,7 @@ namespace platf::hyprland_windows {
     // Puts one hosted window back and removes its output. Holds the lock. No logging at exit:
     // the log may be gone by then. False (and the output stays, for the next try) when Hyprland
     // doesn't answer.
-    bool put_back(const std::string &output, bool log = true) {
+    bool put_back(const std::string &output, bool log = true, const drop_t *drop = nullptr) {
       const auto it = hosted.find(output);
       if (it == hosted.end()) return true;
       const auto clients = query("clients");
@@ -347,7 +354,22 @@ namespace platf::hyprland_windows {
       if (open) {
         const auto window = lua_string("address:" + h.address);
         std::string error;
-        const auto workspace = h.workspace.empty() ? focused_workspace() : h.workspace;
+        auto workspace = h.workspace.empty() ? focused_workspace() : h.workspace;
+        auto monitor = h.monitor;
+        // Dropped onto a monitor in Frametop: onto the workspace it shows, the cursor at the drop
+        // first, so a tiled window tiles there (dwindle splits the window under the cursor).
+        std::optional<monitor_rect_t> onto;
+        std::pair<int, int> point;
+        if (drop && !window_output(drop->monitor)) {
+          if (const auto m = find_monitor(drop->monitor); m && !m->value("disabled", false) && m->contains("activeWorkspace")) {
+            onto = monitor_rect(*m);
+            point = monitor_point(*onto, drop->u, drop->v);
+            workspace = workspace_selector((*m)["activeWorkspace"]);
+            monitor = drop->monitor;
+            lua("hl.dispatch(hl.dsp.cursor.move({x = " + std::to_string(point.first) + ", y = " + std::to_string(point.second) + "}))",
+                nullptr);
+          }
+        }
         if ((!lua("hl.dispatch(hl.dsp.window.fullscreen_state({window = " + window + ", internal = " +
                     std::to_string(h.fullscreen) + ", client = " + std::to_string(h.fullscreen_client) + "}))",
                   &error) ||
@@ -357,7 +379,18 @@ namespace platf::hyprland_windows {
             log) {
           BOOST_LOG(warning) << "Frametop windows: can't put " << h.address << " back: " << error;
         }
-        home_workspace(workspace, h.monitor, &error);
+        home_workspace(workspace, monitor, &error);
+        if (onto) {
+          // A floating window goes where it was let go, held where the panel was held.
+          const auto c = find_client(h.address);
+          const auto size = c ? c->value("size", nlohmann::json::array({0, 0})) : nlohmann::json::array({0, 0});
+          if (c && c->value("floating", false) && size.size() == 2) {
+            const auto [x, y] = drop_origin(*onto, point.first, point.second, drop->fx, drop->fy, size[0].get<int>(), size[1].get<int>());
+            lua("hl.dispatch(hl.dsp.window.move({window = " + window + ", x = " + std::to_string(x) + ", y = " + std::to_string(y) + "}))",
+                &error);
+          }
+          if (log) BOOST_LOG(info) << "Frametop windows: " << h.address << " dropped onto " << monitor;
+        }
       }
       if (find_monitor(output)) run("output remove " + output, nullptr);
       if (log) BOOST_LOG(info) << "Frametop windows: " << output << " released (" << h.address << ")";
@@ -472,9 +505,7 @@ namespace platf::hyprland_windows {
       std::vector<monitor_rect_t> rects;
       for (const auto &m : monitors) {
         if (m.value("disabled", false)) continue;
-        const auto name = m.value("name", "");
-        rects.push_back({name, m.value("x", 0), m.value("y", 0), m.value("width", 0), m.value("height", 0),
-                         m.value("scale", 1.0), m.value("transform", 0), m.value("focused", false), window_output(name)});
+        rects.push_back(monitor_rect(m));
       }
       const auto to = cursor_off(at.value("x", 0), at.value("y", 0), rects, ended, home);
       if (!to) return;
@@ -807,18 +838,56 @@ namespace platf::hyprland_windows {
     return lua(mode_rule(output, width, height), error);
   }
 
-  bool release(const std::string &output_or_address, std::string *error) {
+  bool release(const std::string &output_or_address, std::string *error, const drop_t *drop) {
     std::lock_guard guard {lock};
     for (const auto &[output, h] : hosted) {
       if (output == output_or_address || h.address == output_or_address) {
         const auto name = output;  // put_back erases the entry
-        if (put_back(name)) return true;
+        if (put_back(name, true, drop)) return true;
         *error = "Hyprland didn't answer: " + name + " stays out for now";
         return false;
       }
     }
     *error = "no window output for " + output_or_address;
     return false;
+  }
+
+  std::optional<nlohmann::json> at(const std::string &monitor, double u, double v, std::string *error) {
+    std::lock_guard guard {lock};
+    std::optional<nlohmann::json> m;
+    if (!window_output(monitor)) m = find_monitor(monitor);
+    if (!m || m->value("disabled", false)) {
+      *error = "no monitor " + monitor;
+      return std::nullopt;
+    }
+    const auto [x, y] = monitor_point(monitor_rect(*m), u, v);
+    std::vector<int> shown;
+    if (const int special = m->contains("specialWorkspace") ? (*m)["specialWorkspace"].value("id", 0) : 0) shown.push_back(special);
+    if (m->contains("activeWorkspace")) shown.push_back((*m)["activeWorkspace"].value("id", 0));
+    std::vector<client_rect_t> rects;
+    std::map<std::string, nlohmann::json> by_address;
+    for (const auto &c : ask_json("clients")) {
+      if (!c.value("mapped", false) || c.value("hidden", false)) continue;
+      const auto pos = c.value("at", nlohmann::json::array({0, 0})), size = c.value("size", nlohmann::json::array({0, 0}));
+      if (pos.size() != 2 || size.size() != 2 || !c.contains("workspace")) continue;
+      const auto address = c.value("address", "");
+      rects.push_back({address, pos[0].get<int>(), pos[1].get<int>(), size[0].get<int>(), size[1].get<int>(),
+                       c["workspace"].value("id", 0), c.value("floating", false), c.value("fullscreen", 0) == 2,
+                       c.value("focusHistoryID", 0)});
+      by_address[address] = c;
+    }
+    const auto *hit = window_at(rects, shown, x, y);
+    if (!hit) {
+      *error = "no window there";
+      return std::nullopt;
+    }
+    const auto &c = by_address[hit->address];
+    return nlohmann::json {{"address", hit->address},
+                           {"class", c.value("class", "")},
+                           {"title", c.value("title", "")},
+                           {"width", hit->width},
+                           {"height", hit->height},
+                           {"grab", {double(x - hit->x) / hit->width, double(y - hit->y) / hit->height}}};
   }
 
   int release_all() {

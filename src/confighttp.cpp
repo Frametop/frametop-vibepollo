@@ -1462,6 +1462,11 @@ namespace confighttp {
     return it != body.end() && it->is_number_integer() ? it->get<int>() : 0;
   }
 
+  double frametop_windows_number(const nlohmann::json &body, const char *key, double fallback) {
+    const auto it = body.find(key);
+    return it != body.end() && it->is_number() ? it->get<double>() : fallback;
+  }
+
   std::string frametop_windows_string(const nlohmann::json &body, const char *key) {
     const auto it = body.find(key);
     return it != body.end() && it->is_string() ? it->get<std::string>() : std::string {};
@@ -1492,6 +1497,22 @@ namespace confighttp {
     send_response(response, out);
   }
 
+  // The window at a point of a monitor (x, y: 0 to 1 across and down it), for pulling it off a
+  // display panel in Frametop. Read only: the open that follows moves it.
+  void postFrametopWindowAt(resp_https_t response, req_https_t request) {
+    if (!validateContentType(response, request, "application/json") || !authenticate(response, request) ||
+        !frametop_windows_ready(response)) return;
+    const auto body = frametop_windows_body(response, request);
+    if (!body) return;
+    std::string error;
+    const auto hit = platf::hyprland_windows::at(frametop_windows_string(*body, "monitor"), frametop_windows_number(*body, "x", -1),
+                                                 frametop_windows_number(*body, "y", -1), &error);
+    if (!hit) return bad_request(response, request, error);
+    auto out = *hit;
+    out["status"] = true;
+    send_response(response, out);
+  }
+
   void postFrametopWindowResize(resp_https_t response, req_https_t request) {
     if (!validateContentType(response, request, "application/json") || !authenticate(response, request) ||
         !frametop_windows_ready(response)) return;
@@ -1515,7 +1536,16 @@ namespace confighttp {
     std::string error;
     auto which = frametop_windows_string(*body, "output");
     if (which.empty()) which = frametop_windows_string(*body, "address");
-    if (!platf::hyprland_windows::release(which, &error)) return bad_request(response, request, error);
+    // Dropped onto one of this PC's displays in Frametop: onto that monitor instead.
+    platf::hyprland_windows::drop_t drop;
+    drop.monitor = frametop_windows_string(*body, "monitor");
+    drop.u = frametop_windows_number(*body, "x", 0.5);
+    drop.v = frametop_windows_number(*body, "y", 0.5);
+    drop.fx = frametop_windows_number(*body, "grab_x", 0.5);
+    drop.fy = frametop_windows_number(*body, "grab_y", 0.5);
+    if (!platf::hyprland_windows::release(which, &error, drop.monitor.empty() ? nullptr : &drop)) {
+      return bad_request(response, request, error);
+    }
     send_response(response, nlohmann::json {{"status", true}, {"released", 1}});
   }
 #endif
@@ -6572,6 +6602,7 @@ namespace confighttp {
     register_api_route("^/api/frametop/windows/apps$", "GET", getFrametopWindowApps);
     register_blocking_api_route("^/api/frametop/windows/open$", "POST", postFrametopWindowOpen);
     register_api_route("^/api/frametop/windows/resize$", "POST", postFrametopWindowResize);
+    register_api_route("^/api/frametop/windows/at$", "POST", postFrametopWindowAt);
     register_api_route("^/api/frametop/windows/release$", "POST", postFrametopWindowRelease);
     register_api_route("^/api/lutris/status$", "GET", getLutrisStatus);
     register_api_route("^/api/lutris/games$", "GET", getLutrisGames);
