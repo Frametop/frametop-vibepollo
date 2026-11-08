@@ -27,6 +27,7 @@
   #include <tuple>
   #include <utility>
   #include <vector>
+  #include "frametop_window_target.h"
 
 namespace platf::frametop_display_mode {
   using namespace std::literals;
@@ -343,6 +344,10 @@ namespace platf::frametop_display_mode {
   }  // namespace
 
   std::shared_ptr<void> hold_resolution(const std::string &output_name, const int width, const int height) {
+    // A window output (DEE-348) shares a monitor someone may be using: its monitor's resolution stays as it is.
+    if (frametop_window_target::is_window_output(output_name)) {
+      return nullptr;
+    }
     if (width <= 0 || height <= 0) {
       return nullptr;
     }

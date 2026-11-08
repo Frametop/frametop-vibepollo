@@ -21,6 +21,7 @@
   #include <set>
   #include <thread>
   #include <utility>
+  #include "frametop_window_target.h"
 
 namespace platf::frametop_display_hdr {
   using namespace std::literals;
@@ -159,6 +160,10 @@ namespace platf::frametop_display_hdr {
   }  // namespace
 
   std::shared_ptr<void> hold_sdr(const std::string &output_name) {
+    // A window output (DEE-348) shares a monitor someone may be using: its monitor's HDR stays as it is.
+    if (frametop_window_target::is_window_output(output_name)) {
+      return nullptr;
+    }
     std::string device_id;
     {
       std::lock_guard lock {g_mutex};

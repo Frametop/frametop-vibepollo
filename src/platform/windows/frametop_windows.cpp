@@ -323,7 +323,17 @@ namespace platf::frametop_windows {
       const int y = std::clamp<int>(frame->top, work.top, std::max<int>(work.top, work.bottom - height));
       const int left = frame->left - outer.left, top = frame->top - outer.top;
       const int right = outer.right - frame->right, bottom = outer.bottom - frame->bottom;
-      SetWindowPos(hwnd, nullptr, x - left, y - top, width + left + right, height + top + bottom, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+      constexpr UINT flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER;
+      SetWindowPos(hwnd, nullptr, x - left, y - top, width + left + right, height + top + bottom, flags);
+      // A window's invisible frame can change with its size (dialogs do): measure what it drew
+      // and correct once, so the capture is the size the panel asked for.
+      const auto drawn = target::capture_rect(hwnd);
+      if (!drawn || !GetWindowRect(hwnd, &outer)) return;
+      const int dw = width - (drawn->right - drawn->left), dh = height - (drawn->bottom - drawn->top);
+      const int dx = x - drawn->left, dy = y - drawn->top;
+      if (dw || dh || dx || dy) {
+        SetWindowPos(hwnd, nullptr, outer.left + dx, outer.top + dy, outer.right - outer.left + dw, outer.bottom - outer.top + dh, flags);
+      }
     }
 
     // Window thread only, under the lock.
@@ -378,6 +388,10 @@ namespace platf::frametop_windows {
       for (const auto &[root, prefix] : roots) {
         std::error_code ec;
         for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+          if (it.depth() == 0 && it->is_directory(ec) && lower(it->path().filename().wstring()) == L"startup") {
+            it.disable_recursion_pending();  // what runs at sign-in, not apps to open
+            continue;
+          }
           if (!it->is_regular_file(ec) || lower(it->path().extension().wstring()) != L".lnk") continue;
           const auto name = utf_utils::to_utf8(it->path().stem().wstring());
           if (lower(name).find("uninstall") != std::string::npos) continue;
@@ -394,6 +408,12 @@ namespace platf::frametop_windows {
           if (ec || id.empty()) id = name + ".lnk";
           by_id.try_emplace(id, app_t {id, name, it->path().wstring(), exe});  // the machine's first
         }
+      }
+      // One entry per app: the same shortcut often sits in a vendor folder and at the top.
+      std::set<std::pair<std::string, std::wstring>> seen;
+      for (auto it = by_id.begin(); it != by_id.end();) {
+        const bool dup = !it->second.exe.empty() && !seen.emplace(lower(it->second.name), it->second.exe).second;
+        it = dup ? by_id.erase(it) : std::next(it);
       }
       file->Release();
       link->Release();
@@ -604,14 +624,21 @@ namespace platf::frametop_windows {
       *error = start_app.error;
       return std::nullopt;
     }
-    const auto deadline = clock::now() + kLaunchWait;
+    const auto started = clock::now();
+    const auto deadline = started + kLaunchWait;
     while (clock::now() < deadline) {
       std::this_thread::sleep_for(250ms);
+      const bool any_new = clock::now() - started > 3s;
       const auto found = window_thread().run([&]() -> std::optional<HWND> {
-        for (const auto hwnd : app_windows()) {
+        const auto windows = app_windows();
+        for (const auto hwnd : windows) {
           if (start_app.before.contains(hwnd)) continue;
           if (start_app.app->exe.empty() || exe_of(pid_of(hwnd)) == start_app.app->exe) return hwnd;
         }
+        // A shortcut to a launcher (Update.exe, a console that Terminal takes over) opens its
+        // window from another exe: then the new window in front, once the exe's own is late.
+        const auto front = GetForegroundWindow();
+        if (any_new && front && !start_app.before.contains(front) && std::find(windows.begin(), windows.end(), front) != windows.end()) return front;
         return std::nullopt;
       });
       if (!found) continue;
