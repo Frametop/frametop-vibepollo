@@ -41,6 +41,8 @@ static const char steam_launch_path[] =
   "/usr/libexec/vibeshine/vibepollo-steam-launch";
 static const char mic_source_path[] =
   "/usr/libexec/vibeshine/vibepollo-mic-source";
+static const char clipboard_path[] =
+  "/usr/libexec/vibeshine/vibepollo-clipboard";
 // Steam can still be settling its previous transient launch unit when the
 // next request arrives.  Retry only the desktop Steam fallback; the direct
 // launcher and arbitrary app commands must never be replayed automatically.
@@ -1333,6 +1335,7 @@ static bool hyprland_request_supported(const struct session_identity *identity, 
   return !strcmp(operation, "display-observe") || !strcmp(operation, "display-observe-events") ||
          !strcmp(operation, "display-layout") ||
          !strncmp(operation, "audio-", 6) || !strncmp(operation, "provider-", 9) ||
+         !strcmp(operation, VIBEPOLLO_SESSION_CLIPBOARD_OPERATION) ||
          !strcmp(operation, "app") ||
          // X11/Proton launches need the bound Xwayland display.
          (identity->x_display[0] && (!strcmp(operation, "steam") || !strcmp(operation, "steam-direct") ||
@@ -1345,7 +1348,7 @@ static int execute_request(int argc, char **argv,
   if (argc < 2) return 2;
   enum operation {
     DISPLAY_QUERY, DISPLAY_APPLY, DISPLAY_OBSERVE, DISPLAY_LAYOUT, DISPLAY_POWER, DISPLAY_WAKE, DISPLAY_INHIBIT, DISPLAY_RETAIN, TOUCH_MAP, AUDIO_GET_DEFAULT, AUDIO_LIST_SINKS, AUDIO_SET_DEFAULT,
-    AUDIO_CREATE_NULL, AUDIO_REMOVE_NULL, AUDIO_CAPTURE, AUDIO_MIC_SOURCE, STEAM, STEAM_BIG_PICTURE, STEAM_DIRECT, GLOBAL_LIMITER, LUTRIS, LUTRIS_WAYLAND_HDR, MANAGED_FOCUS,
+    AUDIO_CREATE_NULL, AUDIO_REMOVE_NULL, AUDIO_CAPTURE, AUDIO_MIC_SOURCE, CLIPBOARD, STEAM, STEAM_BIG_PICTURE, STEAM_DIRECT, GLOBAL_LIMITER, LUTRIS, LUTRIS_WAYLAND_HDR, MANAGED_FOCUS,
     PROVIDER_STEAM_SCAN, PROVIDER_LUTRIS_SCAN, PROVIDER_STEAM_ARTWORK, PROVIDER_LUTRIS_ARTWORK, RTX_HDR_FOREGROUND, APP, APP_WAYLAND_HDR
   } operation;
   unsigned long first_number = 0, second_number = 0, third_number = 0;
@@ -1390,6 +1393,7 @@ static int execute_request(int argc, char **argv,
            parse_number(argv[4], 1, 8192, &third_number) &&
            parse_channel_mapping(argv[5], second_number, channel_mapping)) operation = AUDIO_CAPTURE;
   else if (!strcmp(argv[1], VIBEPOLLO_SESSION_INPUT_OPERATION) && argc == 2 && !strcmp(identity->role, "desktop")) operation = AUDIO_MIC_SOURCE;
+  else if (!strcmp(argv[1], VIBEPOLLO_SESSION_CLIPBOARD_OPERATION) && argc == 2 && !strcmp(identity->role, "desktop")) operation = CLIPBOARD;
   else if (!strcmp(argv[1], "steam") && argc == 3 && numeric_suffix(argv[2], "") && !strcmp(identity->role, "desktop")) operation = STEAM;
   else if (!strcmp(argv[1], "global-limiter") &&
            global_limiter_arguments_are_safe(argc, argv) &&
@@ -1547,6 +1551,13 @@ static int execute_request(int argc, char **argv,
       // session's sound server.
       char *const arguments[] = {"vibepollo-mic-source", NULL};
       execv(mic_source_path, arguments);
+      break;
+    }
+    case CLIPBOARD: {
+      // The desktop's clipboard for a Frametop client's shared clipboard: its requests come
+      // on stdin (the host's pipe), its replies go back as output.
+      char *const arguments[] = {"vibepollo-clipboard", NULL};
+      execv(clipboard_path, arguments);
       break;
     }
     case STEAM: {
@@ -1754,7 +1765,7 @@ static ssize_t receive_request(int socket_fd, unsigned char *packet, size_t pack
   return received;
 }
 
-// The audio-mic-source input: the read end of a pipe, read-only. Anything else
+// The audio-mic-source and clipboard input: the read end of a pipe, read-only. Anything else
 // (a file, a socket, a writable end) is never handed to a worker.
 static bool passed_input_is_safe(int input_fd) {
   struct stat status;
@@ -1852,7 +1863,7 @@ static pid_t spawn_worker(struct decoded_request *request,
     (void) setpgid(0, 0);
     close(output[0]);
     close(error_output[0]);
-    // The request's passed input (audio-mic-source), else nothing.
+    // The request's passed input (audio-mic-source, clipboard), else nothing.
     const int null_input = input_fd >= 0 ? input_fd : open("/dev/null", O_RDONLY | O_CLOEXEC);
     if (null_input < 0 || dup2(null_input, STDIN_FILENO) < 0 ||
         dup2(output[1], STDOUT_FILENO) < 0 ||
@@ -2078,8 +2089,8 @@ int main(int argc, char **argv) {
     free(packet);
     return 126;
   }
-  // Exactly the one request that takes an input carries one, and a safe one.
-  const bool takes_input = request.argc >= 2 && !strcmp(request.argv[1], VIBEPOLLO_SESSION_INPUT_OPERATION);
+  // Exactly the requests that take an input carry one, and a safe one.
+  const bool takes_input = request.argc >= 2 && vibepollo_session_takes_input(request.argv[1]);
   if (takes_input != (input_fd >= 0) || (input_fd >= 0 && !passed_input_is_safe(input_fd))) {
     if (input_fd >= 0) close(input_fd);
     send_rejection(STDIN_FILENO, request.header.generation,

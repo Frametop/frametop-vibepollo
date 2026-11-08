@@ -140,7 +140,7 @@ reach that sound server itself, so the session broker runs
 audio-mic-source`, desktop role only). It adds the source with
 `module-pipe-source`, whose pipe the sound server makes as
 `$XDG_RUNTIME_DIR/vibepollo-frametop-mic.fifo`, and Vibepollo's audio reaches it
-through a pipe the broker hands over (the one request that may pass a
+through a pipe the broker hands over (one of the two requests that may pass a
 descriptor, and only the read end of a pipe). The source goes away when the
 client stops sending, the stream ends, or the desktop session changes. At most
 85 ms of audio waits in each pipe; when no app reads, the rest is dropped
@@ -149,6 +149,21 @@ desktop session, or no `pipewire-pulse`), the stream carries on without it,
 Vibepollo's log says why (once), and it tries again every 10 s while the client
 sends. Check with `pactl list short sources | grep frametop_mic` as the desktop
 user.
+
+Frametop's shared clipboard (`/actions/clipboard`, text or a PNG image) uses
+the desktop session's clipboard the same way. Vibepollo starts
+`vibepollo-clipboard` the first time a client asks (`vibepollo-session-exec
+clipboard`, desktop role only, the other request that may pass a pipe) and
+keeps it running. The helper is a Wayland data-control client
+(`wlr-data-control-unstable-v1`, which KDE Plasma, Hyprland and the wlroots
+desktops have; GNOME doesn't). It reads text or a `image/png` image when the
+client asks, and offers what the client sends as the desktop's clipboard until
+something else is copied. A copy a password manager marks as secret
+(`x-kde-passwordManagerHint`) reads as empty. Text or images up to 64 MiB pass
+either way. If the helper stops, the copy it offered goes with it, and the next
+request starts a new one. Vibepollo's log says once why the helper couldn't
+start (no desktop session, or no data-control protocol) and tries again 5 s
+later. Run as a user service, Vibepollo starts the helper itself.
 
 On a hybrid laptop, the encoder must run on the GPU the displays are wired to.
 KMS capture for NVENC skips a GPU it can't import framebuffers from, so an

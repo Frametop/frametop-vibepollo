@@ -216,6 +216,8 @@ if(WAYLAND_FOUND)
     GEN_WAYLAND("${WAYLAND_PROTOCOLS_DIR}" "unstable/xdg-output" xdg-output-unstable-v1)
     GEN_WAYLAND("${WAYLAND_PROTOCOLS_DIR}" "unstable/linux-dmabuf" linux-dmabuf-unstable-v1)
     GEN_WAYLAND("${CMAKE_SOURCE_DIR}/third-party/wlr-protocols" "unstable" wlr-screencopy-unstable-v1)
+    # Frametop shared clipboard: vibepollo-clipboard (cmake/packaging/linux.cmake).
+    GEN_WAYLAND("${CMAKE_SOURCE_DIR}/third-party/wlr-protocols" "unstable" wlr-data-control-unstable-v1)
     # Read-only KWin DPMS state observation for failed physical-topology recovery.
     GEN_WAYLAND("${CMAKE_SOURCE_DIR}/third-party/plasma-wayland-protocols/src/protocols" "" dpms)
 
@@ -394,6 +396,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             "${CMAKE_SOURCE_DIR}/src/platform/linux/routed_link.cpp"
             "${CMAKE_SOURCE_DIR}/src/platform/linux/display_power.cpp"
             "${CMAKE_SOURCE_DIR}/src/platform/linux/frametop_mic.cpp"
+            "${CMAKE_SOURCE_DIR}/src/platform/linux/frametop_clipboard.cpp"
             "${CMAKE_SOURCE_DIR}/src/platform/linux/frame_limiter.cpp"
             "${CMAKE_SOURCE_DIR}/src/platform/linux/private_display.h"
             "${CMAKE_SOURCE_DIR}/src/platform/linux/display_backend.cpp"

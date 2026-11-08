@@ -636,6 +636,14 @@ namespace platf {
     return false;
   }
 
+  std::string get_clipboard_image() {
+    return "";
+  }
+
+  bool set_clipboard_image(const std::string &png) {
+    return false;
+  }
+
   std::string resolve_render_device() {
     return {};
   }

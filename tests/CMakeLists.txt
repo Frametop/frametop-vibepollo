@@ -1490,6 +1490,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND SUNSHINE_TEST_ENABLE_COMPONENT)
     add_test(NAME test_component_linux_host_input_policy COMMAND test_linux_host_input_policy)
     set_tests_properties(test_component_linux_host_input_policy PROPERTIES LABELS "component" TIMEOUT 5)
 
+    add_executable(test_linux_clipboard_protocol
+        "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_clipboard_protocol.c")
+    add_test(NAME test_component_linux_clipboard_protocol COMMAND test_linux_clipboard_protocol)
+    set_tests_properties(test_component_linux_clipboard_protocol PROPERTIES LABELS "component" TIMEOUT 5)
+
     add_executable(test_linux_hyprland_broker
         "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_hyprland_broker.c")
     target_include_directories(test_linux_hyprland_broker PRIVATE "${LIBCAP_INCLUDE_DIRS}")

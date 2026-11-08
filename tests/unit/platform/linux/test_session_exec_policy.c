@@ -223,7 +223,7 @@ static int check_passed_input(const unsigned char *packet, size_t length) {
   CHECK(receive_request(peers[0], received, sizeof(received), &input) == -1);
   CHECK(errno == EPROTO && input == -1);
 
-  // The decoded operation decides: only audio-mic-source takes one, and only
+  // The decoded operation decides: only audio-mic-source (and clipboard) takes one, and only
   // the desktop role's session gets the source.
   struct session_identity greeter = {0};
   strcpy(greeter.role, "greeter");
@@ -233,6 +233,18 @@ static int check_passed_input(const unsigned char *packet, size_t length) {
   struct session_identity desktop = {0};
   strcpy(desktop.role, "desktop");
   CHECK(execute_request(3, extra, &desktop, getgid()) == 126);
+
+  // The clipboard's requests come the same way, under the same rules: the desktop role
+  // only, no arguments, and only it and the mic's source take an input.
+  char *clipboard[] = {"broker", VIBEPOLLO_SESSION_CLIPBOARD_OPERATION, NULL};
+  CHECK(execute_request(2, clipboard, &greeter, getgid()) == 126);
+  char *clipboard_extra[] = {"broker", VIBEPOLLO_SESSION_CLIPBOARD_OPERATION, "x", NULL};
+  CHECK(execute_request(3, clipboard_extra, &desktop, getgid()) == 126);
+  CHECK(vibepollo_session_takes_input(VIBEPOLLO_SESSION_INPUT_OPERATION));
+  CHECK(vibepollo_session_takes_input(VIBEPOLLO_SESSION_CLIPBOARD_OPERATION));
+  CHECK(!vibepollo_session_takes_input("audio-capture"));
+  CHECK(!vibepollo_session_takes_input("clipboard-x"));
+  CHECK(!vibepollo_session_takes_input(NULL));
 
   close(pipe_ends[0]);
   close(pipe_ends[1]);

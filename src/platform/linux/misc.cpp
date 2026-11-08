@@ -1729,17 +1729,24 @@ namespace platf {
     return std::make_unique<linux_high_precision_timer>();
   }
 
-  std::string
-    get_clipboard() {
-    // Placeholder
+  // On Linux, get_clipboard, set_clipboard and their images are frametop_clipboard.cpp's.
+#ifndef __linux__
+  std::string get_clipboard() {
     return "";
   }
 
-  bool
-    set_clipboard(const std::string &content) {
-    // Placeholder
+  bool set_clipboard(const std::string &content) {
     return false;
   }
+
+  std::string get_clipboard_image() {
+    return "";
+  }
+
+  bool set_clipboard_image(const std::string &png) {
+    return false;
+  }
+#endif
 
   std::string find_render_node_with_display() {
 #if defined(SUNSHINE_BUILD_DRM) && defined(__linux__)

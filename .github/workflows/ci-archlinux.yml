@@ -422,6 +422,7 @@ jobs:
           grep -qx 'usr/lib/systemd/system/vibepollo-host-input.service' <<< "${package_files}"
           grep -qx 'usr/libexec/vibeshine/vibepollo-host-input' <<< "${package_files}"
           grep -qx 'usr/libexec/vibeshine/vibepollo-mic-source' <<< "${package_files}"
+          grep -qx 'usr/libexec/vibeshine/vibepollo-clipboard' <<< "${package_files}"
           grep -qx 'usr/libexec/vibeshine/vibepollo-session-controller' <<< "${package_files}"
           grep -qx 'usr/libexec/vibeshine/vibepollo-session-exec' <<< "${package_files}"
           grep -qx 'usr/libexec/vibeshine/vibepollo-session-broker' <<< "${package_files}"

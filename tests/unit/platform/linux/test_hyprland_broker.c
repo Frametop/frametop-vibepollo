@@ -55,6 +55,8 @@ int main(void) {
   assert(hyprland_request_supported(&identity, "app"));
   assert(hyprland_request_supported(&identity, "audio-capture"));
   assert(hyprland_request_supported(&identity, "audio-mic-source"));
+  // Frametop shared clipboard: a Wayland client of the session, as the mic's source is.
+  assert(hyprland_request_supported(&identity, "clipboard"));
   assert(hyprland_request_supported(&identity, "display-observe"));
   // The host has no Wayland connection there, so absolute input needs the layout.
   assert(hyprland_request_supported(&identity, "display-layout"));

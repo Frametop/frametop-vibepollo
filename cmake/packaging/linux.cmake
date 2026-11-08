@@ -156,6 +156,15 @@ else()
                     "${CMAKE_BINARY_DIR}/generated-src" ${WAYLAND_INCLUDE_DIRS})
             target_link_libraries(vibepollo_display_observer PRIVATE ${WAYLAND_LIBRARIES})
             target_compile_definitions(vibepollo_session_broker PRIVATE VIBEPOLLO_HAVE_WAYLAND_OBSERVER=1)
+            # Frametop shared clipboard: the desktop session's clipboard, run there by the
+            # session broker (or by Vibepollo itself, run as the desktop user).
+            add_executable(vibepollo_clipboard
+                    "${CMAKE_SOURCE_DIR}/packaging/linux/vibepollo-clipboard.c"
+                    "${CMAKE_BINARY_DIR}/generated-src/wlr-data-control-unstable-v1.c")
+            set_target_properties(vibepollo_clipboard PROPERTIES OUTPUT_NAME "vibepollo-clipboard")
+            target_include_directories(vibepollo_clipboard PRIVATE
+                    "${CMAKE_BINARY_DIR}/generated-src" ${WAYLAND_INCLUDE_DIRS})
+            target_link_libraries(vibepollo_clipboard PRIVATE ${WAYLAND_LIBRARIES})
         endif()
         add_executable(vibepollo_app_supervisor
                 "${CMAKE_SOURCE_DIR}/packaging/linux/vibepollo-app-supervisor.c")
@@ -238,6 +247,10 @@ else()
                 RUNTIME DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}")
         if(TARGET vibepollo_display_observer)
             install(TARGETS vibepollo_display_observer
+                    RUNTIME DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}")
+        endif()
+        if(TARGET vibepollo_clipboard)
+            install(TARGETS vibepollo_clipboard
                     RUNTIME DESTINATION "${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}")
         endif()
         install(TARGETS vibepollo_session_broker
@@ -388,6 +401,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     if(TARGET vibepollo_display_observer)
         list(APPEND CPACK_RPM_USER_FILELIST
                 "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibepollo-display-observer")
+    endif()
+    if(TARGET vibepollo_clipboard)
+        list(APPEND CPACK_RPM_USER_FILELIST
+                "%attr(0755,root,root) ${VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR}/vibepollo-clipboard")
     endif()
 endif()
 

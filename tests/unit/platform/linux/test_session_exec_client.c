@@ -167,6 +167,17 @@ static int check_passed_input(void) {
   CHECK(read(passed, read_back, sizeof(read_back)) == 3 && !memcmp(read_back, "mic", 3));
   close(passed);
 
+  // The clipboard's request passes its stdin the same way.
+  char *clipboard[] = {"vibepollo-session-exec", VIBEPOLLO_SESSION_CLIPBOARD_OPERATION, NULL};
+  CHECK(send_request_passing(peers[0], 2, clipboard, 42, pipe_ends[0]));
+  message.msg_controllen = sizeof(control.space);
+  CHECK(recvmsg(peers[1], &message, MSG_CMSG_CLOEXEC) ==
+        (ssize_t) (sizeof(struct vibepollo_session_message) + sizeof(VIBEPOLLO_SESSION_CLIPBOARD_OPERATION)));
+  rights = CMSG_FIRSTHDR(&message);
+  CHECK(rights && rights->cmsg_type == SCM_RIGHTS);
+  memcpy(&passed, CMSG_DATA(rights), sizeof(passed));
+  close(passed);
+
   // Requests without an input carry no control message.
   char *plain[] = {"vibepollo-session-exec", "audio-get-default", NULL};
   CHECK(send_request(peers[0], 2, plain, 42));

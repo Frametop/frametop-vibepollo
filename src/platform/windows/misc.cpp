@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <csignal>
 #include <filesystem>
 #include <iomanip>
@@ -54,6 +55,7 @@
 #include <libvirtualgamepad/client.h>
 
 // local includes
+#include "image_convert.h"
 #include "misc.h"
 #include "src/screen_saver_state.h"
 #include "src/platform/common_services.h"
@@ -3163,8 +3165,63 @@ namespace platf {
     return std::make_unique<win32_high_precision_timer>();
   }
 
+  namespace {
+    /// Frametop: password managers put this format next to a password, for clipboard history
+    /// and clipboard managers to leave it alone. The shared clipboard does too.
+    bool clipboard_is_secret() {
+      static const UINT secret = RegisterClipboardFormatW(L"ExcludeClipboardContentFromMonitorProcessing");
+      return secret && IsClipboardFormatAvailable(secret);
+    }
+
+    /// Browsers, Office and the Snipping Tool put an image as a PNG file in this format too.
+    UINT png_clipboard_format() {
+      static const UINT png = RegisterClipboardFormatW(L"PNG");
+      return png;
+    }
+
+    constexpr std::size_t max_clipboard_image = std::size_t {64} << 20;
+
+    bool is_png(const std::string &data) {
+      static constexpr unsigned char signature[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+      return data.size() > sizeof signature && !std::memcmp(data.data(), signature, sizeof signature);
+    }
+
+    /// A format's data on the open clipboard, empty when it has none or it's too big.
+    std::string clipboard_bytes(UINT format) {
+      HANDLE data = format && IsClipboardFormatAvailable(format) ? GetClipboardData(format) : nullptr;
+      const SIZE_T size = data ? GlobalSize(data) : 0;
+      if (!size || size > max_clipboard_image) {
+        return {};
+      }
+      const void *bytes = GlobalLock(data);
+      if (!bytes) {
+        return {};
+      }
+      std::string out {static_cast<const char *>(bytes), size};
+      GlobalUnlock(data);
+      return out;
+    }
+
+    HGLOBAL global_copy(const std::string &data) {
+      HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, data.size());
+      void *bytes = memory ? GlobalLock(memory) : nullptr;
+      if (!bytes) {
+        if (memory) {
+          GlobalFree(memory);
+        }
+        return nullptr;
+      }
+      std::memcpy(bytes, data.data(), data.size());
+      GlobalUnlock(memory);
+      return memory;
+    }
+  }  // namespace
+
   std::string
     get_clipboard() {
+    if (clipboard_is_secret()) {
+      return {};
+    }
     std::string currentClipboard = utf_utils::to_utf8(getClipboardData());
     return currentClipboard;
   }
@@ -3173,6 +3230,69 @@ namespace platf {
     set_clipboard(const std::string &content) {
     std::wstring cpContent = utf_utils::from_utf8(ensureCrLf(content));
     return !setClipboardData(cpContent);
+  }
+
+  std::string get_clipboard_image() {
+    if (clipboard_is_secret()) {
+      return {};
+    }
+    if (!OpenClipboard(nullptr)) {
+      BOOST_LOG(warning) << "Failed to open clipboard.";
+      return {};
+    }
+    // The app's own PNG keeps transparency; else the bitmap every image copy has (Windows
+    // makes a CF_DIB from a CF_BITMAP or CF_DIBV5).
+    std::string png = clipboard_bytes(png_clipboard_format());
+    std::string dib;
+    if (!is_png(png)) {
+      png.clear();
+      dib = clipboard_bytes(CF_DIB);
+    }
+    CloseClipboard();
+    if (png.empty() && !dib.empty() && !img::png_from_clipboard_dib(dib.data(), dib.size(), png)) {
+      BOOST_LOG(warning) << "Clipboard: couldn't make a PNG of its bitmap.";
+      png.clear();
+    }
+    return png;
+  }
+
+  bool set_clipboard_image(const std::string &png) {
+    std::string dib;
+    if (!is_png(png) || png.size() > max_clipboard_image || !img::clipboard_dib_from_png(png, dib)) {
+      BOOST_LOG(warning) << "Clipboard: couldn't read the PNG image it was given.";
+      return false;
+    }
+    HGLOBAL dib_memory = global_copy(dib);
+    HGLOBAL png_memory = global_copy(png);
+    if (!dib_memory || !png_memory || !OpenClipboard(nullptr)) {
+      BOOST_LOG(warning) << (dib_memory && png_memory ? "Failed to open clipboard." : "Failed to allocate global memory.");
+      if (dib_memory) {
+        GlobalFree(dib_memory);
+      }
+      if (png_memory) {
+        GlobalFree(png_memory);
+      }
+      return false;
+    }
+    bool set = false;
+    if (EmptyClipboard()) {
+      // The clipboard owns what it takes; what it doesn't stays this program's to free.
+      set = SetClipboardData(CF_DIB, dib_memory) != nullptr;
+      if (!set) {
+        GlobalFree(dib_memory);
+      }
+      if (!set || !png_clipboard_format() || !SetClipboardData(png_clipboard_format(), png_memory)) {
+        GlobalFree(png_memory);
+      }
+    } else {
+      GlobalFree(dib_memory);
+      GlobalFree(png_memory);
+    }
+    CloseClipboard();
+    if (!set) {
+      BOOST_LOG(warning) << "Failed to set clipboard data.";
+    }
+    return set;
   }
 
   bool getFileVersionInfo(const std::filesystem::path &file_path, std::string &version_str) {

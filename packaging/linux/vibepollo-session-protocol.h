@@ -2,6 +2,7 @@
 #define VIBEPOLLO_SESSION_PROTOCOL_H
 
 #include <stdint.h>
+#include <string.h>
 
 #define VIBEPOLLO_SESSION_BROKER_SOCKET "/run/vibepollo/session-broker.sock"
 #define VIBEPOLLO_SESSION_PROTOCOL_MAGIC UINT32_C(0x56534252)
@@ -43,11 +44,19 @@ struct vibepollo_session_message {
 };
 
 /*
- * The one request that carries a descriptor: session-exec passes its stdin (the
- * read end of the host's pipe) with SCM_RIGHTS, and the broker gives it to the
- * worker as stdin. Every other request carries none, and is rejected with one.
+ * The requests that carry a descriptor: session-exec passes its stdin (the read
+ * end of the host's pipe) with SCM_RIGHTS, and the broker gives it to the worker
+ * as stdin. Every other request carries none, and is rejected with one.
+ * audio-mic-source: a Frametop client's microphone. clipboard: the desktop's
+ * clipboard (vibepollo-clipboard), its requests on that pipe.
  */
 #define VIBEPOLLO_SESSION_INPUT_OPERATION "audio-mic-source"
+#define VIBEPOLLO_SESSION_CLIPBOARD_OPERATION "clipboard"
+
+static inline int vibepollo_session_takes_input(const char *operation) {
+  return operation && (!strcmp(operation, VIBEPOLLO_SESSION_INPUT_OPERATION) ||
+                       !strcmp(operation, VIBEPOLLO_SESSION_CLIPBOARD_OPERATION));
+}
 
 #ifdef __cplusplus
 static_assert(sizeof(struct vibepollo_session_message) == 32,

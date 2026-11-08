@@ -262,8 +262,8 @@ int main(int argc, char **argv) {
   }
   const int socket_fd = connect_to_broker();
   if (socket_fd < 0) return fail("could not connect to the session broker");
-  // Only this request takes the host's stdin to the worker.
-  const bool passes_input = !strcmp(argv[1], VIBEPOLLO_SESSION_INPUT_OPERATION);
+  // Only these requests take the host's stdin to the worker.
+  const bool passes_input = vibepollo_session_takes_input(argv[1]);
   if (!send_request_passing(socket_fd, argc, argv, generation, passes_input ? STDIN_FILENO : -1)) {
     const int saved_errno = errno;
     close(socket_fd);

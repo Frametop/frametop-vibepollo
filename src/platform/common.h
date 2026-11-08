@@ -1264,6 +1264,16 @@ namespace platf {
     set_clipboard(const std::string &content);
 
   /**
+   * @brief Frametop: the clipboard's image as a PNG file's bytes, empty when it holds none.
+   */
+  std::string get_clipboard_image();
+
+  /**
+   * @brief Frametop: puts a PNG image (a PNG file's bytes) on the clipboard.
+   */
+  bool set_clipboard_image(const std::string &png);
+
+  /**
    * @brief Factory for the platform-specific host stats provider.
    *
    * Always returns a usable provider; on platforms without a real

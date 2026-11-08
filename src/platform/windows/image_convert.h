@@ -1,6 +1,7 @@
 // Simple WIC-based image conversion helper for Windows
 #pragma once
 
+#include <cstddef>
 #include <string>
 
 namespace platf::img {
@@ -34,4 +35,14 @@ namespace platf::img {
   // When info is non-null it receives diagnostics about the chosen source.
   // Returns true when dst_path holds a usable icon.
   bool resolve_best_app_icon_png(const std::wstring &icon_src, const std::wstring &exe_hint, const std::wstring &install_dir, const std::wstring &dst_path, IconResolutionInfo *info = nullptr);
+
+  // Frametop shared clipboard. A clipboard DIB (CF_DIB: a BITMAPINFOHEADER, its masks and
+  // colors, then the pixels) as a PNG file's bytes. Alpha isn't kept (a CF_DIB's isn't
+  // reliable). False for one that isn't a bitmap or is too big (over 16384 pixels a side or
+  // 40 megapixels).
+  bool png_from_clipboard_dib(const void *dib, std::size_t size, std::string &png);
+
+  // A PNG file as a clipboard CF_DIB: 32 bits per pixel, bottom-up. False for one WIC can't
+  // read, or one too big as above.
+  bool clipboard_dib_from_png(const std::string &png, std::string &dib);
 }  // namespace platf::img

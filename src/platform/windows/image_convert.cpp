@@ -3,6 +3,7 @@
 #include "image_convert.h"
 
 #include <algorithm>
+#include <cstring>
 #include <array>
 #include <cwctype>
 #include <deque>
@@ -11,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include <objbase.h>
 #include <wincodec.h>
 #include <Windows.h>
 #include <winrt/base.h>
@@ -507,5 +509,144 @@ namespace platf::img {
       return true;
     }
     return false;
+  }
+
+  namespace {
+    constexpr UINT max_clipboard_side = 16384;
+    constexpr UINT64 max_clipboard_pixels = 40'000'000;
+
+    winrt::com_ptr<IWICImagingFactory> clipboard_wic() {
+      winrt::com_ptr<IWICImagingFactory> factory;
+      if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(factory.put())))) {
+        return nullptr;
+      }
+      return factory;
+    }
+
+    bool clipboard_size_ok(IWICBitmapSource *source, UINT &width, UINT &height) {
+      return SUCCEEDED(source->GetSize(&width, &height)) && width && height && width <= max_clipboard_side &&
+             height <= max_clipboard_side && UINT64(width) * height <= max_clipboard_pixels;
+    }
+
+    // The first frame of an image in memory, decoded as container (BMP or PNG).
+    winrt::com_ptr<IWICBitmapFrameDecode> clipboard_decode(IWICImagingFactory *factory, const GUID &container, const void *data, std::size_t size, winrt::com_ptr<IWICStream> &stream) {
+      winrt::com_ptr<IWICBitmapDecoder> decoder;
+      winrt::com_ptr<IWICBitmapFrameDecode> frame;
+      if (size > MAXDWORD || FAILED(factory->CreateStream(stream.put())) ||
+          FAILED(stream->InitializeFromMemory(static_cast<BYTE *>(const_cast<void *>(data)), DWORD(size))) ||
+          FAILED(factory->CreateDecoder(container, nullptr, decoder.put())) ||
+          FAILED(decoder->Initialize(stream.get(), WICDecodeMetadataCacheOnDemand)) || FAILED(decoder->GetFrame(0, frame.put()))) {
+        return nullptr;
+      }
+      return frame;
+    }
+  }  // namespace
+
+  bool png_from_clipboard_dib(const void *dib, std::size_t size, std::string &png) {
+    BITMAPINFOHEADER header {};
+    if (size < sizeof header) {
+      return false;
+    }
+    std::memcpy(&header, dib, sizeof header);
+    if (header.biSize < sizeof header || header.biSize > size) {
+      return false;
+    }
+    // Where the pixels start: after the header, BI_BITFIELDS' masks (in a plain
+    // BITMAPINFOHEADER's DIB only; later headers hold them) and the colors.
+    std::size_t pixels = header.biSize;
+    if (header.biSize == sizeof header && header.biCompression == BI_BITFIELDS) {
+      pixels += 3 * sizeof(DWORD);
+    } else if (header.biSize == sizeof header && header.biCompression == 6 /* BI_ALPHABITFIELDS */) {
+      pixels += 4 * sizeof(DWORD);
+    }
+    const DWORD colors = header.biClrUsed ? header.biClrUsed : header.biBitCount <= 8 ? 1u << header.biBitCount : 0;
+    if (colors > 256) {
+      return false;
+    }
+    pixels += std::size_t {colors} * sizeof(RGBQUAD);
+    if (pixels >= size || size > MAXDWORD - sizeof(BITMAPFILEHEADER)) {
+      return false;
+    }
+    // A .bmp file of it, for WIC's BMP decoder, which knows every DIB layout.
+    std::string file(sizeof(BITMAPFILEHEADER) + size, '\0');
+    BITMAPFILEHEADER file_header {};
+    file_header.bfType = 0x4D42;  // "BM"
+    file_header.bfSize = DWORD(file.size());
+    file_header.bfOffBits = DWORD(sizeof file_header + pixels);
+    std::memcpy(file.data(), &file_header, sizeof file_header);
+    std::memcpy(file.data() + sizeof file_header, dib, size);
+
+    CoInitGuard co;
+    const auto factory = clipboard_wic();
+    winrt::com_ptr<IWICStream> input;
+    const auto frame = factory ? clipboard_decode(factory.get(), GUID_ContainerFormatBmp, file.data(), file.size(), input) : nullptr;
+    UINT width = 0, height = 0;
+    if (!frame || !clipboard_size_ok(frame.get(), width, height)) {
+      return false;
+    }
+    winrt::com_ptr<IWICFormatConverter> converter;
+    winrt::com_ptr<IStream> output;
+    winrt::com_ptr<IWICBitmapEncoder> encoder;
+    winrt::com_ptr<IWICBitmapFrameEncode> encoded;
+    winrt::com_ptr<IPropertyBag2> properties;
+    WICPixelFormatGUID format = GUID_WICPixelFormat24bppBGR;
+    if (FAILED(factory->CreateFormatConverter(converter.put())) || FAILED(CreateStreamOnHGlobal(nullptr, TRUE, output.put())) ||
+        FAILED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, encoder.put())) ||
+        FAILED(encoder->Initialize(output.get(), WICBitmapEncoderNoCache)) || FAILED(encoder->CreateNewFrame(encoded.put(), properties.put())) ||
+        FAILED(encoded->Initialize(properties.get())) || FAILED(encoded->SetSize(width, height)) || FAILED(encoded->SetPixelFormat(&format)) ||
+        FAILED(converter->Initialize(frame.get(), format, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom)) ||
+        FAILED(encoded->WriteSource(converter.get(), nullptr)) || FAILED(encoded->Commit()) || FAILED(encoder->Commit())) {
+      return false;
+    }
+    STATSTG stat {};
+    HGLOBAL memory = nullptr;
+    if (FAILED(output->Stat(&stat, STATFLAG_NONAME)) || FAILED(GetHGlobalFromStream(output.get(), &memory)) || !memory) {
+      return false;
+    }
+    const void *bytes = GlobalLock(memory);
+    if (!bytes) {
+      return false;
+    }
+    png.assign(static_cast<const char *>(bytes), std::size_t(stat.cbSize.QuadPart));
+    GlobalUnlock(memory);
+    return !png.empty();
+  }
+
+  bool clipboard_dib_from_png(const std::string &png, std::string &dib) {
+    CoInitGuard co;
+    const auto factory = clipboard_wic();
+    winrt::com_ptr<IWICStream> input;
+    const auto frame = factory ? clipboard_decode(factory.get(), GUID_ContainerFormatPng, png.data(), png.size(), input) : nullptr;
+    UINT width = 0, height = 0;
+    winrt::com_ptr<IWICFormatConverter> converter;
+    if (!frame || !clipboard_size_ok(frame.get(), width, height) || FAILED(factory->CreateFormatConverter(converter.put())) ||
+        FAILED(converter->Initialize(frame.get(), GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom))) {
+      return false;
+    }
+    const UINT stride = width * 4;
+    const std::size_t bytes = std::size_t {stride} * height;
+    BITMAPINFOHEADER header {};
+    header.biSize = sizeof header;
+    header.biWidth = LONG(width);
+    header.biHeight = LONG(height);  // bottom-up, as most apps expect
+    header.biPlanes = 1;
+    header.biBitCount = 32;
+    header.biCompression = BI_RGB;
+    header.biSizeImage = DWORD(bytes);
+    dib.assign(sizeof header + bytes, '\0');
+    std::memcpy(dib.data(), &header, sizeof header);
+    auto *pixels = reinterpret_cast<BYTE *>(dib.data() + sizeof header);
+    if (FAILED(converter->CopyPixels(nullptr, stride, UINT(bytes), pixels))) {
+      dib.clear();
+      return false;
+    }
+    // WIC gives rows top-down: turn them over in place.
+    std::vector<BYTE> row(stride);
+    for (UINT top = 0, bottom = height - 1; top < bottom; ++top, --bottom) {
+      std::memcpy(row.data(), pixels + std::size_t {top} * stride, stride);
+      std::memcpy(pixels + std::size_t {top} * stride, pixels + std::size_t {bottom} * stride, stride);
+      std::memcpy(pixels + std::size_t {bottom} * stride, row.data(), stride);
+    }
+    return true;
   }
 }  // namespace platf::img

@@ -6927,7 +6927,9 @@ launch_session->exact_target_hold.reset();
 
     auto args = request->parse_query_string();
     auto clipboard_type = get_arg(args, "type");
-    if (clipboard_type != "text"sv) {
+    // Frametop: "image" is a PNG file's bytes (a Frametop client's shared clipboard).
+    const bool clipboard_image = clipboard_type == "image"sv;
+    if (clipboard_type != "text"sv && !clipboard_image) {
       BOOST_LOG(debug) << "Clipboard type [" << clipboard_type << "] is not supported!";
 
       response->write(SimpleWeb::StatusCode::client_error_bad_request);
@@ -6951,6 +6953,13 @@ launch_session->exact_target_hold.reset();
       return;
     }
 
+    if (clipboard_image) {
+      // Empty: the clipboard holds no image.
+      SimpleWeb::CaseInsensitiveMultimap headers;
+      headers.emplace("Content-Type", "image/png");
+      response->write(SimpleWeb::StatusCode::success_ok, platf::get_clipboard_image(), headers);
+      return;
+    }
     std::string content = platf::get_clipboard();
     response->write(content);
     return;
@@ -6973,7 +6982,9 @@ launch_session->exact_target_hold.reset();
 
     auto args = request->parse_query_string();
     auto clipboard_type = get_arg(args, "type");
-    if (clipboard_type != "text"sv) {
+    // Frametop: "image" is a PNG file's bytes (a Frametop client's shared clipboard).
+    const bool clipboard_image = clipboard_type == "image"sv;
+    if (clipboard_type != "text"sv && !clipboard_image) {
       BOOST_LOG(debug) << "Clipboard type [" << clipboard_type << "] is not supported!";
 
       response->write(SimpleWeb::StatusCode::client_error_bad_request);
@@ -6997,15 +7008,33 @@ launch_session->exact_target_hold.reset();
       return;
     }
 
+    // Frametop: an image is a PNG file, of at most 64 MiB.
+    constexpr std::size_t max_clipboard_image = std::size_t {64} << 20;
+    if (clipboard_image && request->content.size() > max_clipboard_image) {
+      response->write(SimpleWeb::StatusCode::client_error_payload_too_large);
+      response->close_connection_after_response = true;
+      return;
+    }
+
     std::string content = request->content.string();
 
-    bool success = platf::set_clipboard(content);
+    static constexpr unsigned char png_signature[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+    if (clipboard_image && (content.size() <= sizeof png_signature || std::memcmp(content.data(), png_signature, sizeof png_signature))) {
+      BOOST_LOG(debug) << "Clipboard image isn't a PNG file";
+
+      response->write(SimpleWeb::StatusCode::client_error_bad_request);
+      response->close_connection_after_response = true;
+      return;
+    }
+
+    bool success = clipboard_image ? platf::set_clipboard_image(content) : platf::set_clipboard(content);
 
     if (!success) {
       BOOST_LOG(debug) << "Setting clipboard failed!";
 
       response->write(SimpleWeb::StatusCode::server_error_internal_server_error);
       response->close_connection_after_response = true;
+      return;
     }
 
     response->write();

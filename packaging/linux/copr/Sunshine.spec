@@ -8342,6 +8342,7 @@ fi
 %attr(0755,root,root) %{_prefix}/libexec/vibeshine/vibepollo-display-observer
 %attr(0755,root,root) %{_prefix}/libexec/vibeshine/vibepollo-touch-map
 %attr(0755,root,root) %{_prefix}/libexec/vibeshine/vibepollo-mic-source
+%attr(0755,root,root) %{_prefix}/libexec/vibeshine/vibepollo-clipboard
 %attr(0755,root,root) %{_prefix}/libexec/vibeshine/vibepollo-session-exec
 %attr(0700,root,root) %caps(cap_kill,cap_setgid,cap_setuid+p) %{_prefix}/libexec/vibeshine/vibepollo-session-broker
 %{_prefix}/libexec/vibeshine/vibepollo-provider-scan
