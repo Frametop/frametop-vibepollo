@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <errno.h>
 #include <fcntl.h>
@@ -56,6 +57,8 @@ using namespace std::literals;
 namespace fs = std::filesystem;
 
 namespace platf {
+
+  static void watch_hyprland_layout();
 
   namespace kms {
 
@@ -172,6 +175,15 @@ namespace platf {
 
     static int env_logical_width;
     static int env_logical_height;
+
+    // Hyprland layout sizes, width << 32 | height (0: none): the one the last enumeration mapped
+    // absolute input onto, and the latest one watch_hyprland_layout read.
+    static std::atomic<std::uint64_t> hyprland_layout_size {0};
+    static std::atomic<std::uint64_t> hyprland_layout_size_now {0};
+
+    inline std::uint64_t pack_size(int width, int height) {
+      return (std::uint64_t(std::uint32_t(width)) << 32) | std::uint32_t(height);
+    }
 
     std::string_view plane_type(std::uint64_t val) {
       switch (val) {
@@ -954,6 +966,11 @@ namespace platf {
             this->env_logical_width = ::platf::kms::env_logical_width;
             this->env_logical_height = ::platf::kms::env_logical_height;
 
+            this->hyprland_layout_at_start = ::platf::kms::hyprland_layout_size;
+            if (this->hyprland_layout_at_start) {
+              watch_hyprland_layout();
+            }
+
             auto monitor = pos->crtc_to_monitor.find(plane->crtc_id);
             if (monitor != std::end(pos->crtc_to_monitor)) {
               auto &viewport = monitor->second.viewport;
@@ -1352,6 +1369,16 @@ namespace platf {
 
       inline capture_e refresh(egl::owned_surface_t &surface, std::optional<std::chrono::steady_clock::time_point> &frame_timestamp) {
         auto *sd = &surface.sd;
+        // Absolute input maps onto Hyprland's whole layout: once it changes size (an output came
+        // or went), this capture's touch port is wrong. The next one publishes the new size.
+        if (hyprland_layout_at_start) {
+          const auto now = kms::hyprland_layout_size_now.load(std::memory_order_relaxed);
+          if (now && now != hyprland_layout_at_start) {
+            BOOST_LOG(info) << "Reinitializing capture: the Hyprland layout is now "sv << (now >> 32) << 'x'
+                            << (now & 0xffffffffu) << ", absolute input maps onto all of it"sv;
+            return capture_e::reinit;
+          }
+        }
         // Recheck current connector state before delivering any frame. This
         // also rejects metadata changes that reuse the original blob ID.
         if (!sdr_capture_allowed()) {
@@ -2126,6 +2153,9 @@ namespace platf {
       int img_offset_x;
       int img_offset_y;
 
+      // The Hyprland layout size this capture's touch port maps onto (0: not Hyprland's).
+      std::uint64_t hyprland_layout_at_start = 0;
+
       int plane_id;
       int crtc_id;
       int crtc_index;
@@ -2655,6 +2685,29 @@ namespace platf {
     return cached;
   }
 
+  // Hyprland adds and removes outputs while a capture runs (the Frametop windows instance's FT-W
+  // outputs, KMS can't see them), and absolute input maps onto the whole layout. This re-reads the
+  // layout every two seconds, off the capture threads (the broker query can take up to a second);
+  // a capture whose layout changed size restarts (display_t::refresh). Its query refreshes
+  // hyprland_layout's cache, so the restarted capture's enumeration sees the same size.
+  static void watch_hyprland_layout() {
+    static std::once_flag started;
+    std::call_once(started, [] {
+      std::thread([] {
+        using namespace std::chrono_literals;
+        for (;;) {
+          std::optional<linux_display::layout::layout_t> layout;
+          {
+            std::lock_guard lock {kms::display_mutex};
+            layout = hyprland_layout();
+          }
+          kms::hyprland_layout_size_now = layout ? kms::pack_size(layout->width, layout->height) : 0;
+          std::this_thread::sleep_for(2s);
+        }
+      }).detach();
+    });
+  }
+
   // Place each KMS output where Hyprland lays it out, in the logical coordinates Hyprland maps
   // absolute input onto. Returns the layout's bounding box when it was applied.
   static std::optional<std::pair<int, int>> correlate_to_hyprland_layout(std::vector<kms::card_descriptor_t> &cds) {
@@ -2829,6 +2882,7 @@ namespace platf {
     if (hyprland_layout_size) {
       std::tie(kms::env_logical_width, kms::env_logical_height) = *hyprland_layout_size;
     }
+    kms::hyprland_layout_size = hyprland_layout_size ? kms::pack_size(hyprland_layout_size->first, hyprland_layout_size->second) : 0;
 
     BOOST_LOG(debug) << "Desktop resolution: "sv << kms::env_width << 'x' << kms::env_height;
 
