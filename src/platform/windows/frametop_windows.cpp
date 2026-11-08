@@ -692,6 +692,9 @@ namespace platf::frametop_windows {
     // return to where they were. Without it (no driver, no room), windows stay on their monitors.
     constexpr std::string_view kDisplayId = "frametop-windows";
     constexpr std::string_view kDisplayLabel = "Frametop windows";
+    // A window is sized to fit its monitor, so this caps window panels. Windows scales a bigger
+    // virtual display (3840x2160 and 5120x1600 get 150%), which would draw windows 1.5 times
+    // bigger than on the PC's own monitors; this size gets 100%.
     constexpr std::string_view kDisplayMode = "2560x1600@60";
     constexpr auto kDisplayIdle = 15s;  // no window out this long: the display goes
 
