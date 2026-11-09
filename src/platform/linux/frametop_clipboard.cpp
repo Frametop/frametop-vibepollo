@@ -151,6 +151,10 @@ namespace platf {
         posix_spawn_file_actions_init(&actions);
         posix_spawn_file_actions_adddup2(&actions, input[0], STDIN_FILENO);
         posix_spawn_file_actions_adddup2(&actions, output[1], STDOUT_FILENO);
+        // Nothing else of ours: the host's sockets aren't all close-on-exec (ENet's stream
+        // ports, the HTTP listeners), and a helper that outlives a stream would keep them bound,
+        // so the next stream couldn't bind its control port (RTSP 500, 2026-11-08).
+        posix_spawn_file_actions_addclosefrom_np(&actions, STDERR_FILENO + 1);
         posix_spawnattr_t attributes;
         posix_spawnattr_init(&attributes);
         sigset_t none;
