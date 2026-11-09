@@ -121,6 +121,17 @@ add_custom_target(build_playnite_plugin DEPENDS ${SUNSHINE_PLAYNITE_PLUGIN_OUTPU
 add_dependencies(sunshine build_playnite_plugin)
 add_dependencies(sunshine sunshine_end_stream_hotkey)
 
+# Frametop: the shared clipboard's reader runs from the tools directory next to sunshine.exe.
+if (TARGET frametop_clipboard)
+    add_dependencies(sunshine frametop_clipboard)
+    add_custom_command(TARGET sunshine POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:sunshine>/tools"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:frametop_clipboard>
+                "$<TARGET_FILE_DIR:sunshine>/tools"
+        COMMENT "Copying frametop_clipboard into tools directory")
+endif()
+
 # Ensure the Windows display helper is built and staged under the Sunshine tools
 # directory so the runtime launcher can find it reliably.
 if (TARGET sunshine_display_helper)
@@ -165,7 +176,8 @@ foreach(_packaged_target IN ITEMS
         playnite-launcher
         sunshine_wgc_capture
         sunshine_end_stream_hotkey
-        sunshine_display_helper)
+        sunshine_display_helper
+        frametop_clipboard)
     if(TARGET "${_packaged_target}")
         list(APPEND SUNSHINE_WINDOWS_PACKAGED_TARGETS "${_packaged_target}")
     endif()

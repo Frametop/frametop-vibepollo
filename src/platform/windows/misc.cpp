@@ -3261,6 +3261,8 @@ namespace platf {
       // A PNG made of a big bitmap takes a while; a reader that hangs is ended.
       const auto deadline = std::chrono::steady_clock::now() + (image ? 10s : 4s);
       bool too_big = false;
+      bool read_error = false;
+      bool exited = false;
       std::array<char, 64 << 10> chunk;
       for (;;) {
         DWORD ready = 0;
@@ -3268,6 +3270,15 @@ namespace platf {
           break;  // ERROR_BROKEN_PIPE: the reader is done
         }
         if (!ready) {
+          // A reader that has exited wrote all it will: once its last bytes are taken, stop
+          // (rather than wait out the deadline for a pipe end someone else may still hold).
+          if (exited) {
+            break;
+          }
+          if (WaitForSingleObject(child.hProcess, 0) == WAIT_OBJECT_0) {
+            exited = true;
+            continue;
+          }
           if (std::chrono::steady_clock::now() >= deadline) {
             TerminateProcess(child.hProcess, 1);
             WaitForSingleObject(child.hProcess, 1000);
@@ -3280,6 +3291,7 @@ namespace platf {
         }
         DWORD got = 0;
         if (!ReadFile(read_end, chunk.data(), static_cast<DWORD>(std::min<std::size_t>(chunk.size(), ready)), &got, nullptr)) {
+          read_error = GetLastError() != ERROR_BROKEN_PIPE;
           break;
         }
         if (out.size() + got > clipboard_read::max_bytes) {
@@ -3295,11 +3307,14 @@ namespace platf {
         TerminateProcess(child.hProcess, 1);
         code = 1;
       }
-      if (too_big || code != 0) {
+      if (too_big || read_error || code != 0) {
         out.clear();
       }
       if (too_big) {
         return clipboard_read::result::ok;  // too big reads as nothing
+      }
+      if (read_error) {
+        return clipboard_read::result::failed;  // part of it is no use
       }
       for (auto r : {clipboard_read::result::ok, clipboard_read::result::secret, clipboard_read::result::busy}) {
         if (static_cast<int>(code) == clipboard_read::exit_code(r)) {

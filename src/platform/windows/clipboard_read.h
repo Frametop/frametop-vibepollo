@@ -19,7 +19,7 @@ namespace platf::clipboard_read {
     ok,  ///< out holds the text (UTF-8, line ends as held) or the PNG file, empty for none
     secret,  ///< a password manager marked the copy: nothing is read
     busy,  ///< another app has the clipboard open
-    failed,  ///< a bitmap that couldn't be made a PNG
+    failed,  ///< a bitmap that couldn't be made a PNG, or the password mark couldn't be looked up
   };
 
   /// The clipboard's text, or (image) its image as a PNG file: the app's own PNG if it put one

@@ -152,27 +152,28 @@ jobs:
             -DSUNSHINE_PUBLISHER_WEBSITE="https://github.com/Frametop/frametop-vibepollo" \
             -DSUNSHINE_PUBLISHER_ISSUE_URL="https://github.com/DeeJanuz/frametop/issues"
           echo "::add-matcher::.github/matchers/gcc.json"
-          cmake --build build --parallel "$CMAKE_BUILD_PARALLEL_LEVEL" --target sunshine \
-            test_component_remote_display_topology test_component_remote_session test_component_rtsp_pending_policy
+          cmake --build build --parallel "$CMAKE_BUILD_PARALLEL_LEVEL" --target sunshine frametop_clipboard \
+            test_component_remote_display_topology test_component_remote_session test_component_rtsp_pending_policy \
+            test_component_clipboard_image test_component_clipboard_read
           echo "::remove-matcher owner=gcc::"
 
       # The suites Frametop's changes touch (the Remote Monitor release, the Frametop display
-      # role and the RTSP policy for it).
+      # role and the RTSP policy for it, the shared clipboard's conversions and reader).
       - name: Test
         run: |
           set -euo pipefail
           export PATH="$(cygpath -u "${WEBRTC_ROOT}")/bin:$(cygpath -u "${WEBRTC_ROOT}")/lib:$PATH"
           ctest --test-dir build --output-on-failure \
-            -R '^test_component_(remote_display_topology|remote_session|rtsp_pending_policy)$'
+            -R '^test_component_(remote_display_topology|remote_session|rtsp_pending_policy|clipboard_image|clipboard_read)$'
 
-      # The exe goes into an existing Vibepollo 2.0.1 install, so it may only load DLLs that
-      # Windows or that install has.
+      # The exes go into an existing Vibepollo 2.0.1 install (the clipboard reader into its
+      # tools folder), so they may only load DLLs that Windows or that install has.
       - name: Check DLLs and package
         run: |
           set -euo pipefail
-          strip --strip-all build/sunshine.exe
+          strip --strip-all build/sunshine.exe build/tools/frametop_clipboard.exe
           bad=0
-          for dll in $(objdump -p build/sunshine.exe | sed -n 's/^\s*DLL Name: //p' | tr -d '\r'); do
+          for dll in $(objdump -p build/sunshine.exe build/tools/frametop_clipboard.exe | sed -n 's/^\s*DLL Name: //p' | tr -d '\r' | sort -u); do
             lower=$(echo "$dll" | tr '[:upper:]' '[:lower:]')
             case $lower in
               libwebrtc.dll|zlib1.dll) echo "from the install: $dll" ;;
@@ -181,10 +182,11 @@ jobs:
             esac
           done
           [ "$bad" = 0 ]
-          mkdir -p dist
+          mkdir -p dist/tools
           cp build/sunshine.exe dist/
+          cp build/tools/frametop_clipboard.exe dist/tools/
           printf 'Vibepollo %s with Frametop'"'"'s changes\ncommit %s (%s)\n' "$BUILD_VERSION" "$GITHUB_SHA" "$GITHUB_REF_NAME" > dist/BUILD-INFO.txt
-          sha256sum dist/sunshine.exe
+          sha256sum dist/sunshine.exe dist/tools/frametop_clipboard.exe
 
       - name: Upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1

@@ -788,6 +788,7 @@ jobs:
             '.\build\tools\playnite-launcher.exe',
             '.\build\tools\sunshine_display_helper.exe',
             '.\build\tools\sunshine_wgc_capture.exe',
+            '.\build\tools\frametop_clipboard.exe',
             '.\build\tools\sunshinesvc.exe'
           )
 
@@ -1666,7 +1667,7 @@ jobs:
           $firstParty = @(
             'sunshine.exe','uninstall.exe','libwebrtc.dll','zlib1.dll',
             'sunshinesvc.exe','dxgi-info.exe','audio-info.exe',
-            'playnite-launcher.exe','sunshine_wgc_capture.exe','sunshine_display_helper.exe',
+            'playnite-launcher.exe','sunshine_wgc_capture.exe','sunshine_display_helper.exe','frametop_clipboard.exe',
             'vibepollo_dualsense_haptics.exe','vibepollo_dualsense_audio.dll',
             'virtualdisplay_probe.exe','VkLayer_sunshine_hdr.dll','VkLayer_sunshine_hdr_x86.dll','VibepolloPlaynite.dll'
           )

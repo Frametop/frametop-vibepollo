@@ -15,12 +15,9 @@ namespace platf::clipboard_read {
     /// Password managers put this format next to a password, for clipboard history and
     /// clipboard managers to leave it alone. Asked with the clipboard open, so a copy can't come
     /// in between the check and the read. Listed as well as asked for, in case a process can
-    /// list a format it can't look up.
-    bool is_secret() {
-      static const UINT secret = RegisterClipboardFormatW(L"ExcludeClipboardContentFromMonitorProcessing");
-      if (!secret) {
-        return false;
-      }
+    /// list a format it can't look up. Registered each time (a failed registration isn't kept):
+    /// the caller reads nothing when it fails.
+    bool is_secret(UINT secret) {
       if (IsClipboardFormatAvailable(secret)) {
         return true;
       }
@@ -82,10 +79,14 @@ namespace platf::clipboard_read {
 
   result read(bool image, std::string &out) {
     out.clear();
+    const UINT secret = RegisterClipboardFormatW(L"ExcludeClipboardContentFromMonitorProcessing");
+    if (!secret) {
+      return result::failed;
+    }
     if (!OpenClipboard(nullptr)) {
       return result::busy;
     }
-    if (is_secret()) {
+    if (is_secret(secret)) {
       CloseClipboard();
       return result::secret;
     }
@@ -96,8 +97,7 @@ namespace platf::clipboard_read {
     }
     // The app's own PNG keeps transparency; else the bitmap every image copy has (Windows makes
     // a CF_DIB from a CF_BITMAP or CF_DIBV5).
-    static const UINT png_format = RegisterClipboardFormatW(L"PNG");
-    std::string png = bytes_of(png_format);
+    std::string png = bytes_of(RegisterClipboardFormatW(L"PNG"));
     std::string dib;
     if (!is_png(png)) {
       png.clear();
