@@ -3168,10 +3168,23 @@ namespace platf {
   namespace {
     /// Frametop: password managers put this format next to a password, for clipboard history
     /// and clipboard managers to leave it alone. The shared clipboard does too. Asked with the
-    /// clipboard open, so a copy can't come in between the check and the read.
+    /// clipboard open, so a copy can't come in between the check and the read. The formats are
+    /// listed rather than asked for: the service-started host can't look up formats other apps
+    /// register (IsClipboardFormatAvailable and GetClipboardData fail, GetUpdatedClipboardFormats
+    /// leaves them out), but EnumClipboardFormats lists them up to the first one (Windows 11,
+    /// 2026-11-08). So a mark set with SetClipboardData is found, and one behind an OLE copy's
+    /// DataObject format isn't.
     bool clipboard_is_secret() {
       static const UINT secret = RegisterClipboardFormatW(L"ExcludeClipboardContentFromMonitorProcessing");
-      return secret && IsClipboardFormatAvailable(secret);
+      if (!secret) {
+        return false;
+      }
+      for (UINT format = EnumClipboardFormats(0); format; format = EnumClipboardFormats(format)) {
+        if (format == secret) {
+          return true;
+        }
+      }
+      return false;
     }
 
     /// Browsers, Office and the Snipping Tool put an image as a PNG file in this format too.
