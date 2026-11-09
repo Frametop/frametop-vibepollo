@@ -2541,6 +2541,7 @@ namespace VibepolloInstaller {
       "playnite_launcher",
       "sunshine_display_helper",
       "sunshine_end_stream_hotkey",
+      "frametop_clipboard",
       "apollo",
       "apollosvc",
       "vibepollo",

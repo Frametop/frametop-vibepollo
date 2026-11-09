@@ -1784,6 +1784,10 @@ if(WIN32)
     sunshine_register_component(NAME test_component_clipboard_image TEST_SOURCE unit/platform/windows/test_clipboard_image.cpp
         PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/image_convert.cpp"
         LINK_LIBRARIES windowscodecs ole32 shlwapi)
+    sunshine_register_component(NAME test_component_clipboard_read TEST_SOURCE unit/platform/windows/test_clipboard_read.cpp
+        PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/clipboard_read.cpp"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/image_convert.cpp"
+        LINK_LIBRARIES user32 windowscodecs ole32 shlwapi)
     sunshine_register_component(NAME test_component_game_activity TEST_SOURCE unit/platform/windows/test_game_activity.cpp
         PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/game_activity_policy.cpp")
     sunshine_register_component(NAME test_component_native_amf_policy TEST_SOURCE unit/platform/windows/test_native_amf_review.cpp)

@@ -84,6 +84,16 @@ target_link_libraries(playnite-launcher
         wtsapi32
         ${PLATFORM_LIBRARIES})
 target_compile_options(playnite-launcher PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+# Frametop shared clipboard: reads the signed-in user's clipboard for the host, which (run by
+# its service) can't see the formats other apps register.
+add_executable(frametop_clipboard
+        frametop_clipboard.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/windows/clipboard_read.cpp
+        ${CMAKE_SOURCE_DIR}/src/platform/windows/image_convert.cpp)
+set_target_properties(frametop_clipboard PROPERTIES CXX_STANDARD 23)
+target_link_libraries(frametop_clipboard user32 windowscodecs ole32 shlwapi ${PLATFORM_LIBRARIES})
+target_compile_options(frametop_clipboard PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+
 # Add sunshine_wgc_capture executable
 add_executable(sunshine_wgc_capture
         sunshine_wgc_capture.cpp

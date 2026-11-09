@@ -1,7 +1,7 @@
 # ZIP packages use the same installed runtime as the MSI, with an as-caller
 # launcher and a clean profile for physical-display capture.
 set(SUNSHINE_PORTABLE_EXECUTABLES sunshine.exe tools/dxgi-info.exe tools/audio-info.exe)
-foreach(_portable_target IN ITEMS playnite-launcher sunshine_wgc_capture sunshine_display_helper vibepollo_dualsense_haptics)
+foreach(_portable_target IN ITEMS playnite-launcher sunshine_wgc_capture sunshine_display_helper frametop_clipboard vibepollo_dualsense_haptics)
     if(TARGET "${_portable_target}")
         list(APPEND SUNSHINE_PORTABLE_EXECUTABLES "tools/${_portable_target}.exe")
     endif()

@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstring>
 #include <csignal>
+#include <array>
 #include <filesystem>
 #include <iomanip>
 #include <iterator>
@@ -17,6 +18,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <thread>
 #include <set>
 #include <sstream>
 #include <string>
@@ -56,6 +58,7 @@
 
 // local includes
 #include "image_convert.h"
+#include "clipboard_read.h"
 #include "misc.h"
 #include "src/screen_saver_state.h"
 #include "src/platform/common_services.h"
@@ -222,7 +225,6 @@ namespace {
 namespace bp = boost_process_shim;
 
 static std::string ensureCrLf(const std::string &utf8Str);
-static std::wstring getClipboardData();
 static int setClipboardData(const std::wstring &utf16Str);
 
 using namespace std::literals;
@@ -3166,27 +3168,6 @@ namespace platf {
   }
 
   namespace {
-    /// Frametop: password managers put this format next to a password, for clipboard history
-    /// and clipboard managers to leave it alone. The shared clipboard does too. Asked with the
-    /// clipboard open, so a copy can't come in between the check and the read. The formats are
-    /// listed rather than asked for: the service-started host can't look up formats other apps
-    /// register (IsClipboardFormatAvailable and GetClipboardData fail, GetUpdatedClipboardFormats
-    /// leaves them out), but EnumClipboardFormats lists them up to the first one (Windows 11,
-    /// 2026-11-08). So a mark set with SetClipboardData is found, and one behind an OLE copy's
-    /// DataObject format isn't.
-    bool clipboard_is_secret() {
-      static const UINT secret = RegisterClipboardFormatW(L"ExcludeClipboardContentFromMonitorProcessing");
-      if (!secret) {
-        return false;
-      }
-      for (UINT format = EnumClipboardFormats(0); format; format = EnumClipboardFormats(format)) {
-        if (format == secret) {
-          return true;
-        }
-      }
-      return false;
-    }
-
     /// Browsers, Office and the Snipping Tool put an image as a PNG file in this format too.
     UINT png_clipboard_format() {
       static const UINT png = RegisterClipboardFormatW(L"PNG");
@@ -3200,20 +3181,155 @@ namespace platf {
       return data.size() > sizeof signature && !std::memcmp(data.data(), signature, sizeof signature);
     }
 
-    /// A format's data on the open clipboard, empty when it has none or it's too big.
-    std::string clipboard_bytes(UINT format) {
-      HANDLE data = format && IsClipboardFormatAvailable(format) ? GetClipboardData(format) : nullptr;
-      const SIZE_T size = data ? GlobalSize(data) : 0;
-      if (!size || size > max_clipboard_image) {
-        return {};
+    /// Frametop: the clipboard as the signed-in user sees it. Started by its service (as SYSTEM),
+    /// this process can't see the formats other apps register, even impersonating the user:
+    /// IsClipboardFormatAvailable and GetClipboardData fail for them, and
+    /// GetUpdatedClipboardFormats leaves them out (Windows 11, 2026-11-08). A password manager's
+    /// mark on an OLE copy (.NET, Qt, KeePassXC) and an app's PNG went unseen. So
+    /// tools/frametop_clipboard.exe reads it, run as the user for each read. Without it nothing
+    /// is read: a password could otherwise go.
+    clipboard_read::result read_clipboard_as_user(bool image, std::string &out) {
+      out.clear();
+      std::array<wchar_t, 32768> executable {};
+      const DWORD length = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+      if (length == 0 || length >= executable.size()) {
+        return clipboard_read::result::failed;
       }
-      const void *bytes = GlobalLock(data);
-      if (!bytes) {
-        return {};
+      const auto directory = std::filesystem::path(executable.data()).parent_path() / L"tools";
+      const auto helper = directory / L"frametop_clipboard.exe";
+      static std::once_flag missing_logged;
+      std::error_code exists_ec;
+      if (!std::filesystem::exists(helper, exists_ec)) {
+        std::call_once(missing_logged, [&] {
+          BOOST_LOG(warning) << "Frametop clipboard: " << helper.string() << " is missing, so the clipboard isn't read";
+        });
+        return clipboard_read::result::failed;
       }
-      std::string out {static_cast<const char *>(bytes), size};
-      GlobalUnlock(data);
-      return out;
+
+      SECURITY_ATTRIBUTES inherit {sizeof(inherit), nullptr, TRUE};
+      HANDLE read_end = nullptr;
+      HANDLE write_end = nullptr;
+      if (!CreatePipe(&read_end, &write_end, &inherit, 1 << 20)) {
+        return clipboard_read::result::failed;
+      }
+      auto close_read = util::fail_guard([&] {
+        CloseHandle(read_end);
+      });
+      auto close_write = util::fail_guard([&] {
+        if (write_end) {
+          CloseHandle(write_end);
+        }
+      });
+      SetHandleInformation(read_end, HANDLE_FLAG_INHERIT, 0);
+
+      std::error_code ec;
+      STARTUPINFOEXW startup = create_startup_info(nullptr, nullptr, ec);
+      if (ec) {
+        return clipboard_read::result::failed;
+      }
+      auto free_startup = util::fail_guard([&] {
+        free_proc_thread_attr_list(startup.lpAttributeList);
+      });
+      startup.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+      startup.StartupInfo.hStdInput = nullptr;
+      startup.StartupInfo.hStdOutput = write_end;
+      startup.StartupInfo.hStdError = nullptr;
+      // Only the pipe is inherited (the value must outlive the attribute list: it points into
+      // the STARTUPINFO).
+      if (!UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &startup.StartupInfo.hStdOutput, sizeof(startup.StartupInfo.hStdOutput), nullptr, nullptr)) {
+        return clipboard_read::result::failed;
+      }
+      wchar_t desktop[] = L"winsta0\\default";
+      startup.StartupInfo.lpDesktop = desktop;
+      const std::wstring command = L"\"" + helper.wstring() + L"\" " + (image ? L"image" : L"text");
+      constexpr DWORD flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
+      PROCESS_INFORMATION child {};
+      if (!launch_process_with_impersonation(false, to_utf8(command), directory.wstring(), flags, startup, child, ec)) {
+        static std::once_flag launch_logged;
+        std::call_once(launch_logged, [&] {
+          BOOST_LOG(warning) << "Frametop clipboard: couldn't start the clipboard reader as the user: " << ec.message();
+        });
+        return clipboard_read::result::failed;
+      }
+      CloseHandle(child.hThread);
+      auto close_child = util::fail_guard([&] {
+        CloseHandle(child.hProcess);
+      });
+      CloseHandle(write_end);  // the child's now: the pipe ends when it does
+      write_end = nullptr;
+
+      // A PNG made of a big bitmap takes a while; a reader that hangs is ended.
+      const auto deadline = std::chrono::steady_clock::now() + (image ? 10s : 4s);
+      bool too_big = false;
+      std::array<char, 64 << 10> chunk;
+      for (;;) {
+        DWORD ready = 0;
+        if (!PeekNamedPipe(read_end, nullptr, 0, nullptr, &ready, nullptr)) {
+          break;  // ERROR_BROKEN_PIPE: the reader is done
+        }
+        if (!ready) {
+          if (std::chrono::steady_clock::now() >= deadline) {
+            TerminateProcess(child.hProcess, 1);
+            WaitForSingleObject(child.hProcess, 1000);
+            BOOST_LOG(warning) << "Frametop clipboard: the clipboard reader took too long";
+            out.clear();
+            return clipboard_read::result::failed;
+          }
+          std::this_thread::sleep_for(5ms);
+          continue;
+        }
+        DWORD got = 0;
+        if (!ReadFile(read_end, chunk.data(), static_cast<DWORD>(std::min<std::size_t>(chunk.size(), ready)), &got, nullptr)) {
+          break;
+        }
+        if (out.size() + got > clipboard_read::max_bytes) {
+          too_big = true;
+          TerminateProcess(child.hProcess, 1);
+          break;
+        }
+        out.append(chunk.data(), got);
+      }
+      const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+      DWORD code = 1;
+      if (WaitForSingleObject(child.hProcess, static_cast<DWORD>(std::max<long long>(left.count(), 1000))) != WAIT_OBJECT_0 || !GetExitCodeProcess(child.hProcess, &code)) {
+        TerminateProcess(child.hProcess, 1);
+        code = 1;
+      }
+      if (too_big || code != 0) {
+        out.clear();
+      }
+      if (too_big) {
+        return clipboard_read::result::ok;  // too big reads as nothing
+      }
+      for (auto r : {clipboard_read::result::ok, clipboard_read::result::secret, clipboard_read::result::busy}) {
+        if (static_cast<int>(code) == clipboard_read::exit_code(r)) {
+          return r;
+        }
+      }
+      return clipboard_read::result::failed;
+    }
+
+    /// The clipboard's text (UTF-8) or image (a PNG file), empty for none, a busy clipboard, or
+    /// a password manager's copy.
+    std::string read_clipboard(bool image) {
+      std::string out;
+      const auto result = is_running_as_system() ? read_clipboard_as_user(image, out) : clipboard_read::read(image, out);
+      switch (result) {
+        case clipboard_read::result::ok:
+          return out;
+        case clipboard_read::result::busy:
+          BOOST_LOG(warning) << "Failed to open clipboard.";
+          break;
+        case clipboard_read::result::secret:
+          BOOST_LOG(debug) << "Clipboard: a password manager's copy isn't shared.";
+          break;
+        case clipboard_read::result::failed:
+          if (image) {
+            BOOST_LOG(warning) << "Clipboard: couldn't read its image.";
+          }
+          break;
+      }
+      return {};
     }
 
     HGLOBAL global_copy(const std::string &data) {
@@ -3233,8 +3349,7 @@ namespace platf {
 
   std::string
     get_clipboard() {
-    std::string currentClipboard = utf_utils::to_utf8(getClipboardData());
-    return currentClipboard;
+    return read_clipboard(false);
   }
 
   bool
@@ -3244,28 +3359,7 @@ namespace platf {
   }
 
   std::string get_clipboard_image() {
-    if (!OpenClipboard(nullptr)) {
-      BOOST_LOG(warning) << "Failed to open clipboard.";
-      return {};
-    }
-    if (clipboard_is_secret()) {
-      CloseClipboard();
-      return {};
-    }
-    // The app's own PNG keeps transparency; else the bitmap every image copy has (Windows
-    // makes a CF_DIB from a CF_BITMAP or CF_DIBV5).
-    std::string png = clipboard_bytes(png_clipboard_format());
-    std::string dib;
-    if (!is_png(png)) {
-      png.clear();
-      dib = clipboard_bytes(CF_DIB);
-    }
-    CloseClipboard();
-    if (png.empty() && !dib.empty() && !img::png_from_clipboard_dib(dib.data(), dib.size(), png)) {
-      BOOST_LOG(warning) << "Clipboard: couldn't make a PNG of its bitmap.";
-      png.clear();
-    }
-    return png;
+    return read_clipboard(true);
   }
 
   bool set_clipboard_image(const std::string &png) {
@@ -3351,39 +3445,6 @@ static std::string ensureCrLf(const std::string &utf8Str) {
   }
 
   return result;
-}
-
-static std::wstring getClipboardData() {
-  if (!OpenClipboard(nullptr)) {
-    BOOST_LOG(warning) << "Failed to open clipboard.";
-    return L"";
-  }
-  // Frametop: a password manager's copy isn't shared.
-  if (platf::clipboard_is_secret()) {
-    CloseClipboard();
-    return L"";
-  }
-
-  HANDLE hData = GetClipboardData(CF_UNICODETEXT);
-  if (hData == nullptr) {
-    BOOST_LOG(warning) << "No text data in clipboard or failed to get data.";
-    CloseClipboard();
-    return L"";
-  }
-
-  wchar_t *pszText = static_cast<wchar_t *>(GlobalLock(hData));
-  if (pszText == nullptr) {
-    BOOST_LOG(warning) << "Failed to lock clipboard data.";
-    CloseClipboard();
-    return L"";
-  }
-
-  std::wstring ret = pszText;
-
-  GlobalUnlock(hData);
-  CloseClipboard();
-
-  return ret;
 }
 
 static int setClipboardData(const std::wstring &utf16Str) {

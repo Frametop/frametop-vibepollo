@@ -289,6 +289,8 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/lossless_scaling_paths.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/image_convert.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/image_convert.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/clipboard_read.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/clipboard_read.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/rtss_integration.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/rtss_integration.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/ipc/ipc_session.h"
