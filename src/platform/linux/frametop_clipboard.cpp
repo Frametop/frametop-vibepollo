@@ -41,9 +41,10 @@ namespace platf {
     constexpr auto SESSION_EXEC = "/usr/libexec/vibeshine/vibepollo-session-exec";
     constexpr auto HELPER = "/usr/libexec/vibeshine/vibepollo-clipboard";
     /// For the helper to say "ready", and to answer a request (its own wait for the app that
-    /// owns the clipboard is 3 s).
+    /// owns the clipboard is 3 s for text, 8 s for an image).
     constexpr int READY_MS = 5000;
-    constexpr int ANSWER_MS = 8000;
+    constexpr int ANSWER_MS = 5000;
+    constexpr int IMAGE_ANSWER_MS = 11000;
     /// For it to read a request's content, and to send a reply's.
     constexpr int TRANSFER_MS = 15000;
     constexpr int EXIT_MS = 1000;
@@ -103,17 +104,24 @@ namespace platf {
       answer_e request(bool set, bool image, const std::string &in, std::string &out) {
         std::lock_guard lock {mutex_};
         sigpipe_guard_t guard;
-        // A helper that ended since (its session changed) is replaced once, at once.
+        // A helper that ended since (its session changed) is replaced once, at once. One that
+        // didn't answer in time isn't: a desktop that stopped answering would only hold this
+        // request up as long again.
         for (int attempt = 0; attempt < 2; ++attempt) {
           if (pid_ < 0 && !start()) {
             return answer_e::fail;
           }
           bool lost = false;
+          late_ = false;
           const auto answer = exchange(set, image, in, out, lost);
           if (!lost) {
             return answer;
           }
           stop();
+          if (late_) {
+            BOOST_LOG(warning) << "Frametop clipboard: the desktop's clipboard didn't answer in time"sv;
+            return answer_e::fail;
+          }
         }
         return answer_e::fail;
       }
@@ -193,7 +201,7 @@ namespace platf {
           return answer_e::fail;
         }
         std::string line;
-        if (!read_line(line, ANSWER_MS)) {
+        if (!read_line(line, image ? IMAGE_ANSWER_MS : ANSWER_MS)) {
           lost = true;
           return answer_e::fail;
         }
@@ -225,10 +233,12 @@ namespace platf {
         return answer_e::ok;
       }
 
+      /// False when fd isn't ready by then (late_), or poll fails.
       bool wait_for(int fd, short events, int64_t until) {
         for (;;) {
           const auto left = until - now_ms();
           if (left <= 0) {
+            late_ = true;
             return false;
           }
           pollfd p {fd, events, 0};
@@ -338,6 +348,7 @@ namespace platf {
       }
 
       std::mutex mutex_;
+      bool late_ = false;  ///< the last wait_for ran out of time
       pid_t pid_ = -1;
       int to_ = -1, from_ = -1;
       bool failing_ = false;

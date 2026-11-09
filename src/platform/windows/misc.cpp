@@ -3167,7 +3167,8 @@ namespace platf {
 
   namespace {
     /// Frametop: password managers put this format next to a password, for clipboard history
-    /// and clipboard managers to leave it alone. The shared clipboard does too.
+    /// and clipboard managers to leave it alone. The shared clipboard does too. Asked with the
+    /// clipboard open, so a copy can't come in between the check and the read.
     bool clipboard_is_secret() {
       static const UINT secret = RegisterClipboardFormatW(L"ExcludeClipboardContentFromMonitorProcessing");
       return secret && IsClipboardFormatAvailable(secret);
@@ -3219,9 +3220,6 @@ namespace platf {
 
   std::string
     get_clipboard() {
-    if (clipboard_is_secret()) {
-      return {};
-    }
     std::string currentClipboard = utf_utils::to_utf8(getClipboardData());
     return currentClipboard;
   }
@@ -3233,11 +3231,12 @@ namespace platf {
   }
 
   std::string get_clipboard_image() {
-    if (clipboard_is_secret()) {
-      return {};
-    }
     if (!OpenClipboard(nullptr)) {
       BOOST_LOG(warning) << "Failed to open clipboard.";
+      return {};
+    }
+    if (clipboard_is_secret()) {
+      CloseClipboard();
       return {};
     }
     // The app's own PNG keeps transparency; else the bitmap every image copy has (Windows
@@ -3344,6 +3343,11 @@ static std::string ensureCrLf(const std::string &utf8Str) {
 static std::wstring getClipboardData() {
   if (!OpenClipboard(nullptr)) {
     BOOST_LOG(warning) << "Failed to open clipboard.";
+    return L"";
+  }
+  // Frametop: a password manager's copy isn't shared.
+  if (platf::clipboard_is_secret()) {
+    CloseClipboard();
     return L"";
   }
 

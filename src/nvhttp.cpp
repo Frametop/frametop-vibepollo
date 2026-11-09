@@ -7331,6 +7331,10 @@ launch_session->exact_target_hold.reset();
     }};
     thread_pool_util::ThreadPool metrics_route_pool;
     metrics_route_pool.start(1);
+    // Frametop: a clipboard request can wait seconds on the desktop's clipboard (an app that
+    // has to hand it over, a big image), so it waits here, not on the server's own thread.
+    thread_pool_util::ThreadPool clipboard_route_pool;
+    clipboard_route_pool.start(1);
     auto metrics_busy = std::make_shared<std::atomic_bool>(false);
 
     // Verify certificates after establishing connection
@@ -7602,8 +7606,16 @@ launch_session->exact_target_hold.reset();
         cancel(std::move(resp), std::move(req));
       });
     };
-    https_server.resource["^/actions/clipboard$"]["GET"] = getClipboard;
-    https_server.resource["^/actions/clipboard$"]["POST"] = setClipboard;
+    https_server.resource["^/actions/clipboard$"]["GET"] = [&clipboard_route_pool, run_on_blocking_pool](auto resp, auto req) {
+      run_on_blocking_pool(clipboard_route_pool, [resp = std::move(resp), req = std::move(req)]() mutable {
+        getClipboard(std::move(resp), std::move(req));
+      });
+    };
+    https_server.resource["^/actions/clipboard$"]["POST"] = [&clipboard_route_pool, run_on_blocking_pool](auto resp, auto req) {
+      run_on_blocking_pool(clipboard_route_pool, [resp = std::move(resp), req = std::move(req)]() mutable {
+        setClipboard(std::move(resp), std::move(req));
+      });
+    };
     https_server.resource["^/bitrate$"]["GET"] = [run_blocking_nvhttp](auto response, auto request) {
       bitrate_policy::run(
         response, request,
@@ -7627,6 +7639,9 @@ launch_session->exact_target_hold.reset();
     };
 
     https_server.config.reuse_address = true;
+    // Frametop: no request here is bigger than a clipboard image (64 MiB): a bigger one is
+    // refused (413) before it's read into memory.
+    https_server.config.max_request_streambuf_size = (std::size_t {64} << 20) + (std::size_t {1} << 20);
     https_server.config.address = net::get_bind_address(address_family);
     https_server.config.port = port_https;
 
@@ -7715,6 +7730,8 @@ launch_session->exact_target_hold.reset();
     discovery_route_pool.join();
     metrics_route_pool.stop();
     metrics_route_pool.join();
+    clipboard_route_pool.stop();
+    clipboard_route_pool.join();
     webrtc_stream::shutdown_all_sessions();
     rtsp_stream::terminate_sessions(false);
     remote_session::notify_monitor_shutdown();

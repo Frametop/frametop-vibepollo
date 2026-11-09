@@ -32,8 +32,10 @@
 #include <unistd.h>
 #include <wayland-client.h>
 
-/* How long the app that owns the clipboard gets to hand it over, and a pasting app to take it. */
+/* How long the app that owns the clipboard gets to hand it over (an app may make a big image's
+ * PNG only when asked), and a pasting app to take it. Vibepollo waits a little longer. */
 #define HAND_OVER_MS 3000
+#define IMAGE_HAND_OVER_MS 8000
 #define PASTE_MS 10000
 /* How long Vibepollo gets to send a request's content once its header came. */
 #define REQUEST_MS 10000
@@ -152,8 +154,11 @@ static void source_send(void *data, struct zwlr_data_control_source_v1 *source, 
    * nothing here. It gets PASTE_MS for all of it. */
   const pid_t child = fork();
   if (child == 0) {
-    /* Only the paste is its: Vibepollo's pipes and the desktop's socket stay the helper's. */
+    /* Only the paste is its: Vibepollo's pipes (stderr too: the session broker waits for it to
+     * end) and the desktop's socket stay the helper's. */
     close(STDIN_FILENO), close(STDOUT_FILENO), close(wl_display_get_fd(display));
+    const int null = open("/dev/null", O_WRONLY | O_CLOEXEC);
+    if (null >= 0) dup2(null, STDERR_FILENO);
     const int flags = fcntl(fd, F_GETFL);
     if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     const int64_t until = now_ms() + PASTE_MS;
@@ -204,7 +209,7 @@ static void get(bool image) {
   size_t size = 0, capacity = 65536;
   char *data = malloc(capacity);
   const char *failed = data ? NULL : "out of memory";
-  const int64_t until = now_ms() + HAND_OVER_MS;
+  const int64_t until = now_ms() + (image ? IMAGE_HAND_OVER_MS : HAND_OVER_MS);
   while (!failed) {
     const int64_t left = until - now_ms();
     struct pollfd p = {fds[0], POLLIN, 0};
@@ -274,10 +279,11 @@ static void set(bool image, size_t length) {
   if (image) zwlr_data_control_source_v1_offer(c->source, png_type);
   else
     for (int i = 0; i < text_type_count; ++i) zwlr_data_control_source_v1_offer(c->source, text_types[i]);
-  /* The one before gets "cancelled" and goes. */
+  /* The one before gets "cancelled" and goes. Sent, not waited for: a desktop that stopped
+   * answering mustn't hold Vibepollo's request up (the main loop sees what follows). */
   current = c;
   zwlr_data_control_device_v1_set_selection(device, c->source);
-  if (wl_display_roundtrip(display) < 0) {
+  if (wl_display_flush(display) < 0 && errno != EAGAIN) {
     reply_fail("the desktop went away");
     _exit(1);
   }
