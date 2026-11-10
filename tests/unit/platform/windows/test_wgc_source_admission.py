@@ -67,6 +67,11 @@ namespace platf::dxgi {
   struct activity_admission_data_t { uint32_t magic; int32_t admission_fps; };
 }
 struct { uint32_t flags = platf::dxgi::WGC_IPC_FLAG_DRAIN_TO_LATEST; } g_config;
+using UINT = unsigned int;
+// Display capture. A Frametop window target restarts its capture on resize; that path isn't
+// replayed here, but its names must compile.
+bool g_window_target = false;
+std::atomic<bool> g_capture_item_closed {false};
 std::atomic<int32_t> g_activity_admission_fps {60};
 std::atomic<uint32_t> g_activity_admission_generation {0};
 struct ReplayClock {
@@ -86,6 +91,8 @@ struct Direct3D11CaptureFrame {
   Direct3D11CaptureFrame(int64_t timestamp, int content): valid(true), pixels(content), source(timestamp) {}
   explicit operator bool() const { return valid; }
   int Surface() const { return pixels; }
+  struct size_t2 { int Width = 0, Height = 0; };
+  size_t2 ContentSize() const { return {}; }
   struct timestamp_t { int64_t ticks; int64_t count() const { return ticks; } };
   timestamp_t SystemRelativeTime() const { return {source}; }
 };
@@ -111,6 +118,7 @@ struct Manager {
   std::optional<Delivery> pending;
   uint32_t captured = 0, drained = 0, replaced = 0, checks = 0;
   uint32_t _current_buffer_size = 1, _max_buffer_size = 2;
+  UINT _width = 0, _height = 0;
 // DRAIN_POLICY
   void record_frame_pool_pressure(std::chrono::steady_clock::time_point) {}
   void record_frame_arrival(uint32_t count) { ++captured; drained += count; }
