@@ -11,6 +11,7 @@
 #include "window_pick.h"
 
 #include "src/config.h"
+#include "src/frametop_together.h"
 #include "src/logging.h"
 #include "src/rtsp.h"
 #include "src/video.h"
@@ -433,6 +434,7 @@ namespace platf::hyprland_windows {
       }
       if (find_monitor(output)) run("output remove " + output, nullptr);
       if (log) BOOST_LOG(info) << "Frametop windows: " << output << " released (" << h.address << ")";
+      frametop_together::output_released(output);  // (no panel of a room any more, whatever gets the name next)
       save();
       return true;
     }

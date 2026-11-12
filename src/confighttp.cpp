@@ -592,6 +592,12 @@ namespace confighttp {
   void getLutrisGames(resp_https_t response, req_https_t request);
   void postLutrisForceSync(resp_https_t response, req_https_t request);
   void postLutrisLaunch(resp_https_t response, req_https_t request);
+
+  // Frametop Together (confighttp_frametop_together.cpp)
+  void postFrametopTogetherSender(resp_https_t response, req_https_t request);
+  void postFrametopTogetherPanels(resp_https_t response, req_https_t request);
+  void postFrametopTogetherStop(resp_https_t response, req_https_t request);
+  void getFrametopTogether(resp_https_t response, req_https_t request);
 #endif
 
 #ifdef _WIN32
@@ -6639,6 +6645,10 @@ namespace confighttp {
     register_api_route("^/api/frametop/windows/release$", "POST", postFrametopWindowRelease);
 #endif
 #ifdef __linux__
+    register_api_route("^/api/frametop/together$", "GET", getFrametopTogether);
+    register_blocking_api_route("^/api/frametop/together/sender$", "POST", postFrametopTogetherSender);
+    register_blocking_api_route("^/api/frametop/together/panels$", "POST", postFrametopTogetherPanels);
+    register_blocking_api_route("^/api/frametop/together/stop$", "POST", postFrametopTogetherStop);
     register_api_route("^/api/lutris/status$", "GET", getLutrisStatus);
     register_api_route("^/api/lutris/games$", "GET", getLutrisGames);
     register_api_route("^/api/lutris/force_sync$", "POST", postLutrisForceSync);

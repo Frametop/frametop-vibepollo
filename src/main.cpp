@@ -45,6 +45,7 @@
 #include "steam_auto_sync.h"
 #ifdef __linux__
   #include "lutris_auto_sync.h"
+  #include "src/frametop_together.h"
   #include "src/platform/linux/hyprland_windows.h"
   #include "src/platform/linux/session_backend.h"
 #endif
@@ -1101,6 +1102,11 @@ int main(int argc, char *argv[]) {
   // The signal handler only wakes main; start the owned watchdog here so it
   // never constructs threads or queues work from signal context.
   shutdown_deadline.arm();
+
+#ifdef __linux__
+  // Frametop Together's captures and helper end while video and mail are still up.
+  frametop_together::stop();
+#endif
 
 #ifdef WIN32
   // Join the hidden shutdown-notification window while the deadline watchdog
