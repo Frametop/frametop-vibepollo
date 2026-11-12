@@ -9,8 +9,12 @@
  *   POST /api/frametop/together/sender {"address", "port", "code"}
  *        Calls the headset's room program with the one-time code it made, in place of any
  *        earlier call.
- *   POST /api/frametop/together/panels {"panels": [{"number": 3, "output": "FT-W1"}, ...]}
- *        The window outputs that are the PC's panels from now on (numbers 3 to 6).
+ *   POST /api/frametop/together/panels {"panels": [{"number": 3, "address": "0x55aa10"}, ...]}
+ *        The windows that are the PC's panels from now on (numbers 3 to 6), each by its
+ *        address as the headset has it, or by its window output ("output": "FT-W1"). A window
+ *        named by its address that isn't out on an output (it closed, or went back to the
+ *        desktop) is left out: the answer's list says which panels stand. 409 when this PC
+ *        has no call to a headset: the headset is to have it call first.
  *   POST /api/frametop/together/stop
  *   GET  /api/frametop/together
  *        {"calling", "called", "ended", "panels": [...]}; the POSTs answer with it too.
@@ -41,6 +45,7 @@ namespace confighttp {
   bool authenticate(resp_https_t response, req_https_t request);
   bool validateContentType(resp_https_t response, req_https_t request, const std::string_view &contentType);
   void bad_request(resp_https_t response, req_https_t request, const std::string &error_message);
+  void conflict(resp_https_t response, const std::string &error_message);
   void send_response(resp_https_t response, const nlohmann::json &output_tree);
   bool frametop_windows_ready(resp_https_t response);
   std::optional<nlohmann::json> frametop_windows_body(resp_https_t response, req_https_t request);
@@ -90,22 +95,44 @@ namespace confighttp {
     if (listed == body->end() || !listed->is_array()) {
       return bad_request(response, request, "panels must be a list");
     }
+    if (!frametop_together::state().value("calling", false)) {
+      return conflict(response, "no call to a headset stands");
+    }
     const auto monitors = platf::hyprland_windows::monitor_list();
+    std::optional<nlohmann::json> hosted;  // the windows out on outputs: asked for once, if at all
     std::vector<frametop_together::panel_t> panels;
     for (const auto &entry : *listed) {
-      if (!entry.is_object() || !entry.contains("number") || !entry["number"].is_number_integer() ||
-          !entry.contains("output") || !entry["output"].is_string()) {
-        return bad_request(response, request, "a panel is {\"number\", \"output\"}");
+      const bool by_window = entry.is_object() && entry.contains("address") && entry["address"].is_string();
+      const bool by_output = entry.is_object() && entry.contains("output") && entry["output"].is_string();
+      if (by_window == by_output || !entry.contains("number") || !entry["number"].is_number_integer()) {
+        return bad_request(response, request, "a panel is {\"number\", \"address\"} or {\"number\", \"output\"}");
       }
       frametop_together::panel_t panel;
       panel.number = entry["number"].get<int>();
-      panel.output = entry["output"].get<std::string>();
+      if (by_window) {
+        if (!hosted) {
+          hosted = platf::hyprland_windows::list()["outputs"];
+        }
+        for (const auto &window : *hosted) {
+          if (window.value("address", "") == entry["address"].get<std::string>()) {
+            panel.output = window.value("output", "");
+          }
+        }
+        if (panel.output.empty()) {
+          continue;
+        }
+      } else {
+        panel.output = entry["output"].get<std::string>();
+      }
       // Only a window's own output: never a real monitor, which the windows role didn't open.
       for (const auto &monitor : monitors) {
         if (monitor.window && monitor.name == panel.output) {
           panel.width = monitor.width;
           panel.height = monitor.height;
         }
+      }
+      if (!panel.width && by_window) {
+        continue;  // (its output went since it was listed)
       }
       if (!panel.width) {
         return bad_request(response, request, panel.output + " isn't a window output that is open");
