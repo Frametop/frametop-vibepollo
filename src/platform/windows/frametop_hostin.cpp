@@ -35,6 +35,7 @@
 #include <vector>
 
 // platform includes
+#include <WinSock2.h>  // before Windows.h: src/platform/common.h brings winsock2.h in later
 #include <Windows.h>
 #include <wtsapi32.h>
 
