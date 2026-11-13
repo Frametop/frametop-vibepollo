@@ -4,6 +4,8 @@
  */
 #include "../tests_common.h"
 
+#include <optional>
+#include <sstream>
 #include <src/entry_credentials.h>
 #include <string>
 
@@ -123,5 +125,33 @@ namespace {
     EXPECT_EQ(calls.save, 1);
     EXPECT_EQ(calls.username, "alice");
     EXPECT_EQ(calls.password, "test-password");
+  }
+
+  TEST(EntryCredentials, PasswordOperandIsUsedAsGiven) {
+    std::istringstream input {"from-input\n"};
+
+    EXPECT_EQ(args::password_operand("test-password", input), "test-password");
+    EXPECT_EQ(args::password_operand("--", input), "--");
+    EXPECT_EQ(input.tellg(), 0);
+  }
+
+  TEST(EntryCredentials, DashReadsThePasswordFromTheInputsFirstLine) {
+    std::istringstream unix_line {"first line\nsecond\n"};
+    std::istringstream windows_line {"first line\r\n"};
+    std::istringstream unterminated {"first line"};
+
+    EXPECT_EQ(args::password_operand("-", unix_line), "first line");
+    EXPECT_EQ(args::password_operand("-", windows_line), "first line");
+    EXPECT_EQ(args::password_operand("-", unterminated), "first line");
+  }
+
+  TEST(EntryCredentials, DashWithoutAPasswordOnTheInputGivesNone) {
+    std::istringstream closed;
+    std::istringstream empty_line {"\nsecond\n"};
+    std::istringstream only_return {"\r\n"};
+
+    EXPECT_EQ(args::password_operand("-", closed), std::nullopt);
+    EXPECT_EQ(args::password_operand("-", empty_line), std::nullopt);
+    EXPECT_EQ(args::password_operand("-", only_return), std::nullopt);
   }
 }  // namespace

@@ -73,6 +73,10 @@ FIXED.update(f'usr/share/applications/io.github.Nonary.vibepollo{suffix}.desktop
 FIXED.add('usr/share/icons/hicolor/scalable/apps/apollo.svg')
 OPTIONAL = {f'usr/share/icons/hicolor/scalable/status/apollo-{state}.svg'
             for state in ('locked', 'pausing', 'playing', 'tray')}
+# Frametop app windows on Hyprland (cmake/packaging/linux_frametop_windows.cmake).
+OPTIONAL.update(('usr/bin/vibepollo-frametop-windows', 'usr/lib/systemd/user/vibepollo-frametop-windows.service',
+                 'usr/lib/firewalld/services/vibepollo-frametop-windows.xml',
+                 'etc/ufw/applications.d/vibepollo-frametop-windows'))
 FIXED.update(f'usr/lib/systemd/user/{unit}.service.d/{dropin}.conf'
              for unit in ('plasma-kwin_wayland', 'plasma-login-kwin_wayland')
              for dropin in ('vibeshine-kwin-gpu', 'vibepollo-kwin-session-environment'))

@@ -1,0 +1,4 @@
+[Vibepollo Frametop windows]
+title=Vibepollo Frametop windows
+description=The desktop session's Vibepollo that streams single app windows to Frametop (vibepollo-frametop-windows)
+ports=48984,48989,48990,49010/tcp|48998:49000,49010/udp

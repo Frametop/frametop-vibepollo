@@ -41,8 +41,13 @@ namespace args {
       argc,
       argv,
       help,
-      [](const char *username, const char *password) {
-        return http::save_user_creds(config::sunshine.credentials_file, username, password);
+      [](const char *username, const char *operand) {
+        const auto password = password_operand(operand, std::cin);
+        if (!password) {
+          BOOST_LOG(fatal) << "--creds "sv << username << " -: no password on the input"sv;
+          return 1;
+        }
+        return http::save_user_creds(config::sunshine.credentials_file, username, *password);
       }
     );
   }

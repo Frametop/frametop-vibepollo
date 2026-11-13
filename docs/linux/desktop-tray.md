@@ -41,6 +41,10 @@ The menu provides:
 
 - **Open Vibepollo** and **Pair a client** open the local Web UI.
 - **Stop [application]** uses the authenticated API, with confirmation.
+- **Bring windows back** shows while the Hyprland session shares app windows
+  with Frametop (`vibepollo-frametop-windows`, see [Frametop app windows](../frametop-app-windows.md)).
+  It puts every window Frametop took back on the desktop, as the entry of the
+  same name does on Windows. Their streams end.
 - **Check for Update** fetches public GitHub release metadata, displays the
   installed version and latest published stable/prerelease tags, and offers
   their release pages. It does not install anything or claim a nightly/stable

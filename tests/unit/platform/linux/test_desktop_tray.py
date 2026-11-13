@@ -67,7 +67,14 @@ class DesktopStandins:
             def setEnabled(self, enabled):
                 self.enabled = enabled
 
+            def setVisible(self, visible):
+                self.visible = visible
+
         class Menu:
+            def __init__(self):
+                self.aboutToShow = Signal()
+                desktop.menu = self
+
             def addAction(self, text, callback=None):
                 action = text if isinstance(text, Action) else Action(text)
                 desktop.actions[action.text] = action
@@ -270,6 +277,69 @@ class TrayTests(unittest.TestCase):
                           subprocess.CompletedProcess([], 1, "", "Access denied")):
             with self.assertRaisesRegex(tray.ApiError, "Access denied"):
                 tray.run_service_action("stop")
+
+    def test_frametop_windows_entry_shows_only_while_they_are_shared(self):
+        calls = []
+
+        def run(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0 if shared else 3, "", "")
+
+        with patch.object(tray.subprocess, "run", side_effect=run):
+            shared = True
+            self.assertTrue(tray.windows_shared())
+            shared = False
+            self.assertFalse(tray.windows_shared())
+        self.assertEqual(calls[0], ["/usr/bin/systemctl", "--user", "--quiet", "is-active", tray.WINDOWS_UNIT])
+        with patch.object(tray.subprocess, "run", side_effect=FileNotFoundError):
+            self.assertFalse(tray.windows_shared())
+
+    def test_bringing_windows_back_runs_the_launcher_beside_the_tray(self):
+        self.assertEqual(tray.WINDOWS_LAUNCHER, ROOT / "packaging/linux/vibepollo-frametop-windows")
+        with patch.object(tray.subprocess, "run", return_value=
+                          subprocess.CompletedProcess([], 0, "", "")) as run:
+            tray.bring_windows_back()
+        self.assertEqual(run.call_args.args[0], [str(tray.WINDOWS_LAUNCHER), "back"])
+        with patch.object(tray.subprocess, "run", return_value=
+                          subprocess.CompletedProcess([], 1, "", "it isn't running from its unit")):
+            with self.assertRaisesRegex(tray.ApiError, "isn't running"):
+                tray.bring_windows_back()
+
+    def test_menu_offers_windows_back_when_opened_while_shared(self):
+        services = {tray.HOST: "active", tray.CONTROLLER: "active"}
+        desktop = None
+
+        def scenario():
+            desktop.dispatch()  # the first poll
+            entry = desktop.actions["Bring windows back"]
+            self.assertFalse(entry.visible)
+            with patch.object(tray, "windows_shared", return_value=True):
+                desktop.menu.aboutToShow.emit()
+                desktop.dispatch()
+            self.assertTrue(entry.visible)
+            with patch.object(tray, "bring_windows_back") as back:
+                desktop.trigger("Bring windows back")
+                desktop.dispatch()  # its completion, which asks for a fresh poll
+                desktop.dispatch()
+                back.assert_called_once_with()
+            self.assertEqual(desktop.warnings, [])
+            self.assertTrue(desktop.events.empty())
+            with patch.object(tray, "windows_shared", return_value=False):
+                desktop.menu.aboutToShow.emit()
+                desktop.dispatch()
+            self.assertFalse(entry.visible)
+            return 0
+
+        desktop = DesktopStandins(scenario)
+        with patch.dict(tray.sys.modules, desktop.modules), \
+                patch.dict(os.environ, {"DBUS_SESSION_BUS_ADDRESS": "fixture",
+                                        "WAYLAND_DISPLAY": "fixture"}), \
+                patch.object(tray.os, "getuid", return_value=1000), \
+                patch.object(tray.os, "geteuid", return_value=1000), \
+                patch.object(tray, "Settings") as settings, \
+                patch.object(tray, "read_services", return_value=services):
+            settings.return_value.load.return_value = {}
+            self.assertEqual(tray.main(["--no-notifications"]), 0)
 
     def test_system_service_state_is_parsed_by_id(self):
         output = (f"ActiveState=inactive\nId={tray.HOST}\nSubState=dead\n\n"

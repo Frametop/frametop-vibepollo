@@ -1451,7 +1451,7 @@ namespace confighttp {
 
   bool frametop_windows_ready(resp_https_t response) {
     if (!platf::linux_display::hyprland_wlr_session()) {
-      service_unavailable(response, "This Vibepollo isn't the one in the desktop's Hyprland session (VIBEPOLLO_SESSION_BACKEND=hyprland-wlr)");
+      service_unavailable(response, "App windows come from a second Vibepollo, in this computer's Hyprland session, and it didn't answer: run vibepollo-frametop-windows setup in a terminal there, and let its ports through the firewall");
       return false;
     }
     if (!platf::hyprland_windows::available()) {

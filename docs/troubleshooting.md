@@ -24,6 +24,13 @@ If you forgot your credentials to the web UI, try this.
 > Remember to replace `{new-username}` and `{new-password}` with your new credentials.
 > Do not include the curly braces.
 
+A script can keep the password out of the process list: with `-` in its place, Vibepollo reads
+it from the first line of its input.
+
+```bash
+vibepollo --creds {new-username} - < password-file
+```
+
 ### Unusual Mouse Behavior
 If you experience unusual mouse behavior, try attaching a physical mouse to the Sunshine host.
 

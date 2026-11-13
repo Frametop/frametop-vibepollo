@@ -98,6 +98,7 @@ else()
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         include("${CMAKE_CURRENT_LIST_DIR}/linux_desktop_tray.cmake")
+        include("${CMAKE_CURRENT_LIST_DIR}/linux_frametop_windows.cmake")
         # The incoming installer extracts this compatibility step before old
         # ALPM hooks run; it cannot depend on an already installed new helper.
         install(FILES "${CMAKE_SOURCE_DIR}/scripts/linux/migrations/upgrade-2.0-lifecycle.sh"

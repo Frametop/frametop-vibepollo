@@ -77,6 +77,10 @@ display role takes no display power guard here, so the display must already be
 on: if Hyprland's idle handling turns it off, capture fails. HDR outputs fail
 closed as above.
 
+Frametop's build can also show single app windows of this session as Frametop
+panels. Those come from a second Vibepollo inside the desktop session, not from
+the machine service: see [Frametop app windows](../frametop-app-windows.md).
+
 Frametop's build can also lend this computer's keyboards and mice to one
 Frametop client (Frametop's host input). It is off until this computer's owner
 turns it on:

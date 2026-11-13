@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<service>
+  <short>Vibepollo Frametop windows</short>
+  <description>The desktop session's Vibepollo that streams single app windows to Frametop (vibepollo-frametop-windows): Moonlight HTTP/HTTPS discovery, RTSP session setup, the Web UI, and the video, control, and audio stream ports.</description>
+  <port protocol="tcp" port="48984"/>
+  <port protocol="tcp" port="48989"/>
+  <port protocol="tcp" port="48990"/>
+  <port protocol="tcp" port="49010"/>
+  <port protocol="udp" port="48998-49000"/>
+  <port protocol="udp" port="49010"/>
+</service>

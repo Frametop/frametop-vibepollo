@@ -8332,6 +8332,7 @@ fi
 %{_bindir}/vibepollo
 %{_bindir}/vibepollo-mangohud
 %{_bindir}/vibepollo-tray
+%{_bindir}/vibepollo-frametop-windows
 %{_sysconfdir}/xdg/autostart/vibepollo-tray.desktop
 %{_prefix}/libexec/vibeshine/vibeshine-drm-install
 %{_prefix}/libexec/vibeshine/vibeshine-ds5-install
@@ -8370,6 +8371,9 @@ fi
 %{_userunitdir}/plasma-login-kwin_wayland.service.d/vibeshine-kwin-gpu.conf
 %{_userunitdir}/plasma-login-kwin_wayland.service.d/vibepollo-kwin-session-environment.conf
 
+# Frametop app windows: the Hyprland session's own Vibepollo, off until its user sets it up
+%{_userunitdir}/vibepollo-frametop-windows.service
+
 # Privileged virtual-display provisioning service
 %{_unitdir}/vibeshine-drm-setup.service
 %{_unitdir}/vibeshine-vkms-control.socket
@@ -8387,6 +8391,8 @@ fi
 # Native firewall profiles and PipeWire capture defaults
 %{_prefix}/lib/firewalld/services/vibepollo.xml
 %{_sysconfdir}/ufw/applications.d/vibepollo
+%{_prefix}/lib/firewalld/services/vibepollo-frametop-windows.xml
+%{_sysconfdir}/ufw/applications.d/vibepollo-frametop-windows
 %{_datadir}/pipewire/pipewire.conf.d/50-vibepollo-audio.conf
 
 # Modules-load configuration

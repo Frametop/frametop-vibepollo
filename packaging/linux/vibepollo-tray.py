@@ -31,6 +31,10 @@ SCOPES = {"/api/session/status": "GET", "/api/apps/close": "POST"}
 # Frametop's build takes updates from its own releases, never Nonary's.
 RELEASES_API = "https://api.github.com/repos/Frametop/frametop-vibepollo/releases"
 RELEASES_PAGE = "https://github.com/Frametop/frametop-vibepollo/releases"
+# Frametop app windows on Hyprland: the desktop session's own Vibepollo (a user unit), and the
+# launcher installed beside this script that sets it up and puts its windows back.
+WINDOWS_UNIT = "vibepollo-frametop-windows.service"
+WINDOWS_LAUNCHER = Path(__file__).resolve().parent / "vibepollo-frametop-windows"
 
 
 class CertificateChanged(Exception):
@@ -128,6 +132,22 @@ def run_service_action(action):
                             text=True, timeout=90)
     if result.returncode:
         raise ApiError(result.stderr.strip() or "Service operation failed")
+
+
+def windows_shared():
+    """Whether this session's Vibepollo for Frametop app windows runs, so windows can be out."""
+    try:
+        return subprocess.run(["/usr/bin/systemctl", "--user", "--quiet", "is-active", WINDOWS_UNIT],
+                              capture_output=True, timeout=2).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def bring_windows_back():
+    """Puts every window Frametop took back on the desktop, as the Windows tray's entry does."""
+    result = subprocess.run([str(WINDOWS_LAUNCHER), "back"], capture_output=True, text=True, timeout=60)
+    if result.returncode:
+        raise ApiError(result.stderr.strip() or "Couldn't bring the windows back")
 
 
 def select_releases(data):
@@ -397,6 +417,9 @@ def main(argv=None):
     menu.addAction("Pair a client", lambda: open_ui("/v2/pair"))
     menu.addSeparator()
     close_action = menu.addAction("No application running")
+    windows_action = menu.addAction("Bring windows back")
+    windows_action.setVisible(False)
+    menu.aboutToShow.connect(lambda: windows_action.setVisible(windows_shared()))
     updates_action = menu.addAction("Check for Update")
     start_action = menu.addAction("Start Vibepollo")
     restart_action = menu.addAction("Restart")
@@ -596,6 +619,7 @@ def main(argv=None):
     refresh_action.triggered.connect(poll)
     updates_action.triggered.connect(request_update_check)
     close_action.triggered.connect(close_application)
+    windows_action.triggered.connect(lambda: submit("windows", bring_windows_back))
     start_action.triggered.connect(lambda: service_action("start"))
     restart_action.triggered.connect(lambda: service_action("restart"))
     stop_action.triggered.connect(lambda: service_action("stop"))

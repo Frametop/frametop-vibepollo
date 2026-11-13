@@ -1,0 +1,201 @@
+#!/usr/bin/bash
+# vibepollo-frametop-windows: Frametop app windows on a Hyprland desktop.
+#
+# Frametop shows single app windows of this computer as panels in the headset. On Hyprland each
+# window gets a headless output of its own, which only a Vibepollo inside the desktop session
+# can make and capture; the machine service runs outside it. This runs that second Vibepollo
+# as the desktop user, with settings, a Web UI login and a certificate of its own, on ports of
+# its own (HTTP 48989, Web UI 48990), next to the machine service, which keeps streaming the
+# real monitors.
+#
+#   vibepollo-frametop-windows setup    make its settings and its Web UI login, and start it
+#                                       with the desktop session from now on
+#   vibepollo-frametop-windows login    change the Web UI login
+#   vibepollo-frametop-windows status   whether it runs, and what Frametop needs
+#   vibepollo-frametop-windows back     put every window back where it came from
+#   vibepollo-frametop-windows off      stop it, and don't start it with the session
+#   vibepollo-frametop-windows run      what its unit runs: Vibepollo itself
+#
+# Its files are in ~/.config/vibepollo-frametop-windows. It never asks for root.
+set -euo pipefail
+
+unit=vibepollo-frametop-windows.service
+dir=${XDG_CONFIG_HOME:-$HOME/.config}/vibepollo-frametop-windows
+conf=$dir/sunshine.conf
+credentials=$dir/credentials.json
+host=${VIBEPOLLO_FRAMETOP_WINDOWS_HOST:-$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/vibepollo}
+# The HTTP port Frametop looks for app windows on; the Web UI is on the one after it.
+port=48989
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'vibepollo-frametop-windows: %s\n' "$*" >&2; exit 1; }
+
+# The desktop session's Hyprland answers here; Vibepollo finds the same socket.
+hyprland_runs() {
+  local runtime=${XDG_RUNTIME_DIR:-}
+  [[ -n $runtime ]] || return 1
+  if [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
+    [[ -S $runtime/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket.sock ]]
+  else
+    compgen -G "$runtime/hypr/*/.socket.sock" >/dev/null
+  fi
+}
+
+has_login() { [[ -s $credentials ]] && grep -q '"username"' -- "$credentials"; }
+
+user_systemd() { [[ -n ${XDG_RUNTIME_DIR:-} && -S $XDG_RUNTIME_DIR/systemd/private ]] && command -v systemctl >/dev/null; }
+
+unit_is() { user_systemd && systemctl --user --quiet "$1" "$unit" 2>/dev/null; }
+
+# Settings for a Vibepollo that only shares windows: its own ports and files, wlr capture of
+# Hyprland's outputs, and no virtual display or display changes of its own. Written once; the
+# Web UI and the owner change it after.
+write_settings() {
+  ( umask 077; mkdir -p -- "$dir/credentials" )
+  chmod 700 -- "$dir" "$dir/credentials"
+  [[ -e $conf ]] && return 0
+  local name
+  name=$(uname -n)
+  ( umask 077
+    cat >"$conf" <<EOF
+# Frametop app windows (vibepollo-frametop-windows). Don't set output_name: each window
+# streams from an output of its own.
+sunshine_name = ${name%%.*} windows
+port = $port
+capture = wlr
+origin_web_ui_allowed = lan
+virtual_display_mode = disabled
+dd_configuration_option = disabled
+log_path = $dir/vibepollo.log
+file_state = $dir/state.json
+credentials_file = $credentials
+file_apps = $dir/apps.json
+pkey = $dir/credentials/cakey.pem
+cert = $dir/credentials/cacert.pem
+EOF
+  )
+}
+
+# The password goes to Vibepollo on its input, so it's in no process list.
+save_login() {
+  local user=$1 password=$2
+  [[ $user =~ ^[A-Za-z0-9._@-]{1,64}$ ]] || die "a user name is 1 to 64 letters, digits, dots, dashes, underscores or @"
+  [[ -n $password && $password != *$'\n'* ]] || die "the password can't be empty"
+  printf '%s\n' "$password" | "$host" "$conf" --creds "$user" - >/dev/null || die "Vibepollo couldn't save the login"
+  has_login || die "Vibepollo didn't save the login in $credentials"
+}
+
+set_login() {
+  local user password again
+  [[ -t 0 ]] || die "the login is typed in: run this in a terminal"
+  read -r -p "Web UI user name [$USER]: " user
+  user=${user:-$USER}
+  read -r -s -p "Password: " password; say
+  read -r -s -p "Password again: " again; say
+  [[ $password == "$again" ]] || die "the passwords differ"
+  save_login "$user" "$password"
+  say "The Web UI login is $user."
+}
+
+firewall_hint() {
+  if command -v ufw >/dev/null && [[ -e /etc/ufw/applications.d/vibepollo-frametop-windows ]]; then
+    say "If ufw is on: sudo ufw allow 'Vibepollo Frametop windows'"
+  elif command -v firewall-cmd >/dev/null; then
+    say "If firewalld is on: sudo firewall-cmd --permanent --add-service=vibepollo-frametop-windows && sudo firewall-cmd --reload"
+  fi
+}
+
+setup() {
+  [[ -x $host ]] || die "no Vibepollo at $host"
+  hyprland_runs || die "no Hyprland session answers here: run this in your Hyprland desktop (app windows need Hyprland)"
+  write_settings
+  if has_login && [[ -t 0 ]]; then
+    local again
+    read -r -p "There's a Web UI login already. Make a new one? [y/N] " again
+    if [[ $again == [yY]* ]]; then set_login; fi
+  elif ! has_login; then
+    set_login
+  fi
+  # The unit starts with systemd's graphical session, which Hyprland has when it's started
+  # through uwsm (Omarchy) or its settings start one. Else Hyprland starts it itself.
+  if user_systemd && systemctl --user --quiet is-active graphical-session.target; then
+    systemctl --user daemon-reload
+    systemctl --user enable "$unit"
+    systemctl --user restart "$unit"
+    say "Started, and it starts with your desktop session from now on."
+  else
+    say "This session has no systemd graphical session to start it with. Add this line to"
+    say "Hyprland's settings, then log in again:"
+    say "  exec-once = vibepollo-frametop-windows run"
+  fi
+  firewall_hint
+  say "In the headset: Frametop Settings, Remote displays, this computer, \"Show its apps and"
+  say "windows in the launcher\", and sign in with the login above."
+}
+
+run() {
+  [[ -e $conf ]] || die "no settings yet: run vibepollo-frametop-windows setup"
+  # Without a login, the first person to open the Web UI from the network makes one.
+  has_login || die "no Web UI login yet: run vibepollo-frametop-windows setup"
+  if ! hyprland_runs; then
+    say "vibepollo-frametop-windows: this isn't a Hyprland session, so there are no app windows to share"
+    exit 0
+  fi
+  unset VIBEPOLLO_MACHINE_HOST
+  export VIBEPOLLO_SESSION_BACKEND=hyprland-wlr
+  exec "$host" "$conf"
+}
+
+# The port in its settings: the owner may have changed it there.
+settings_port() {
+  local set
+  set=$(sed -n 's/^port[[:space:]]*=[[:space:]]*\([0-9]\{1,5\}\)[[:space:]]*$/\1/p' -- "$conf" 2>/dev/null | tail -n 1)
+  say "${set:-$port}"
+}
+
+status() {
+  local state=stopped http
+  http=$(settings_port)
+  if unit_is is-active; then
+    state=running
+  elif pgrep -u "$UID" -f -- "$conf" >/dev/null 2>&1; then
+    state="running (not from its unit)"
+  fi
+  say "Frametop app windows: $state"
+  say "  starts with the session: $(unit_is is-enabled && say yes || say no)"
+  say "  Web UI login: $(has_login && say made || say "none (vibepollo-frametop-windows setup)")"
+  say "  Hyprland: $(hyprland_runs && say answers || say "no session here")"
+  say "  ports: HTTP $http, Web UI https://localhost:$((http + 1))"
+  say "  settings and log: $dir"
+}
+
+# Vibepollo puts every window back when it stops, and when it starts after a crash.
+back() {
+  unit_is is-active || die "it isn't running from its unit, so no window is out (vibepollo-frametop-windows status)"
+  systemctl --user restart "$unit"
+  say "Every window is back where it came from."
+}
+
+off() {
+  user_systemd || die "no systemd user session here: take its exec-once line out of Hyprland's settings"
+  systemctl --user disable --now "$unit"
+  say "Stopped. Its settings and login stay in $dir."
+}
+
+main() {
+  case ${1:-} in
+    setup) setup ;;
+    login) [[ -e $conf ]] || die "no settings yet: run vibepollo-frametop-windows setup"
+           set_login
+           if unit_is is-active; then systemctl --user restart "$unit"; fi ;;
+    status) status ;;
+    back) back ;;
+    off) off ;;
+    run) run ;;
+    *) sed -n '2,19p' -- "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+       [[ ${1:-} == -h || ${1:-} == --help || ${1:-} == help ]] || exit 2 ;;
+  esac
+}
+
+# Sourced by its test, which calls the parts.
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi

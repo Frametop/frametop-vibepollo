@@ -1,0 +1,17 @@
+[Unit]
+Description=Vibepollo for Frametop app windows (this desktop session's Hyprland)
+Documentation=https://github.com/Frametop/frametop-vibepollo/blob/frametop/2.0.0/docs/frametop-app-windows.md
+PartOf=graphical-session.target
+After=graphical-session.target
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/vibepollo-frametop-windows run
+Restart=on-failure
+RestartSec=5s
+RestartSteps=7
+RestartMaxDelaySec=5min
+TimeoutStopSec=20s
+
+[Install]
+WantedBy=graphical-session.target

@@ -4,9 +4,34 @@
  */
 #pragma once
 
+#include <istream>
+#include <optional>
+#include <string>
 #include <string_view>
 
 namespace args {
+  /**
+   * @brief The password a `--creds` call gives.
+   *
+   * The operand itself, or for "-" the first line of `input`: a script passes
+   * the password that way so it is in no process list. Nothing when that line
+   * is missing or empty.
+   */
+  inline std::optional<std::string> password_operand(std::string_view operand, std::istream &input) {
+    if (operand != "-") {
+      return std::string {operand};
+    }
+    std::string line;
+    std::getline(input, line);
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    if (line.empty()) {
+      return std::nullopt;
+    }
+    return line;
+  }
+
   /**
    * @brief Dispatch the production credential CLI path through its callbacks.
    *
