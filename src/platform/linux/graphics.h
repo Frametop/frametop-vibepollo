@@ -311,12 +311,19 @@ namespace egl {
     // Frame is vertically flipped (GL convention)
     bool y_invert {false};
 
+    // Frame holds PQ (HDR10) BT.2020 code values; sws_t::load_frame tone maps
+    // it to SDR, mapping sdr_white_nits to SDR white.
+    bool pq_source {false};
+    float sdr_white_nits {203.0f};
+
     // PipeWire metadata
     std::optional<uint64_t> pts;
     std::optional<uint64_t> seq;
     std::optional<bool> pw_damage;
     std::optional<uint32_t> pw_flags;
   };
+
+  class pq_tonemap_t;
 
   class sws_t {
   public:
@@ -331,6 +338,13 @@ namespace egl {
 
     void load_ram(platf::img_t &img);
     void load_vram(img_descriptor_t &img, int offset_x, int offset_y, int texture);
+
+    /**
+     * load_vram() for a captured frame: tone maps PQ frames to SDR first, so
+     * the cursor blends in SDR. With @p crtc_lut the frame's CRTC GAMMA_LUT
+     * is applied (inside the tone map for PQ frames). Returns 0 on success.
+     */
+    int load_frame(img_descriptor_t &img, int offset_x, int offset_y, int texture, bool crtc_lut);
 
     void apply_colorspace(const video::sunshine_colorspace_t &colorspace);
     void apply_output_lut(const std::shared_ptr<const img_descriptor_t::gamma_lut_t> &lut, std::uint64_t serial);
@@ -361,6 +375,9 @@ namespace egl {
     // Store latest cursor for load_vram
     std::uint64_t serial;
     std::uint64_t output_lut_serial;
+
+    // Made on the first PQ frame, remade when the source size changes.
+    std::shared_ptr<pq_tonemap_t> tonemap;
   };
 
   bool fail();

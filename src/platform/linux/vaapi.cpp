@@ -438,7 +438,9 @@ namespace va {
         rgb = std::move(*rgb_opt);
       }
 
-      sws.load_vram(descriptor, offset_x, offset_y, rgb->tex[0]);
+      if (sws.load_frame(descriptor, offset_x, offset_y, rgb->tex[0], false)) {
+        return -1;
+      }
 
       sws.convert(nv12->buf);
       return 0;

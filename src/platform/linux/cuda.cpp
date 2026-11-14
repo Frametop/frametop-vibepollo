@@ -522,8 +522,9 @@ namespace cuda {
       }
 
       // Perform the color conversion and scaling in GL
-      sws.load_vram(descriptor, offset_x, offset_y, rgb->tex[0]);
-      sws.apply_output_lut(descriptor.crtc_gamma_lut, descriptor.crtc_gamma_lut_serial);
+      if (sws.load_frame(descriptor, offset_x, offset_y, rgb->tex[0], true)) {
+        return -1;
+      }
 #ifdef SUNSHINE_ENABLE_NV_TRUEHDR
       if (truehdr) {
         try {
@@ -839,8 +840,9 @@ namespace cuda {
         rgb = std::move(*imported);
       }
 
-      sws.load_vram(descriptor, offset_x, offset_y, rgb->tex[0]);
-      sws.apply_output_lut(descriptor.crtc_gamma_lut, descriptor.crtc_gamma_lut_serial);
+      if (sws.load_frame(descriptor, offset_x, offset_y, rgb->tex[0], true)) {
+        return -1;
+      }
 #ifdef SUNSHINE_ENABLE_NV_TRUEHDR
       if (truehdr) {
         try {

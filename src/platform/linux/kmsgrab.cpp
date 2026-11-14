@@ -1131,34 +1131,55 @@ namespace platf {
         return presentation_mode.event_capture_enabled();
       }
 
-      // Unlike is_hdr(), this predicate never treats unknown or unsupported
-      // metadata as SDR. The opt-in Hyprland subset requires the selected
-      // connector's current DRM state to explicitly establish SDR. No output
-      // mutation or SDR conversion is implied by an SDR client request.
-      bool sdr_capture_allowed(bool initialize_metadata = false) {
-        if (!linux_display::hyprland_kms_session()) return true;
-        if (!connector_id) return false;
+      // Unlike is_hdr(), this never treats unknown or unsupported metadata as
+      // SDR. The opt-in Hyprland subset reads the selected connector's current
+      // DRM state, which must be SDR or PQ (HDR10). Nothing here changes the
+      // output; PQ frames are tone mapped to SDR before encoding.
+      std::optional<hdr::hyprland_source_e> hyprland_connector_source() {
+        if (!connector_id) return std::nullopt;
         const auto connector = card.connector(*connector_id);
-        if (!connector || connector->connection != DRM_MODE_CONNECTED || !connector->encoder_id) return false;
+        if (!connector || connector->connection != DRM_MODE_CONNECTED || !connector->encoder_id) return std::nullopt;
         const auto encoder = card.encoder(connector->encoder_id);
-        if (!encoder || encoder->crtc_id != crtc_id) return false;
+        if (!encoder || encoder->crtc_id != crtc_id) return std::nullopt;
         const auto properties = card.connector_props(*connector_id);
-        if (std::ranges::any_of(properties, [](const auto &property) { return !property.first; })) return false;
+        if (std::ranges::any_of(properties, [](const auto &property) { return !property.first; })) return std::nullopt;
         const auto blob_id = card.prop_value_by_name(properties, "HDR_OUTPUT_METADATA"sv);
-        if (!blob_id) return false;
-        std::optional<hdr::state_t> state;
-        if (*blob_id == 0) {
-          state = hdr::state_t {};
-        } else {
-          prop_blob_t blob = drmModeGetPropertyBlob(card.fd.el, *blob_id);
-          if (!blob || !blob->data || blob->length < sizeof(hdr_output_metadata)) return false;
-          state = hdr::parse_blob(blob->data, blob->length);
-          if (!state || state->eotf != 0) return false;
+        if (!blob_id) return std::nullopt;
+        return hyprland_blob_source(*blob_id);
+      }
+
+      // Classify one HDR_OUTPUT_METADATA property value (0 means no metadata).
+      std::optional<hdr::hyprland_source_e> hyprland_blob_source(std::uint64_t blob_id) {
+        if (blob_id == 0) return hdr::hyprland_source(hdr::state_t {});
+        prop_blob_t blob = drmModeGetPropertyBlob(card.fd.el, blob_id);
+        if (!blob || !blob->data || blob->length < sizeof(hdr_output_metadata)) return std::nullopt;
+        return hdr::hyprland_source(hdr::parse_blob(blob->data, blob->length));
+      }
+
+      // Record what the connector scans out and seed the encoder state as
+      // SDR: PQ frames are tone mapped before encoding, so the encoder never
+      // signals HDR here. The factory owns this new display exclusively, so
+      // nothing has read the metadata yet.
+      bool initialize_capture_source(bool tone_maps_pq) {
+        if (!linux_display::hyprland_kms_session()) return true;
+        const auto current = hyprland_connector_source();
+        if (!current) return false;
+        if (*current == hdr::hyprland_source_e::pq && !tone_maps_pq) {
+          BOOST_LOG(error) << "Hyprland KMS capture of an HDR (PQ) output needs the CUDA or VAAPI encode path"sv;
+          return false;
         }
-        // The factory owns this new display exclusively. Seed the exact
-        // validated SDR observation before publishing it to encoder getters;
-        // the init-time blob ID may now name older readable PQ metadata.
-        return !initialize_metadata || hdr_metadata_generation.initialize_sdr(*state);
+        connector_source = *current;
+        if (connector_source == hdr::hyprland_source_e::pq) {
+          BOOST_LOG(info) << "Hyprland output is HDR (PQ); tone mapping it to SDR before encoding"sv;
+        }
+        return hdr_metadata_generation.initialize_sdr(hdr::state_t {});
+      }
+
+      // Recheck before each frame: the connector still scans out the kind of
+      // image this capture started with. Rejects changes that reuse a blob ID.
+      bool capture_source_unchanged() {
+        if (!linux_display::hyprland_kms_session()) return true;
+        return hyprland_connector_source() == connector_source;
       }
 
       bool is_hdr() {
@@ -1381,15 +1402,15 @@ namespace platf {
         }
         // Recheck current connector state before delivering any frame. This
         // also rejects metadata changes that reuse the original blob ID.
-        if (!sdr_capture_allowed()) {
-          BOOST_LOG(error) << "Hyprland KMS capture requires verified SDR connector state"sv;
+        if (!capture_source_unchanged()) {
+          BOOST_LOG(warning) << "Reinitializing capture: the Hyprland connector's HDR state changed or became unreadable"sv;
           return capture_e::reinit;
         }
         // Check for a change in HDR metadata
         if (connector_id) {
           auto connector_props = card.connector_props(*connector_id);
           const auto current_hdr_metadata_blob_id = card.prop_value_by_name(connector_props, "HDR_OUTPUT_METADATA"sv);
-          // This is a second fallible read after sdr_capture_allowed(). A
+          // This is a second fallible read after capture_source_unchanged(). A
           // failed list read, missing standard HDR property, or missing
           // property object cannot certify the current SDR state, even if
           // the preceding read was complete. A present zero value is SDR.
@@ -1399,8 +1420,14 @@ namespace platf {
             BOOST_LOG(error) << "Hyprland KMS connector properties became unreadable"sv;
             return capture_e::reinit;
           }
-          if (hdr_metadata_generation.refresh(card.fd.el, hdr_metadata_blob_id,
-                current_hdr_metadata_blob_id, linux_display::hyprland_kms_session()) == capture_e::reinit) {
+          // On Hyprland the encoder always signals SDR, so only this second
+          // observation's kind of image (SDR or PQ) must still match.
+          if (linux_display::hyprland_kms_session()) {
+            if (hyprland_blob_source(*current_hdr_metadata_blob_id) != connector_source) {
+              BOOST_LOG(warning) << "Reinitializing capture: the Hyprland connector's HDR state changed"sv;
+              return capture_e::reinit;
+            }
+          } else if (hdr_metadata_generation.refresh(card.fd.el, hdr_metadata_blob_id, current_hdr_metadata_blob_id) == capture_e::reinit) {
             BOOST_LOG(info) << "Reinitializing capture after HDR metadata change"sv;
             return capture_e::reinit;
           }
@@ -2163,6 +2190,8 @@ namespace platf {
       std::optional<uint32_t> connector_id;
       std::optional<uint64_t> hdr_metadata_blob_id;
       hdr::generation_t hdr_metadata_generation;
+      // What the Hyprland connector scanned out when this capture started.
+      hdr::hyprland_source_e connector_source {hdr::hyprland_source_e::sdr};
       bool direct_import_required {false};
       pacing::presentation_mode_t presentation_mode;
       pacing::presentation_rate_limiter_t presentation_rate_limiter;
@@ -2450,6 +2479,8 @@ namespace platf {
         // refreshes leave the image empty and only the local surface cleans up.
         img->sd = surface.release();
         update_crtc_gamma_lut(*img);
+        img->pq_source = connector_source == hdr::hyprland_source_e::pq;
+        img->sdr_white_nits = static_cast<float>(config::video.hdr_sdr_white_nits);
         img->host_processing_timestamp = host_processing_timestamp;
         img->sequence = ++sequence;
 
@@ -2515,10 +2546,12 @@ namespace platf {
 
     if (hwdevice_type == mem_type_e::vaapi || hwdevice_type == mem_type_e::cuda || hwdevice_type == mem_type_e::vulkan) {
       auto disp = std::make_shared<kms::display_vram_t>(hwdevice_type);
+      // These encode paths load frames with sws_t::load_frame, which tone maps PQ.
+      const bool tone_maps_pq = hwdevice_type == mem_type_e::cuda || hwdevice_type == mem_type_e::vaapi;
 
       if (!disp->init(display_name, config)) {
-        if (!disp->sdr_capture_allowed(true)) {
-          BOOST_LOG(error) << "Hyprland KMS capture requires verified SDR connector state"sv;
+        if (!disp->initialize_capture_source(tone_maps_pq)) {
+          BOOST_LOG(error) << "Hyprland KMS capture needs a readable SDR or HDR (PQ) connector state"sv;
           return nullptr;
         }
         return disp;
@@ -2529,7 +2562,8 @@ namespace platf {
 
     auto disp = std::make_shared<kms::display_ram_t>(hwdevice_type);
 
-    if (disp->init(display_name, config) || !disp->sdr_capture_allowed(true)) {
+    // The RAM path never tone maps, so it refuses PQ outputs.
+    if (disp->init(display_name, config) || !disp->initialize_capture_source(false)) {
       return nullptr;
     }
 

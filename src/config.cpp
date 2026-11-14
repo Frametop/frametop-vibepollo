@@ -978,6 +978,7 @@ namespace config {
 
     0,  // max_bitrate
     20,  // minimum_fps_target (0 = framerate)
+    203,  // hdr_sdr_white_nits (ITU-R BT.2408 reference white)
     true,  // wgc_pacing_smoothing
     "1920x1080x60",  // fallback_mode
     false,  // ignore_encoder_probe_failure
@@ -2057,6 +2058,7 @@ namespace config {
 
     int_f(vars, "max_bitrate", video.max_bitrate);
     double_between_f(vars, "minimum_fps_target", video.minimum_fps_target, {0.0, 1000.0});
+    double_between_f(vars, "hdr_sdr_white_nits", video.hdr_sdr_white_nits, {80.0, 1000.0});
 
     string_f(vars, "fallback_mode", video.fallback_mode);
     bool_f(vars, "ignore_encoder_probe_failure", video.ignore_encoder_probe_failure);

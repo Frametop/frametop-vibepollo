@@ -286,7 +286,8 @@ namespace platf {
     if (probe::generations == 2 && probe::scenario == "new-identity") { probe::connector_id=92; probe::luminance=1500; }
     if (probe::generations == 2 && probe::scenario == "recycled-identity") { probe::connector_id=91; probe::luminance=1600; }
     auto result=std::make_shared<kms::display_probe_t>();
-    if(!result->sdr_capture_allowed(true)) return {};
+    // No tone map here: a PQ output is refused, as on the Vulkan path.
+    if(!result->initialize_capture_source(false)) return {};
     return result;
   }
 }
@@ -483,7 +484,7 @@ def main():
         '@@COLOR_TYPES@@': function(types, '  enum class colorspace_e {') + ';\n' + function(types, '  struct sunshine_colorspace_t {') + ';',
         '@@COLOR_FUNCTIONS@@': function(color, '  bool colorspace_is_hdr(') + '\n' + function(color, '  sunshine_colorspace_t colorspace_from_client_config('),
         '@@KMS_MEMBERS@@': members,
-        '@@KMS_STRICT@@': function(kms, '      bool sdr_capture_allowed('),
+        '@@KMS_STRICT@@': '\n'.join(function(kms, m) for m in ('      std::optional<hdr::hyprland_source_e> hyprland_connector_source(', '      std::optional<hdr::hyprland_source_e> hyprland_blob_source(', '      bool initialize_capture_source(', '      bool capture_source_unchanged(')),
         '@@KMS_INITIALIZE@@': init,
         '@@KMS_GETTERS@@': function(kms, '      bool is_hdr() {') + '\n' + function(kms, '      bool get_hdr_metadata(SS_HDR_METADATA &metadata) {'),
         '@@KMS_REFRESH@@': refresh,

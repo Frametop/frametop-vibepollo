@@ -1,4 +1,4 @@
-"""Compile production KMS factory and SDR authority check with inert DRM edges."""
+"""Compile production KMS factory and SDR/PQ authority check with inert DRM edges."""
 from pathlib import Path
 import subprocess
 import sys
@@ -86,6 +86,7 @@ namespace platf::kms {
 struct display_vram_t : display_t {
   card_t card;
   hdr::generation_t hdr_metadata_generation;
+  hdr::hyprland_source_e connector_source{hdr::hyprland_source_e::sdr};
   std::optional<unsigned> connector_id;
   unsigned crtc_id=7;
   explicit display_vram_t(mem_type_e) {}
@@ -94,7 +95,7 @@ struct display_vram_t : display_t {
     return fake::direct_fails ? -1 : 0;
   }
 '''
-program += function('      bool sdr_capture_allowed(')
+program += '\n'.join(function(m) for m in ('      std::optional<hdr::hyprland_source_e> hyprland_connector_source(', '      std::optional<hdr::hyprland_source_e> hyprland_blob_source(', '      bool initialize_capture_source(', '      bool capture_source_unchanged('))
 program += r'''
 };
 struct display_ram_t : display_vram_t {
@@ -120,12 +121,14 @@ int main() {
   setenv("VIBEPOLLO_SESSION_BACKEND","hyprland-kms",1);
   fake::metadata.hdmi_metadata_type1.eotf=2;
   const video::config_t config;
-  // HDR is enumerated first, but an explicitly selected SDR connector works.
+  // HDR is enumerated first, and an explicitly selected SDR connector works.
+  // The HDR (PQ) one is admitted only where frames are tone mapped to SDR.
   for (auto type : {mem_type_e::system,mem_type_e::vaapi,mem_type_e::cuda,mem_type_e::vulkan}) {
     for (bool fallback : {false,true}) {
       fake::direct_fails=fallback;
       assert(kms_display(type,"DP-1",config));
-      assert(!kms_display(type,"DP-2",config));
+      const bool tone_maps=!fallback && (type==mem_type_e::cuda || type==mem_type_e::vaapi);
+      assert(bool(kms_display(type,"DP-2",config))==tone_maps);
     }
   }
   fake::direct_fails=false;
@@ -134,15 +137,15 @@ int main() {
   // Only standard SDR metadata, or an explicit zero property, establishes SDR.
   for (unsigned eotf : {0u,1u,2u,3u,255u}) {
     fake::metadata.hdmi_metadata_type1.eotf=eotf;
-    assert(selected.sdr_capture_allowed()==(eotf==0));
+    assert(selected.capture_source_unchanged()==(eotf==0));
   }
   fake::metadata.hdmi_metadata_type1.eotf=0;
   assert(kms_display(mem_type_e::system,"DP-2",config));
   // Reuse the same blob ID: current content, not cached IDs/is_hdr(), governs.
   fake::metadata.hdmi_metadata_type1.eotf=2;
-  assert(!selected.sdr_capture_allowed());
+  assert(!selected.capture_source_unchanged());
   fake::metadata.hdmi_metadata_type1.eotf=0;
-  assert(selected.sdr_capture_allowed());
+  assert(selected.capture_source_unchanged());
   for (int bad=0;bad<11;++bad) {
     fake::unreadable=bad==0;
     fake::null_data=bad==1;
@@ -160,7 +163,7 @@ int main() {
   // The root opt-in is required: KWin preserves its existing capture policy.
   setenv("VIBEPOLLO_SESSION_BACKEND","kwin",1);
   assert(kms_display(mem_type_e::system,"DP-2",config));
-  std::cout << "PASS: production KMS factory rejects selected HDR/unknown SDR state, direct/RAM fallback, every HDR EOTF and same-ID metadata changes; KWin unchanged\n";
+  std::cout << "PASS: production KMS factory admits PQ only where tone mapped, rejects unknown state, direct/RAM fallback, every HDR EOTF and same-ID metadata changes; KWin unchanged\n";
 }
 '''
 with tempfile.TemporaryDirectory(prefix='hyprland-sdr-') as work:

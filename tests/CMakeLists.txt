@@ -910,6 +910,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         sunshine_register_component(NAME test_component_linux_kmsgrab_hdr
             TEST_SOURCE unit/platform/linux/test_kmsgrab_hdr.cpp
             LINK_LIBRARIES PkgConfig::TEST_PYROWAVE_IMPORT_DRM Threads::Threads)
+        sunshine_register_component(NAME test_component_linux_pq_tonemap_math
+            TEST_SOURCE unit/platform/linux/test_pq_tonemap_math.cpp)
     endif()
     find_path(TEST_PYROWAVE_IMPORT_VULKAN_HEADERS vulkan/vulkan_core.h
         HINTS "${SUNSHINE_TEST_REPOSITORY_ROOT}/third-party/build-deps/third-party/FFmpeg/Vulkan-Headers/include"

@@ -2366,6 +2366,35 @@ These settings are host-wide and are not application runtime overrides.
     </tr>
 </table>
 
+### hdr_sdr_white_nits
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Linux KMS capture only. When a captured output runs in HDR (PQ), the stream is tone mapped to SDR
+            before encoding, and this brightness in nits becomes SDR white. Brighter highlights are scaled down to white, keeping their hue.
+            Set it to the compositor's SDR brightness for that output, for example Hyprland's `sdr_max_luminance`.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            203
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Range</td>
+        <td colspan="2">80-1000</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            hdr_sdr_white_nits = 290
+            @endcode</td>
+    </tr>
+</table>
+
 ## Network
 
 ### upnp

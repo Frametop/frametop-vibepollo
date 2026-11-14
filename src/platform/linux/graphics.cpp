@@ -10,6 +10,7 @@
 
 // local includes
 #include "graphics.h"
+#include "pq_tonemap.h"
 #include "src/file_handler.h"
 #include "src/logging.h"
 #include "src/video.h"
@@ -1326,6 +1327,36 @@ namespace egl {
       gl::ctx.BindTexture(GL_TEXTURE_2D, 0);
       gl::ctx.BindFramebuffer(GL_FRAMEBUFFER, 0);
     }
+  }
+
+  int sws_t::load_frame(img_descriptor_t &img, int offset_x, int offset_y, int texture, bool crtc_lut) {
+    if (!img.pq_source) {
+      load_vram(img, offset_x, offset_y, texture);
+      if (crtc_lut) {
+        apply_output_lut(img.crtc_gamma_lut, img.crtc_gamma_lut_serial);
+      }
+      return 0;
+    }
+
+    // The tone map reads the whole surface; load_vram() crops it afterwards.
+    if (!tonemap || !tonemap->matches(img.sd.width, img.sd.height)) {
+      tonemap = pq_tonemap_t::make(img.sd.width, img.sd.height);
+      if (!tonemap) {
+        return -1;
+      }
+    }
+    // The CRTC LUT acts on the PQ code values, so it runs inside the tone map.
+    // The SDR result needs no LUT in the RGB to YUV pass.
+    if (crtc_lut) {
+      apply_output_lut(img.crtc_gamma_lut, img.crtc_gamma_lut_serial);
+    }
+    const auto sdr = tonemap->convert(texture, output_lut[0], img.sdr_white_nits);
+    apply_output_lut({}, 0);
+    if (!sdr) {
+      return -1;
+    }
+    load_vram(img, offset_x, offset_y, static_cast<int>(*sdr));
+    return 0;
   }
 
   int sws_t::convert(gl::frame_buf_t &fb) {

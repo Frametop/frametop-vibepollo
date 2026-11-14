@@ -127,7 +127,7 @@ namespace platf {
   };
   struct display_vram_t:display_t {
    card_t card;std::optional<unsigned>connector_id=1;unsigned crtc_id=7;
-   std::optional<uint64_t>hdr_metadata_blob_id;hdr::generation_t hdr_metadata_generation;
+   std::optional<uint64_t>hdr_metadata_blob_id;hdr::generation_t hdr_metadata_generation;hdr::hyprland_source_e connector_source{hdr::hyprland_source_e::sdr};
    explicit display_vram_t(mem_type_e){}
    int init(const std::string &name,const video::config_t&){
     assert(name=="DP-1");if(probe::direct_fails)return -1;
@@ -163,7 +163,8 @@ namespace video {
 }
 '''
 POSTLUDE=r'''
-void startup(probe::observation_t initial,probe::observation_t current,bool admitted,bool backend_hyprland,bool expected_hdr) {
+// pq: the current state is HDR (PQ), admitted only where frames are tone mapped.
+void startup(probe::observation_t initial,probe::observation_t current,bool admitted,bool backend_hyprland,bool expected_hdr,bool pq=false) {
  using namespace platf;
  for(auto type:{mem_type_e::system,mem_type_e::vaapi,mem_type_e::cuda,mem_type_e::vulkan})
  for(bool fallback:{false,true})for(int range:{1,0}){
@@ -172,7 +173,8 @@ void startup(probe::observation_t initial,probe::observation_t current,bool admi
   setenv("@@BRAND@@_SESSION_BACKEND",backend_hyprland?"hyprland-kms":"kwin",1);
   video::config_t config;config.dynamicRange=range;
   auto base=kms_display(type,"DP-1",config);
-  assert(bool(base)==admitted);assert(probe::captures==0);
+  const bool tone_maps=!fallback&&(type==mem_type_e::cuda||type==mem_type_e::vaapi);
+  assert(bool(base)==(pq?tone_maps:admitted));assert(probe::captures==0);
   if(!base){assert(probe::device_calls==0);++probe::cases;continue;}
   auto capture=std::dynamic_pointer_cast<kms::display_vram_t>(base);assert(capture);
   assert(capture->hdr_metadata_blob_id==initial.hdr);
@@ -198,7 +200,7 @@ void startup(probe::observation_t initial,probe::observation_t current,bool admi
   assert(video::colorspace_is_hdr(device->colorspace)==(expected_hdr&&range>0));
   assert(device->hdr_metadata_valid==(expected_hdr&&range>0));
   assert(probe::blob_reads==reads); // Repeated getters use one immutable seed.
-  if(backend_hyprland){assert(!expected_hdr);assert(probe::blob_reads[10]==0);}
+  if(backend_hyprland){assert(!expected_hdr);assert(probe::blob_reads[10]==(pq?1u:0u));}
   ++probe::cases;
  }
 }
@@ -207,8 +209,10 @@ int main(){
  for(auto cached:{observation_t{10},observation_t{12},observation_t{std::nullopt},observation_t{0},observation_t{11}})
  for(auto current:{observation_t{0},observation_t{11}})startup(cached,current,true,true,false);
  for(auto cached:{observation_t{10},observation_t{12},observation_t{std::nullopt}})
- for(auto current:{observation_t{12},observation_t{13},observation_t{14},observation_t{15},observation_t{16},observation_t{17},observation_t{18},observation_t{10},observation_t{std::nullopt},observation_t{0,true},observation_t{0,false,true}})
+ for(auto current:{observation_t{12},observation_t{13},observation_t{14},observation_t{15},observation_t{16},observation_t{17},observation_t{18},observation_t{std::nullopt},observation_t{0,true},observation_t{0,false,true}})
  startup(cached,current,false,true,false);
+ // A PQ output is tone mapped to SDR on the CUDA/VAAPI paths; the encoder still sees SDR.
+ for(auto cached:{observation_t{10},observation_t{12},observation_t{std::nullopt}})startup(cached,observation_t{10},false,true,false,true);
  startup(observation_t{10},observation_t{0},true,false,true);
  startup(observation_t{std::nullopt},observation_t{0},true,false,false);
  startup(observation_t{11},observation_t{0},true,false,false);
@@ -242,7 +246,7 @@ def main():
         '@@COLOR_FUNCTIONS@@':function(colors,'  bool colorspace_is_hdr(')+'\n'+function(colors,'  sunshine_colorspace_t colorspace_from_client_config('),
         '@@PROPERTY_METHODS@@':properties,
         '@@INIT_LOOKUP@@':kms[start:end],
-        '@@STRICT@@':function(kms,'      bool sdr_capture_allowed('),
+        '@@STRICT@@':'\n'.join(function(kms,m) for m in ('      std::optional<hdr::hyprland_source_e> hyprland_connector_source(', '      std::optional<hdr::hyprland_source_e> hyprland_blob_source(', '      bool initialize_capture_source(', '      bool capture_source_unchanged(')),
         '@@GETTERS@@':function(kms,'      bool is_hdr() {')+'\n'+function(kms,'      bool get_hdr_metadata(SS_HDR_METADATA &metadata) {'),
         '@@FACTORY@@':function(kms,'  std::shared_ptr<display_t> kms_display('),
         '@@MAKE_ENCODE_DEVICE@@':function(video,'  std::unique_ptr<platf::encode_device_t> make_encode_device(',last=True),

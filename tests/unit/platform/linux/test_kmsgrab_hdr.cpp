@@ -392,3 +392,18 @@ TEST_F(KmsHdr, InitialStrictSdrSeedCannotReplaceAnExposedGeneration) {
   EXPECT_FALSE(exposed.initialize_sdr(hdr::state_t {}));
   EXPECT_EQ(exposed.selected(7, 10), original);
 }
+
+TEST(KmsHyprlandSource, ClassifiesOnlySdrAndPq) {
+  EXPECT_EQ(hdr::hyprland_source(std::nullopt), std::nullopt);
+  EXPECT_EQ(hdr::hyprland_source(hdr::state_t {}), hdr::hyprland_source_e::sdr);
+  for (const unsigned eotf : {0u, 1u, 2u, 3u, 255u}) {
+    auto raw = pq_metadata();
+    raw.hdmi_metadata_type1.eotf = eotf;
+    const auto state = hdr::parse_blob(&raw, sizeof(raw));
+    ASSERT_TRUE(state);
+    const auto expected = eotf == 0 ? std::optional {hdr::hyprland_source_e::sdr} :
+                          eotf == 2 ? std::optional {hdr::hyprland_source_e::pq} :
+                                      std::nullopt;
+    EXPECT_EQ(hdr::hyprland_source(state), expected) << "eotf " << eotf;
+  }
+}

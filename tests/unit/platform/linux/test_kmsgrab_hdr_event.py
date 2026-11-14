@@ -58,6 +58,7 @@ namespace platf {
  };
  struct event_probe_t {
   hdr::generation_t hdr_metadata_generation;
+  hdr::hyprland_source_e connector_source{hdr::hyprland_source_e::sdr};
   struct card_t {
    struct { int el=7; } fd;
    struct connector_t { int connection=DRM_MODE_CONNECTED;unsigned encoder_id=4; };
@@ -178,7 +179,7 @@ def main():
     ]]
     refresh=worker.function(kms,'      inline capture_e refresh(')
     refresh=refresh[refresh.index('        // Recheck current connector state'):refresh.index('        if (pending_exported_frame)')]
-    prelude=PRELUDE.replace('@@STRICT@@',worker.function(kms,'      bool sdr_capture_allowed(')).replace('@@REFRESH@@',refresh)
+    prelude=PRELUDE.replace('@@STRICT@@','\n'.join(worker.function(kms,m) for m in ('      std::optional<hdr::hyprland_source_e> hyprland_connector_source(', '      std::optional<hdr::hyprland_source_e> hyprland_blob_source(', '      bool initialize_capture_source(', '      bool capture_source_unchanged('))).replace('@@REFRESH@@',refresh)
     with tempfile.TemporaryDirectory(prefix='kms-hdr-event-') as temporary:
         output = args.output_dir.resolve() if args.output_dir else Path(temporary)
         output.mkdir(parents=True, exist_ok=True)

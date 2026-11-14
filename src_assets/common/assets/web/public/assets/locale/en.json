@@ -851,6 +851,8 @@
     "max_bitrate_desc": "The maximum bitrate (in Kbps) that Vibepollo will encode the stream at. If set to 0, it will always use the bitrate requested by Moonlight.",
     "minimum_fps_target": "Minimum FPS Target",
     "minimum_fps_target_desc": "The lowest effective FPS a stream can reach. A value of 0 is treated as roughly half of the stream's FPS. A setting of 20 is recommended if you stream 24 or 30fps content.",
+    "hdr_sdr_white_nits": "SDR White on HDR Outputs (nits)",
+    "hdr_sdr_white_nits_desc": "Linux KMS capture only. When a captured output runs in HDR (PQ), the stream is tone mapped to SDR, and this brightness becomes SDR white. Set it to the compositor's SDR brightness for that output, for example Hyprland's sdr_max_luminance.",
     "rtx_hdr_title": "RTX HDR (AI SDR → HDR)",
     "rtx_hdr_intro": "Default tuning values for app-enabled RTX HDR conversion. During an RTX HDR stream, desktop and non-matching frames use SDR Brightness with neutral contrast and saturation.",
     "rtx_hdr": "RTX HDR",

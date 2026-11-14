@@ -151,6 +151,7 @@ struct display_vram_t : display_t {
   unsigned crtc_id=7;
   std::optional<std::uint64_t> hdr_metadata_blob_id;
   hdr::generation_t hdr_metadata_generation;
+  hdr::hyprland_source_e connector_source{hdr::hyprland_source_e::sdr};
   std::uint64_t hyprland_layout_at_start = 0;
   explicit display_vram_t(mem_type_e) {}
   int init(const std::string& name, const video::config_t&) {
@@ -158,7 +159,7 @@ struct display_vram_t : display_t {
     if (fake::direct_fails) return -1;
 '''
 program += init_lookup + "\n    return 0;\n  }\n"
-program += function("      bool sdr_capture_allowed(") + "\n" + function("      bool is_hdr() {") + "\n"
+program += '\n'.join(function(m) for m in ('      std::optional<hdr::hyprland_source_e> hyprland_connector_source(', '      std::optional<hdr::hyprland_source_e> hyprland_blob_source(', '      bool initialize_capture_source(', '      bool capture_source_unchanged(')) + "\n" + function("      bool is_hdr() {") + "\n"
 program += refresh_prefix + r'''
     (void)sd;
     (void)frame_timestamp;
@@ -254,6 +255,27 @@ int main(int argc, char **argv) {
     for(auto second : {read_e::pq_blob,read_e::gamma_blob,read_e::hlg_blob,read_e::unknown_blob,read_e::malformed_blob}) {
       sequence(read_e::zero,second,false);
     }
+  } else if (boundary=="pq") {
+    // An HDR (PQ) output is admitted only where frames are tone mapped, and
+    // the encoder still sees SDR. A later SDR read is a different image.
+    for (auto type : {mem_type_e::system,mem_type_e::vaapi,mem_type_e::cuda,mem_type_e::vulkan}) {
+      for (bool fallback : {false,true}) {
+        for (auto second : {read_e::pq_blob,read_e::zero}) {
+          fake::reset({read_e::pq_blob,read_e::pq_blob,read_e::pq_blob,second});
+          fake::direct_fails=fallback;
+          auto base=kms_display(type,"DP-1",video::config_t{});
+          const bool tone_maps=!fallback && (type==mem_type_e::cuda || type==mem_type_e::vaapi);
+          assert(bool(base)==tone_maps);
+          if (!base) continue;
+          auto capture=std::dynamic_pointer_cast<kms::display_vram_t>(base);
+          assert(capture && !capture->is_hdr());
+          egl::owned_surface_t surface;
+          std::optional<std::chrono::steady_clock::time_point> timestamp;
+          assert((capture->refresh(surface,timestamp)==capture_e::ok)==(second==read_e::pq_blob));
+          assert(!capture->hdr_metadata_generation.commit_pending());
+        }
+      }
+    }
   } else if (boundary=="healthy") {
     // Present zero is known SDR, not the missing optional. It reaches frames.
     sequence(read_e::zero,read_e::zero,true);
@@ -307,7 +329,7 @@ with tempfile.TemporaryDirectory(prefix="hyprland-property-") as directory:
          "-I",str(root),str(cpp), "-o", str(binary)], check=True
     )
     boundaries = (sys.argv[3],) if len(sys.argv) > 3 else (
-        "init", "refresh", "second-list", "second-missing", "second-state", "healthy", "kwin"
+        "init", "refresh", "second-list", "second-missing", "second-state", "pq", "healthy", "kwin"
     )
     for boundary in boundaries:
         subprocess.run([str(binary), boundary], check=True)

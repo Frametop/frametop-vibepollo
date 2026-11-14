@@ -87,6 +87,29 @@ namespace platf::kms::hdr {
     return blob ? parse_blob(blob->data, blob->length) : std::nullopt;
   }
 
+  /** What a Hyprland connector scans out, as far as capture is concerned. */
+  enum class hyprland_source_e {
+    sdr,  ///< No metadata, or EOTF 0: captured as is.
+    pq,  ///< HDR10 (EOTF 2): tone mapped to SDR before encoding.
+  };
+
+  /**
+   * Classify a fresh HDR_OUTPUT_METADATA read. Unknown (unreadable) state and
+   * other EOTFs (HLG, traditional HDR gamma) have no capture path.
+   */
+  [[nodiscard]] inline std::optional<hyprland_source_e> hyprland_source(const std::optional<state_t> &state) {
+    if (!state) {
+      return std::nullopt;
+    }
+    if (!state->present || state->eotf == 0) {
+      return hyprland_source_e::sdr;
+    }
+    if (state->eotf == 2) {
+      return hyprland_source_e::pq;
+    }
+    return std::nullopt;
+  }
+
   /** One observation shared by HDR selection, metadata and capture comparison. */
   class generation_t {
   public:
