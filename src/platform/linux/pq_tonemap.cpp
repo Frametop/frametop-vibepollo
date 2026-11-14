@@ -7,6 +7,10 @@
 #include "src/file_handler.h"
 #include "src/logging.h"
 
+#if !defined(SUNSHINE_SHADERS_DIR)  // Same default as graphics.cpp; tests define it in cmake.
+  #define SUNSHINE_SHADERS_DIR SUNSHINE_ASSETS_DIR "/shaders/opengl"
+#endif
+
 using namespace std::literals;
 
 namespace egl {
@@ -97,8 +101,8 @@ namespace egl {
     gl::ctx.BindTexture(GL_TEXTURE_2D, 0);
     gl::ctx.BindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    if (const auto error = gl::ctx.GetError(); error != GL_NO_ERROR) {
-      BOOST_LOG(error) << "PqToSdr draw failed: GL error [0x"sv << util::hex(error).to_string_view() << ']';
+    if (const auto gl_error = gl::ctx.GetError(); gl_error != GL_NO_ERROR) {
+      BOOST_LOG(error) << "PqToSdr draw failed: GL error [0x"sv << util::hex(gl_error).to_string_view() << ']';
       return std::nullopt;
     }
     return output[0];
