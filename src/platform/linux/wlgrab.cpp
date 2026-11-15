@@ -408,6 +408,18 @@ namespace wl {
       return std::make_unique<platf::avcodec_encode_device_t>();
     }
 
+    // Linux NVENC encodes natively, never through FFmpeg, so without this wlr capture had no
+    // NVIDIA path: a compositor rendering on an NVIDIA GPU could only be captured into
+    // another GPU's buffers, and refused every frame.
+    std::unique_ptr<platf::nvenc_encode_device_t> make_nvenc_encode_device(platf::pix_fmt_e pix_fmt) override {
+#ifdef SUNSHINE_BUILD_CUDA
+      if (mem_type == platf::mem_type_e::cuda) {
+        return cuda::make_nvenc_gl_encode_device(width, height, 0, 0, pix_fmt);
+      }
+#endif
+      return nullptr;
+    }
+
     int dummy_img(platf::img_t *img) override {
       // Empty images are recognized as dummies by the zero sequence number
       return 0;

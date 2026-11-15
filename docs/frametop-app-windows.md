@@ -79,7 +79,9 @@ their streams end. After a crash the next start puts back what was left out.
 Known limits:
 
 - The encoder must run on the GPU Hyprland renders with. On a computer where
-  the encoder is on another GPU, a window's stream shows no picture.
+  the encoder is on another GPU, a window's stream shows no picture (the log
+  says `[wayland] Frame capture failed`). With Hyprland on an NVIDIA GPU, set
+  `encoder = nvenc` and that GPU's render node as `adapter_name`.
 - On Omarchy, a window taken from a workspace outside its monitor's numbered
   block (workspace 77 on a monitor that owns 1 to 10) comes back on a
   workspace Omarchy's workspace script picks, as that script renumbers such
