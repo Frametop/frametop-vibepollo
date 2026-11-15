@@ -94,6 +94,9 @@ namespace platf::frametop_vdesktop {
       T *p = nullptr;
     };
 
+    // GUID_NULL, without uuid.lib.
+    constexpr GUID no_desktop {};
+
     std::string hresult(HRESULT hr) {
       char text[16];
       std::snprintf(text, sizeof(text), "0x%08lX", static_cast<unsigned long>(hr));
@@ -162,7 +165,7 @@ namespace platf::frametop_vdesktop {
         // A suspended Store app's frame is cloaked too, but on no desktop, or on the one shown.
         GUID desktop {};
         BOOL here = TRUE;
-        if (SUCCEEDED(manager->GetWindowDesktopId(hwnd, &desktop)) && !IsEqualGUID(desktop, GUID_NULL) &&
+        if (SUCCEEDED(manager->GetWindowDesktopId(hwnd, &desktop)) && !IsEqualGUID(desktop, no_desktop) &&
             SUCCEEDED(manager->IsWindowOnCurrentVirtualDesktop(hwnd, &here)) && !here) {
           out.push_back(hwnd);
         }
@@ -179,7 +182,7 @@ namespace platf::frametop_vdesktop {
       GUID desktop {};
       HRESULT hr = CoCreateInstance(CLSID_DesktopManager, nullptr, CLSCTX_ALL, IID_DesktopManager, manager.put());
       if (SUCCEEDED(hr)) hr = manager->GetWindowDesktopId(hwnd, &desktop);
-      if (FAILED(hr) || IsEqualGUID(desktop, GUID_NULL)) {
+      if (FAILED(hr) || IsEqualGUID(desktop, no_desktop)) {
         why = "Windows didn't say which desktop it's on (" + hresult(hr) + ")";
         return;
       }
