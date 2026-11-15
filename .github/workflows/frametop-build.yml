@@ -1,10 +1,10 @@
 ---
-# Frametop's build of Vibepollo, 2.0.3 (https://github.com/DeeJanuz/frametop), on upstream's
+# Frametop's build of Vibepollo, 2.0.4 (https://github.com/DeeJanuz/frametop), on upstream's
 # 2.0.2-nightly.d20261026: sunshine.exe, which
 # Frametop's Windows host setup swaps in over the stock one, and the Arch Linux package, on
 # Depot's runners (the Frametop org's Depot GitHub app). It runs when started by hand (Actions
 # -> Frametop build -> Run workflow), which keeps the files as artifacts, and on a frametop-*
-# tag named for that version (frametop-2.0.3), which also publishes them as a GitHub release, each with its SHA-256
+# tag named for that version (frametop-2.0.4), which also publishes them as a GitHub release, each with its SHA-256
 # (.github/frametop-publish.sh, notes in .github/frametop-release-notes.md). Upstream's ci.yml
 # skips frametop/ branches and frametop-* tags, so this is the only build of them.
 #
@@ -30,7 +30,7 @@ jobs:
     permissions:
       contents: read
     env:
-      BUILD_VERSION: 2.0.3
+      BUILD_VERSION: 2.0.4
       NODE_VERSION: 22.22.2
       CMAKE_BUILD_PARALLEL_LEVEL: 8
       WEBRTC_ROOT: ${{ github.workspace }}\.vibepollo-deps\libwebrtc\out
@@ -207,7 +207,7 @@ jobs:
       build_tests: true
       artifact_retention_days: 14
       release_commit: ${{ github.sha }}
-      release_version: 2.0.3
+      release_version: 2.0.4
       # Omarchy's mirror: Frametop's Linux hosts run Omarchy, which trails current Arch (CMake and
       # OpenSSL majors the fork doesn't build with yet).
       arch_mirror: 'https://stable-mirror.omarchy.org/$repo/os/$arch'
