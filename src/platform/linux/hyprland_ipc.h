@@ -36,4 +36,10 @@ namespace platf::hyprland_windows::ipc {
 
   /** A Lua string literal. Only text from Hyprland or this host's .desktop files gets here. */
   std::string lua_string(const std::string &text);
+
+  /**
+   * A connection to Hyprland's event socket (.socket2.sock, beside the one it answers on): a
+   * stream of "event>>data" lines. The caller closes it. -1 when there's none.
+   */
+  int connect_events();
 }  // namespace platf::hyprland_windows::ipc

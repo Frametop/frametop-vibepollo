@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 
 #include <sys/socket.h>
@@ -119,5 +120,23 @@ namespace platf::hyprland_windows::ipc {
       else out += c;
     }
     return out + "\"";
+  }
+
+  int connect_events() {
+    auto path = socket_path();
+    const std::string answers = ".socket.sock";
+    if (path.size() <= answers.size() || !path.ends_with(answers)) return -1;
+    path.replace(path.size() - answers.size(), answers.size(), ".socket2.sock");
+    sockaddr_un address {};
+    address.sun_family = AF_UNIX;
+    if (path.size() >= sizeof address.sun_path) return -1;
+    std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) return -1;
+    if (::connect(fd, reinterpret_cast<sockaddr *>(&address), sizeof address) != 0) {
+      ::close(fd);
+      return -1;
+    }
+    return fd;
   }
 }  // namespace platf::hyprland_windows::ipc
