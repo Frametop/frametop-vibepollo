@@ -37,6 +37,13 @@ on:
         required: false
         type: string
         default: ubuntu-latest
+      arch_mirror:
+        description: >-
+          An Arch mirror to build against instead of the image's (a pacman Server line, with $repo
+          and $arch), so the package's library versions match the hosts it is for
+        required: false
+        type: string
+        default: ''
 
 jobs:
   build_archlinux:
@@ -54,6 +61,7 @@ jobs:
       BUILD_VERSION: ${{ inputs.release_version }}
       CLONE_URL: ${{ github.event.repository.clone_url }}
       COMMIT: ${{ inputs.release_commit }}
+      ARCH_MIRROR: ${{ inputs.arch_mirror }}
     permissions:
       contents: read
     runs-on: ${{ !inputs.validation_only && inputs.use_self_hosted && github.repository == 'Nonary/Vibepollo' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && fromJSON('["self-hosted", "Linux", "X64", "linux-release"]') || inputs.runner }}
@@ -64,10 +72,16 @@ jobs:
       - name: Update keyring
         shell: bash
         run: |
-          # Update keyring to avoid signature errors, and update system
+          # Update keyring to avoid signature errors, and update system. With a mirror of its own the
+          # system follows that mirror, down as well as up.
+          upgrade=-Syu
+          if [[ -n "${ARCH_MIRROR}" ]]; then
+            printf 'Server = %s\n' "${ARCH_MIRROR}" > /etc/pacman.d/mirrorlist
+            upgrade=-Syyuu
+          fi
           pacman -Syy --disable-download-timeout --needed --noconfirm \
             archlinux-keyring
-          pacman -Syu --disable-download-timeout --noconfirm
+          pacman "${upgrade}" --disable-download-timeout --noconfirm
           pacman -Scc --noconfirm
 
       - name: Setup builder user

@@ -154,17 +154,19 @@ jobs:
           echo "::add-matcher::.github/matchers/gcc.json"
           cmake --build build --parallel "$CMAKE_BUILD_PARALLEL_LEVEL" --target sunshine frametop_clipboard \
             test_component_remote_display_topology test_component_remote_session test_component_rtsp_pending_policy \
-            test_component_clipboard_image test_component_clipboard_read
+            test_component_clipboard_image test_component_clipboard_read \
+            test_component_frametop_vdesktop test_component_frametop_hostin_capture
           echo "::remove-matcher owner=gcc::"
 
       # The suites Frametop's changes touch (the Remote Monitor release, the Frametop display
-      # role and the RTSP policy for it, the shared clipboard's conversions and reader).
+      # role and the RTSP policy for it, the shared clipboard's conversions and reader, the
+      # virtual-desktop pull and host input's capture policy).
       - name: Test
         run: |
           set -euo pipefail
           export PATH="$(cygpath -u "${WEBRTC_ROOT}")/bin:$(cygpath -u "${WEBRTC_ROOT}")/lib:$PATH"
           ctest --test-dir build --output-on-failure \
-            -R '^test_component_(remote_display_topology|remote_session|rtsp_pending_policy|clipboard_image|clipboard_read)$'
+            -R '^test_component_(remote_display_topology|remote_session|rtsp_pending_policy|clipboard_image|clipboard_read|frametop_vdesktop|frametop_hostin_capture)$'
 
       # The exes go into an existing Vibepollo 2.0.1 install (the clipboard reader into its
       # tools folder), so they may only load DLLs that Windows or that install has.
@@ -206,6 +208,9 @@ jobs:
       artifact_retention_days: 14
       release_commit: ${{ github.sha }}
       release_version: 2.0.3
+      # Omarchy's mirror: Frametop's Linux hosts run Omarchy, which trails current Arch (CMake and
+      # OpenSSL majors the fork doesn't build with yet).
+      arch_mirror: 'https://stable-mirror.omarchy.org/$repo/os/$arch'
 
   release:
     name: Publish the release
