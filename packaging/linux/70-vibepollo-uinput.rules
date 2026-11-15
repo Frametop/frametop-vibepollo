@@ -1,6 +1,11 @@
 # The machine-scoped Vibepollo host runs as the unprivileged "vibepollo"
 # account. Grant it virtual input devices through a dedicated group instead of
 # the broad "input" group, which would also expose every physical input event.
-KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="vibepollo-uinput", MODE="0660", OPTIONS+="static_node=uinput", TAG+="uaccess"
-KERNEL=="uhid", SUBSYSTEM=="misc", GROUP="vibepollo-uinput", MODE="0660", OPTIONS+="static_node=uhid", TAG+="uaccess"
+#
+# uaccess gives the desktop user an ACL entry too. logind can add it at boot while the
+# static node is still 0600, and an ACL keeps that group entry (group::---): MODE then only
+# changes the mask, so the group is locked out and the host can't make its mouse and
+# keyboard. A named group entry is left alone by chmod and by logind, so set one.
+KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="vibepollo-uinput", MODE="0660", OPTIONS+="static_node=uinput", TAG+="uaccess", RUN+="/usr/bin/setfacl -m g:vibepollo-uinput:rw $env{DEVNAME}"
+KERNEL=="uhid", SUBSYSTEM=="misc", GROUP="vibepollo-uinput", MODE="0660", OPTIONS+="static_node=uhid", TAG+="uaccess", RUN+="/usr/bin/setfacl -m g:vibepollo-uinput:rw $env{DEVNAME}"
 KERNEL=="vibeshine-ds5", SUBSYSTEM=="misc", GROUP="vibepollo-uinput", MODE="0660", TAG+="uaccess"

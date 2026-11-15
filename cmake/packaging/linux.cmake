@@ -436,6 +436,7 @@ endif()
 set(CPACK_DEB_COMPONENT_INSTALL OFF)
 set(CPACK_DEBIAN_PACKAGE_DEPENDS "\
             ${CPACK_DEB_PLATFORM_PACKAGE_DEPENDS} \
+            acl, \
             debianutils, \
             libcap2, \
             libcap2-bin, \
@@ -466,6 +467,7 @@ set(CPACK_DEBIAN_PACKAGE_DEPENDS "\
 set(CPACK_RPM_PACKAGE_REQUIRES "\
             ${CPACK_RPM_PLATFORM_PACKAGE_REQUIRES} \
             /usr/bin/pactl, \
+            /usr/bin/setfacl, \
             /usr/bin/parec, \
             /usr/bin/python3, \
             (python3 >= 3.9 or /usr/bin/python3.11), \

@@ -261,6 +261,9 @@ for rule in (
     'KERNEL=="uhid", SUBSYSTEM=="misc", GROUP="vibepollo-uinput", MODE="0660"',
 ):
     require(uinput_rules, rule, "dedicated virtual input device group")
+for node in ("uinput", "uhid"):
+    require(uinput_rules, f'OPTIONS+="static_node={node}", TAG+="uaccess", RUN+="/usr/bin/setfacl -m g:vibepollo-uinput:rw $env{{DEVNAME}}"',
+            "named group ACL survives a boot-time uaccess ACL")
 for native_asset in (
     "%{_udevrulesdir}/70-vibepollo-uinput.rules",
     "%{_prefix}/lib/firewalld/services/vibepollo.xml",
