@@ -7,6 +7,7 @@
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
+#include "src/platform/windows/frametop_vdesktop.h"
 #include "src/platform/windows/frametop_window_target.h"
 #include "src/platform/windows/misc.h"
 #include "src/platform/windows/utf_utils.h"
@@ -55,6 +56,7 @@ namespace fs = std::filesystem;
 namespace platf::frametop_windows {
   namespace {
     namespace target = frametop_window_target;
+    namespace vdesktop = frametop_vdesktop;
     using clock = std::chrono::steady_clock;
 
     constexpr auto kGrace = 60s;  // no stream of a window output this long: the window goes back
@@ -67,6 +69,7 @@ namespace platf::frametop_windows {
       DWORD pid = 0;  // its process: an address a closed window freed may name another one later
       WINDOWPLACEMENT before {sizeof(WINDOWPLACEMENT)};  // where it was, restored on release
       clock::time_point seen;  // last time a stream captured it (or when it opened)
+      std::optional<GUID> desktop;  // the virtual desktop it came from, if not the one shown: back there on release
     };
 
     struct app_t {
@@ -246,8 +249,6 @@ namespace platf::frametop_windows {
       return SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &value, sizeof(value))) && value != 0;
     }
 
-    // An app window, as Alt+Tab lists them: shown (or minimized), not a tool window, not owned
-    // by another (unless it asks to be on the taskbar), not cloaked, and titled.
     // The window it hosts is still there (and its address names no other window since).
     bool still(const hosted_t &h) {
       return IsWindow(h.hwnd) && pid_of(h.hwnd) == h.pid;
@@ -266,8 +267,10 @@ namespace platf::frametop_windows {
       }
     }
 
-    bool app_window(HWND hwnd) {
-      if (!hwnd || !IsWindow(hwnd) || !IsWindowVisible(hwnd) || cloaked(hwnd)) return false;
+    // A window Alt+Tab would list on its desktop: not a tool window, not owned by another
+    // (unless it asks to be on the taskbar), and titled.
+    bool app_like(HWND hwnd) {
+      if (!hwnd || !IsWindow(hwnd) || !IsWindowVisible(hwnd)) return false;
       const auto ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
       const bool on_taskbar = (ex & WS_EX_APPWINDOW) != 0;
       if ((ex & WS_EX_TOOLWINDOW) && !on_taskbar) return false;
@@ -278,16 +281,67 @@ namespace platf::frametop_windows {
       return !shell.contains(class_of(hwnd));
     }
 
-    std::vector<HWND> app_windows() {
-      std::vector<HWND> out;
+    // An app window on the desktop shown, as Alt+Tab lists them: shown (or minimized), not cloaked.
+    bool app_window(HWND hwnd) {
+      return app_like(hwnd) && !cloaked(hwnd);
+    }
+
+    // The shell's desktop calls as the signed-in user: Vibepollo runs as SYSTEM, the shell as them.
+    bool as_user(const std::function<void()> &job) {
+      if (!is_running_as_system()) {
+        job();
+        return true;
+      }
+      const HANDLE token = retrieve_users_token(false);
+      if (!token) return false;
+      const bool ran = !impersonate_current_user(token, job);
+      CloseHandle(token);
+      return ran;
+    }
+
+    // An app window on another virtual desktop: opening it brings it here.
+    bool away_window(HWND hwnd) {
+      return app_like(hwnd) && vdesktop::shell_cloaked(hwnd) && !vdesktop::elsewhere({hwnd}, as_user).empty();
+    }
+
+    struct listed_t {
+      std::vector<HWND> windows;  // front to back, every desktop's
+      std::set<HWND> away;  // the ones on another virtual desktop
+    };
+
+    // The app windows: the desktop shown's, and with every_desktop the other virtual desktops' too,
+    // as the Hyprland side lists every workspace's.
+    listed_t app_windows(bool every_desktop = false) {
+      struct found_t {
+        std::vector<HWND> windows, maybe_away;
+        bool every_desktop;
+      } found {{}, {}, every_desktop};
       EnumWindows(
         [](HWND hwnd, LPARAM param) -> BOOL {
-          if (app_window(hwnd)) reinterpret_cast<std::vector<HWND> *>(param)->push_back(hwnd);
+          auto *f = reinterpret_cast<found_t *>(param);
+          if (app_window(hwnd)) {
+            f->windows.push_back(hwnd);
+          } else if (f->every_desktop && app_like(hwnd) && vdesktop::shell_cloaked(hwnd)) {
+            f->windows.push_back(hwnd);
+            f->maybe_away.push_back(hwnd);
+          }
           return TRUE;
         },
-        reinterpret_cast<LPARAM>(&out)
+        reinterpret_cast<LPARAM>(&found)
       );
-      return out;  // front to back
+      listed_t out;
+      for (const auto hwnd : vdesktop::elsewhere(found.maybe_away, as_user)) out.away.insert(hwnd);
+      const std::set<HWND> maybe(found.maybe_away.begin(), found.maybe_away.end());
+      for (const auto hwnd : found.windows) {
+        if (!maybe.contains(hwnd) || out.away.contains(hwnd)) out.windows.push_back(hwnd);
+      }
+      return out;
+    }
+
+    // After a move between desktops, the shell uncloaks the window a moment later.
+    bool await_uncloaked(HWND hwnd) {
+      for (int i = 0; i < 40 && cloaked(hwnd); ++i) std::this_thread::sleep_for(25ms);
+      return !cloaked(hwnd);
     }
 
     std::string monitor_name(HMONITOR monitor) {
@@ -354,6 +408,7 @@ namespace platf::frametop_windows {
                        {"normal", {p.rcNormalPosition.left, p.rcNormalPosition.top, p.rcNormalPosition.right, p.rcNormalPosition.bottom}},
                        {"min", {p.ptMinPosition.x, p.ptMinPosition.y}},
                        {"max", {p.ptMaxPosition.x, p.ptMaxPosition.y}}};
+        if (h.desktop) out[output]["desktop"] = vdesktop::to_string(*h.desktop);
       }
       const auto path = state_path();
       const auto tmp = path.string() + ".tmp";
@@ -411,7 +466,9 @@ namespace platf::frametop_windows {
         before.showCmd = quietly(before.showCmd);
         before.flags |= WPF_ASYNCWINDOWPLACEMENT;
         SetWindowPlacement(h.hwnd, &before);
-        if (!stopping) BOOST_LOG(info) << "Frametop windows: " << output << " back where it was";
+        // Not at exit: the shell call may wait, and its log may be gone. The window stays here then.
+        const bool home = !h.desktop || stopping || vdesktop::send_back(h.hwnd, *h.desktop, as_user);
+        if (!stopping) BOOST_LOG(info) << "Frametop windows: " << output << " back where it was" << (home ? "" : ", on this desktop: its own has gone");
         return true;
       }
       // Dropped on one of this PC's displays: there, held where it was held.
@@ -894,21 +951,40 @@ namespace platf::frametop_windows {
         *error = "no window " + target::address(hwnd);
         return std::nullopt;
       }
-      if (!app_window(hwnd)) {
-        *error = target::address(hwnd) + " isn't an app window";
-        return std::nullopt;
-      }
       // Sizing waits for the window's app: one that has stopped answering would hold the role.
       if (IsHungAppWindow(hwnd)) {
         *error = title_of_utf8(hwnd) + " isn't answering";
         return std::nullopt;
       }
       const auto output = target::output_name(hwnd);
+      // From another virtual desktop: to this one, where it can be captured, and back on release.
+      std::optional<GUID> from;
+      if (!hosted_windows.contains(output) && !app_window(hwnd) && away_window(hwnd)) {
+        std::string why;
+        from = vdesktop::bring_here(hwnd, as_user, &why);
+        if (!from) {
+          *error = title_of_utf8(hwnd) + " is on another desktop, and " + why;
+          return std::nullopt;
+        }
+        BOOST_LOG(info) << "Frametop windows: " << target::address(hwnd) << " came from desktop " << vdesktop::to_string(*from);
+        if (!await_uncloaked(hwnd)) {
+          vdesktop::send_back(hwnd, *from, as_user);
+          *error = title_of_utf8(hwnd) + " didn't show on this desktop";
+          return std::nullopt;
+        }
+      }
+      if (!app_window(hwnd)) {
+        if (from) vdesktop::send_back(hwnd, *from, as_user);
+        *error = target::address(hwnd) + " isn't an app window";
+        return std::nullopt;
+      }
       if (!hosted_windows.contains(output)) {
         hosted_t h;
         h.hwnd = hwnd;
         h.pid = pid_of(hwnd);
+        h.desktop = from;
         if (!GetWindowPlacement(hwnd, &h.before)) {
+          if (from) vdesktop::send_back(hwnd, *from, as_user);
           *error = "Windows didn't say where " + target::address(hwnd) + " is";
           return std::nullopt;
         }
@@ -1025,7 +1101,7 @@ namespace platf::frametop_windows {
   }  // namespace
 
   bool available() {
-    return window_thread().run([] { return !app_windows().empty() || session_locked(); });
+    return window_thread().run([] { return !app_windows().windows.empty() || session_locked(); });
   }
 
   nlohmann::json list() {
@@ -1035,7 +1111,7 @@ namespace platf::frametop_windows {
       std::lock_guard guard {lock};
       std::map<HWND, std::string> output_of;
       for (const auto &[output, h] : hosted_windows) output_of[h.hwnd] = output;
-      const auto windows = app_windows();
+      const auto [windows, away] = app_windows(true);
       const auto foreground = GetForegroundWindow();
       nlohmann::json out = nlohmann::json::array();
       int order = 1;
@@ -1055,9 +1131,10 @@ namespace platf::frametop_windows {
                           {"output", nullptr},
                           // For Frametop desktopless mode: which to bring out first (shown, then
                           // the most recently used, 0 = focused now), where it sits, whose app.
+                          // One on another virtual desktop isn't shown: it comes here when opened.
                           {"focus", hwnd == foreground ? 0 : order++},
                           {"floating", !IsZoomed(hwnd)},
-                          {"shown", !IsIconic(hwnd)},
+                          {"shown", !IsIconic(hwnd) && !away.contains(hwnd)},
                           {"at", {rect.left, rect.top}},
                           {"app", nullptr}};
         if (const auto app = app_of(apps, exe)) {
@@ -1089,7 +1166,7 @@ namespace platf::frametop_windows {
       return std::nullopt;
     }
     // The display first, for a window that can come out (not under the lock: it takes time).
-    const bool can_open = window_thread().run([&] { return IsWindow(*hwnd) && app_window(*hwnd) && !IsHungAppWindow(*hwnd); });
+    const bool can_open = window_thread().run([&] { return IsWindow(*hwnd) && (app_window(*hwnd) || away_window(*hwnd)) && !IsHungAppWindow(*hwnd); });
     const auto display = can_open ? hold_display() : std::nullopt;
     return window_thread().run([&] {
       std::lock_guard guard {lock};
@@ -1117,7 +1194,7 @@ namespace platf::frametop_windows {
         s.error = "no app " + app_id;
         return s;
       }
-      for (const auto hwnd : app_windows()) s.before.insert(hwnd);
+      for (const auto hwnd : app_windows().windows) s.before.insert(hwnd);
       // Explorer opens the shortcut as the signed-in user would (its arguments, folder, and
       // how it runs), in the user's session.
       boost::filesystem::path working_dir;
@@ -1142,7 +1219,7 @@ namespace platf::frametop_windows {
       std::this_thread::sleep_for(250ms);
       const bool any_new = clock::now() - started > 3s;
       const auto found = window_thread().run([&]() -> std::optional<HWND> {
-        const auto windows = app_windows();
+        const auto windows = app_windows().windows;  // a new one opens on the desktop shown
         for (const auto hwnd : windows) {
           if (start_app.before.contains(hwnd)) continue;
           if (!start_app.app->exe.empty() && exe_of(pid_of(hwnd)) == start_app.app->exe) return hwnd;
@@ -1285,6 +1362,7 @@ namespace platf::frametop_windows {
         p.showCmd = quietly(p.showCmd);
         p.flags |= WPF_ASYNCWINDOWPLACEMENT;
         if (SetWindowPlacement(*hwnd, &p)) ++back;
+        if (const auto desktop = vdesktop::parse(s.value("desktop", std::string {}))) vdesktop::send_back(*hwnd, *desktop, as_user);
       } catch (const std::exception &e) {
         BOOST_LOG(warning) << "Frametop windows: " << output << " in the state file: " << e.what();
       }

@@ -1792,6 +1792,9 @@ if(WIN32)
         LINK_LIBRARIES sunshine_test_displaydevice_headers Boost::algorithm nlohmann_json::nlohmann_json)
     sunshine_register_component(NAME test_component_utf_utils TEST_SOURCE unit/platform/windows/test_utf_utils.cpp
         PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/utf_utils.cpp")
+    sunshine_register_component(NAME test_component_frametop_vdesktop TEST_SOURCE unit/platform/windows/test_frametop_vdesktop.cpp
+        PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/frametop_vdesktop.cpp"
+        LINK_LIBRARIES dwmapi ole32 user32)
     sunshine_register_component(NAME test_component_clipboard_image TEST_SOURCE unit/platform/windows/test_clipboard_image.cpp
         PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/windows/image_convert.cpp"
         LINK_LIBRARIES windowscodecs ole32 shlwapi)

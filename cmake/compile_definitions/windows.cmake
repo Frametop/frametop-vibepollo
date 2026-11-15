@@ -285,6 +285,8 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/frametop_hostin.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/frametop_mic.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/frametop_window_target.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/frametop_vdesktop.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/frametop_vdesktop.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/frametop_windows.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/frametop_windows.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/lossless_scaling_paths.cpp"
