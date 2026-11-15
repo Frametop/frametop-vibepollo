@@ -156,6 +156,7 @@ do_restore_kwin_capability() { :; }
 do_install_vibeshine_drm() { :; }
 do_install_vibeshine_ds5() { :; }
 do_install_prelogin() { echo configure >>"$events"; }
+do_enable_host_input_default() { :; }
 do_print_next_steps() { :; }
 proof=uncertain
 if CALLBACK; then exit 93; fi
