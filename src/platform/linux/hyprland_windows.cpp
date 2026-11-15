@@ -7,6 +7,8 @@
  */
 #include "hyprland_windows.h"
 #include "app_window_class.h"
+#include "desktop_apps.h"
+#include "hyprland_ipc.h"
 #include "window_cursor.h"
 #include "window_pick.h"
 
@@ -72,112 +74,8 @@ namespace platf::hyprland_windows {
     bool started = false;
     std::atomic<bool> stopping {false};  // process exit: the watcher leaves the windows to release_at_exit
 
-    std::string socket_path() {
-      const char *runtime = std::getenv("XDG_RUNTIME_DIR");
-      if (!runtime || !*runtime) return {};
-      const fs::path hypr = fs::path(runtime) / "hypr";
-      if (const char *sig = std::getenv("HYPRLAND_INSTANCE_SIGNATURE"); sig && *sig) {
-        return (hypr / sig / ".socket.sock").string();
-      }
-      // Started outside the session's environment: the one instance there is.
-      std::error_code ec;
-      for (const auto &entry : fs::directory_iterator(hypr, ec)) {
-        const auto sock = entry.path() / ".socket.sock";
-        if (fs::exists(sock, ec)) return sock.string();
-      }
-      return {};
-    }
-
-    std::optional<std::string> ask(const std::string &command) {
-      const auto path = socket_path();
-      if (path.empty() || path.size() >= sizeof(sockaddr_un::sun_path)) return std::nullopt;
-      const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-      if (fd < 0) return std::nullopt;
-      sockaddr_un addr {};
-      addr.sun_family = AF_UNIX;
-      std::copy(path.begin(), path.end(), addr.sun_path);
-      timeval timeout {5, 0};
-      ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
-      ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
-      if (::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof addr) < 0) {
-        ::close(fd);
-        return std::nullopt;
-      }
-      size_t sent = 0;
-      while (sent < command.size()) {
-        const auto n = ::send(fd, command.data() + sent, command.size() - sent, MSG_NOSIGNAL);
-        if (n <= 0) {
-          ::close(fd);
-          return std::nullopt;
-        }
-        sent += size_t(n);
-      }
-      std::string out;
-      char buf[16384];
-      for (;;) {
-        const auto n = ::recv(fd, buf, sizeof buf, 0);
-        if (n <= 0) break;
-        out.append(buf, size_t(n));
-      }
-      ::close(fd);
-      return out;
-    }
-
-    // Hyprland passes window titles through as they are, and one with bytes that aren't UTF-8
-    // (an old X11 app's) would make the whole answer unreadable: those bytes become '?'.
-    std::string valid_utf8(const std::string &in) {
-      std::string out;
-      out.reserve(in.size());
-      for (size_t i = 0; i < in.size();) {
-        const auto c = static_cast<unsigned char>(in[i]);
-        const size_t n = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 0;
-        bool ok = n > 0 && i + n <= in.size();
-        for (size_t k = 1; ok && k < n; ++k) ok = (static_cast<unsigned char>(in[i + k]) & 0xC0) == 0x80;
-        if (ok) {
-          out.append(in, i, n);
-          i += n;
-        } else {
-          out += '?';
-          ++i;
-        }
-      }
-      return out;
-    }
-
-    // A j/ query's array, or nullopt when Hyprland didn't answer or the answer isn't one.
-    std::optional<nlohmann::json> query(const std::string &what) {
-      const auto reply = ask("j/" + what);
-      if (!reply) return std::nullopt;
-      auto parsed = nlohmann::json::parse(valid_utf8(*reply), nullptr, false);
-      if (parsed.is_discarded() || !parsed.is_array()) return std::nullopt;
-      return parsed;
-    }
-
-    nlohmann::json ask_json(const std::string &what) {
-      return query(what).value_or(nlohmann::json::array());
-    }
-
-    bool run(const std::string &command, std::string *error) {
-      const auto reply = ask(command);
-      if (reply && *reply == "ok") return true;
-      if (error) *error = reply ? "Hyprland: " + *reply : "Hyprland's IPC socket doesn't answer";
-      return false;
-    }
-
-    bool lua(const std::string &code, std::string *error) {
-      return run("eval " + code, error);
-    }
-
-    // A Lua string literal. Only text from Hyprland or this host's .desktop files gets here.
-    std::string lua_string(const std::string &text) {
-      std::string out = "\"";
-      for (const char c : text) {
-        if (c == '\\' || c == '"') out += '\\';
-        if (c == '\n' || c == '\r') out += ' ';
-        else out += c;
-      }
-      return out + "\"";
-    }
+    using namespace ipc;
+    using namespace catalog;
 
     bool valid_address(const std::string &address) {
       static const std::regex pattern {"^0x[0-9a-fA-F]{1,16}$"};
@@ -468,98 +366,6 @@ namespace platf::hyprland_windows {
       BOOST_LOG(info) << "Frametop windows: " << address << " (" << client.value("class", "") << ") on " << output << ' '
                       << width << 'x' << height;
       return nlohmann::json {{"output", output}, {"width", width}, {"height", height}, {"address", address}};
-    }
-
-    struct desktop_app_t {
-      std::string id, name, icon, exec, wm_class;
-    };
-
-    std::vector<fs::path> application_dirs() {
-      std::vector<fs::path> dirs;
-      const char *home = std::getenv("HOME");
-      const char *data_home = std::getenv("XDG_DATA_HOME");
-      if (data_home && *data_home) dirs.emplace_back(fs::path(data_home) / "applications");
-      else if (home && *home) dirs.emplace_back(fs::path(home) / ".local/share/applications");
-      const char *data_dirs = std::getenv("XDG_DATA_DIRS");
-      std::stringstream list {data_dirs && *data_dirs ? data_dirs : "/usr/local/share:/usr/share"};
-      for (std::string dir; std::getline(list, dir, ':');) {
-        if (!dir.empty()) dirs.emplace_back(fs::path(dir) / "applications");
-      }
-      return dirs;
-    }
-
-    // The Exec line without its field codes (the desktop entry spec's %f, %u, ...).
-    std::string strip_field_codes(const std::string &exec) {
-      std::string out;
-      for (size_t i = 0; i < exec.size(); ++i) {
-        if (exec[i] != '%' || i + 1 == exec.size()) {
-          out += exec[i];
-          continue;
-        }
-        if (exec[++i] == '%') out += '%';
-      }
-      return out;
-    }
-
-    std::vector<desktop_app_t> desktop_apps();
-
-    // Window class (lower case) -> the desktop app it belongs to. A StartupWMClass says it best, then
-    // the desktop file's name, then a program on the Exec line. Read again every 30 s.
-    const std::map<std::string, std::string> &app_classes() {
-      static std::map<std::string, std::string> cache;
-      static clock::time_point read_at;
-      if (!cache.empty() && clock::now() - read_at < std::chrono::seconds(30)) return cache;
-      const auto apps = desktop_apps();
-      std::map<std::string, std::string> by_wm, by_stem, by_exec;
-      for (const auto &a : apps) {
-        if (!a.wm_class.empty()) by_wm.emplace(lower(a.wm_class), a.id);
-        const auto stem = a.id.size() > 8 && a.id.ends_with(".desktop") ? a.id.substr(0, a.id.size() - 8) : a.id;
-        by_stem.emplace(lower(stem), a.id);
-        for (const auto &cls : app_window_classes(a.wm_class, a.id, a.exec)) by_exec.emplace(cls, a.id);
-      }
-      cache = by_wm;
-      cache.insert(by_stem.begin(), by_stem.end());
-      cache.insert(by_exec.begin(), by_exec.end());
-      read_at = clock::now();
-      return cache;
-    }
-
-    std::vector<desktop_app_t> desktop_apps() {
-      std::vector<desktop_app_t> apps;
-      std::set<std::string> seen;  // the first directory with an id wins, as the spec says
-      for (const auto &dir : application_dirs()) {
-        std::error_code ec;
-        for (const auto &entry : fs::directory_iterator(dir, ec)) {
-          const auto id = entry.path().filename().string();
-          if (entry.path().extension() != ".desktop" || !seen.insert(id).second) continue;
-          std::ifstream file {entry.path()};
-          desktop_app_t app {id, {}, {}, {}, {}};
-          bool in_entry = false, hide = false, application = false;
-          for (std::string line; std::getline(file, line);) {
-            if (!line.empty() && line[0] == '[') {
-              in_entry = line == "[Desktop Entry]";
-              continue;
-            }
-            if (!in_entry) continue;
-            const auto eq = line.find('=');
-            if (eq == std::string::npos) continue;
-            const auto trim = [](std::string t) {  // "Key = value" is allowed too
-              const auto first = t.find_first_not_of(" \t"), last = t.find_last_not_of(" \t\r");
-              return first == std::string::npos ? std::string {} : t.substr(first, last - first + 1);
-            };
-            const auto key = trim(line.substr(0, eq)), value = trim(line.substr(eq + 1));
-            if (key == "Name") app.name = value;
-            else if (key == "Icon") app.icon = value;
-            else if (key == "Exec") app.exec = strip_field_codes(value);
-            else if (key == "StartupWMClass") app.wm_class = value;
-            else if (key == "Type") application = value == "Application";
-            else if ((key == "NoDisplay" || key == "Hidden" || key == "Terminal") && value == "true") hide = true;
-          }
-          if (application && !hide && !app.name.empty() && !app.exec.empty()) apps.push_back(std::move(app));
-        }
-      }
-      std::sort(apps.begin(), apps.end(), [](const auto &a, const auto &b) { return a.name < b.name; });
-      return apps;
     }
 
     // A window output's stream ended (the Frame went, or its Wi-Fi did) while the cursor was on
