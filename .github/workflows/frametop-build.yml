@@ -152,7 +152,7 @@ jobs:
             -DSUNSHINE_PUBLISHER_WEBSITE="https://github.com/Frametop/frametop-vibepollo" \
             -DSUNSHINE_PUBLISHER_ISSUE_URL="https://github.com/DeeJanuz/frametop/issues"
           echo "::add-matcher::.github/matchers/gcc.json"
-          cmake --build build --parallel "$CMAKE_BUILD_PARALLEL_LEVEL" --target sunshine frametop_clipboard \
+          cmake --build build --parallel "$CMAKE_BUILD_PARALLEL_LEVEL" --target sunshine frametop_clipboard sunshine_wgc_capture \
             test_component_remote_display_topology test_component_remote_session test_component_rtsp_pending_policy \
             test_component_clipboard_image test_component_clipboard_read \
             test_component_frametop_vdesktop test_component_frametop_hostin_capture
@@ -168,14 +168,15 @@ jobs:
           ctest --test-dir build --output-on-failure \
             -R '^test_component_(remote_display_topology|remote_session|rtsp_pending_policy|clipboard_image|clipboard_read|frametop_vdesktop|frametop_hostin_capture)$'
 
-      # The exes go into an existing Vibepollo 2.0.1 install (the clipboard reader into its
-      # tools folder), so they may only load DLLs that Windows or that install has.
+      # The exes go into an existing Vibepollo 2.0.3 install (the clipboard reader and the
+      # capture helper, which draws a Frametop window and its popups, into its tools folder),
+      # so they may only load DLLs that Windows or that install has.
       - name: Check DLLs and package
         run: |
           set -euo pipefail
-          strip --strip-all build/sunshine.exe build/tools/frametop_clipboard.exe
+          strip --strip-all build/sunshine.exe build/tools/frametop_clipboard.exe build/tools/sunshine_wgc_capture.exe
           bad=0
-          for dll in $(objdump -p build/sunshine.exe build/tools/frametop_clipboard.exe | sed -n 's/^\s*DLL Name: //p' | tr -d '\r' | sort -u); do
+          for dll in $(objdump -p build/sunshine.exe build/tools/frametop_clipboard.exe build/tools/sunshine_wgc_capture.exe | sed -n 's/^\s*DLL Name: //p' | tr -d '\r' | sort -u); do
             lower=$(echo "$dll" | tr '[:upper:]' '[:lower:]')
             case $lower in
               libwebrtc.dll|zlib1.dll) echo "from the install: $dll" ;;
@@ -186,9 +187,9 @@ jobs:
           [ "$bad" = 0 ]
           mkdir -p dist/tools
           cp build/sunshine.exe dist/
-          cp build/tools/frametop_clipboard.exe dist/tools/
+          cp build/tools/frametop_clipboard.exe build/tools/sunshine_wgc_capture.exe dist/tools/
           printf 'Vibepollo %s with Frametop'"'"'s changes\ncommit %s (%s)\n' "$BUILD_VERSION" "$GITHUB_SHA" "$GITHUB_REF_NAME" > dist/BUILD-INFO.txt
-          sha256sum dist/sunshine.exe dist/tools/frametop_clipboard.exe
+          sha256sum dist/sunshine.exe dist/tools/frametop_clipboard.exe dist/tools/sunshine_wgc_capture.exe
 
       - name: Upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -248,4 +249,6 @@ jobs:
           case $(basename "${pkgs[0]}") in "vibepollo-$version-"*) ;; *) echo "::error::$TAG doesn't match ${pkgs[0]}"; exit 1 ;; esac
           grep -qx "Vibepollo $version with Frametop's changes" artifacts/frametop-windows/BUILD-INFO.txt ||
             { echo "::error::$TAG doesn't match the Windows build: $(head -1 artifacts/frametop-windows/BUILD-INFO.txt)"; exit 1; }
-          bash .github/frametop-publish.sh "$TAG" artifacts/frametop-windows/sunshine.exe "${pkgs[0]}"
+          bash .github/frametop-publish.sh "$TAG" artifacts/frametop-windows/sunshine.exe \
+            artifacts/frametop-windows/tools/frametop_clipboard.exe \
+            artifacts/frametop-windows/tools/sunshine_wgc_capture.exe "${pkgs[0]}"
