@@ -348,8 +348,11 @@ def main():
     parser.add_argument('--source', type=Path, default=ROOT / 'src/input.cpp')
     args = parser.parse_args()
     source = args.source.read_text()
-    handlers = '\n'.join(function(source, signature) for signature in (
-        'void raise_window_output(const input_t &input)',
+    # passthrough() raises a Frametop window output first. That is Windows' window role, not
+    # this test's: stand it in empty, so a Windows compiler host builds the test as Linux does.
+    raise_window = 'void raise_window_output(const input_t &input)'
+    stand_ins = 'void raise_window_output(const input_t &) {}\n' if raise_window in source else ''
+    handlers = stand_ins + '\n'.join(function(source, signature) for signature in (
         'void passthrough(std::shared_ptr<input_t> &input, PNV_REL_MOUSE_MOVE_PACKET packet)',
         'void passthrough(std::shared_ptr<input_t> &input, PNV_MOUSE_BUTTON_PACKET packet)',
         'uint16_t host_keycode(uint16_t key)',
