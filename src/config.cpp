@@ -1060,7 +1060,7 @@ namespace config {
     true,  // native pen/touch support
     false,  // enable input only mode
     true,  // forward_rumble
-    false,  // frametop_host_input
+    true,  // frametop_host_input: on by default, as on Linux; sunshine.conf can turn it off
   };
 
   frame_limiter_t frame_limiter {

@@ -1,8 +1,9 @@
 [Unit]
 Description=Vibepollo host input socket (Frametop)
 Documentation=https://github.com/Frametop/frametop-vibepollo
-# Off until enabled: reading this computer's keyboards is the host owner's call.
-#   systemctl enable --now vibepollo-host-input.socket
+# On by default: the package enables it once (vibepollo-host-input-default). Turning it
+# off is the host owner's call, and upgrades keep it off:
+#   systemctl disable --now vibepollo-host-input.socket
 
 [Socket]
 ListenSequentialPacket=/run/vibepollo/host-input.sock

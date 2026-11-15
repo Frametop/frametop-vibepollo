@@ -1180,6 +1180,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_global_limiter.py")
         set_tests_properties(test_component_linux_global_limiter PROPERTIES LABELS "component")
+        add_test(NAME test_component_linux_host_input_default
+            COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_host_input_default.py")
+        set_tests_properties(test_component_linux_host_input_default PROPERTIES LABELS "component" TIMEOUT 60)
         add_test(NAME test_component_linux_steamos_local_hdr
             COMMAND "${SUNSHINE_TEST_PYTHON_EXECUTABLE}"
                 "${SUNSHINE_TEST_REPOSITORY_ROOT}/packaging/linux/steamos/tests/test-local-hdr.py")

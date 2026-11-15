@@ -1,0 +1,33 @@
+#!/bin/sh
+# Turns Frametop host input (vibepollo-host-input.socket) on once per machine: at the first
+# install, or at the first upgrade from a build that shipped it off. After that the owner's
+# choice stands, so a later `systemctl disable` or mask is never undone by an upgrade.
+#
+# The marker lives straight in /var/lib, which only root can write: under the service
+# account's /var/lib/vibepollo that account could delete it and have the next upgrade turn
+# host input back on.
+set -u
+
+unit=vibepollo-host-input.socket
+marker=/var/lib/vibepollo-host-input-default
+
+[ -e "$marker" ] && exit 0
+# No running systemd (a container or chroot build): leave it for a real install.
+command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] || exit 0
+
+state=$(timeout --signal=KILL 5 systemctl is-enabled "$unit" 2>/dev/null || true)
+case "$state" in
+  masked | masked-runtime)
+    # The owner blocked it before this default existed.
+    ;;
+  *)
+    if ! timeout --signal=KILL 15 systemctl enable --now "$unit"; then
+      echo "warning: could not turn on Frametop host input; run: sudo systemctl enable --now $unit" >&2
+      exit 0
+    fi
+    echo "Frametop host input is on (turn it off with: sudo systemctl disable --now $unit)"
+    ;;
+esac
+
+: >"$marker" || echo "warning: could not record that the host input default was applied ($marker)" >&2
+exit 0

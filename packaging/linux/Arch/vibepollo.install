@@ -2181,6 +2181,12 @@ do_udev_reload() {
   modprobe uhid || true
 }
 
+do_enable_host_input_default() {
+  local helper=/usr/libexec/vibeshine/vibepollo-host-input-default
+  [[ -x "$helper" ]] && "$helper"
+  return 0
+}
+
 do_install_vibeshine_drm() {
   if /usr/libexec/vibeshine/vibeshine-drm-install install-package; then
     return 0
@@ -2364,6 +2370,7 @@ post_install() {
   do_install_vibeshine_drm
   do_install_vibeshine_ds5
   do_install_prelogin || true
+  do_enable_host_input_default
   do_print_next_steps
 }
 
@@ -2375,6 +2382,7 @@ post_upgrade() {
   do_install_vibeshine_drm
   do_install_vibeshine_ds5
   do_install_prelogin || true
+  do_enable_host_input_default
   do_print_next_steps
 }
 

@@ -2489,6 +2489,11 @@ if ! "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibeshine-ds5-install" install;
   echo "warning: DualSense USB haptics are unavailable or require a reboot; see the module error above." >&2
 fi
 
+# Frametop host input is on by default, once; the owner's later choice stands.
+if [ -x "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibepollo-host-input-default" ]; then
+  "@VIBESHINE_PRIVILEGED_LIBEXEC_INSTALL_DIR@/vibepollo-host-input-default" || true
+fi
+
 if [ "$vibepollo_machine_configured" -eq 1 ]; then
   vibepollo_package_prepare_postinstall_start || exit 1
 fi

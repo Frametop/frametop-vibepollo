@@ -5386,9 +5386,10 @@ to its pads) from the emulated host gamepad to the client's physical controller.
 
 ### frametop_host_input
 
-Windows only, off by default. Lends this computer's keyboard and mouse to one Frametop client
-while its headset is worn: see [Frametop host input on Windows](windows-frametop-host-input.md).
-On Linux the `vibepollo-host-input.socket` unit turns it on instead.
+Windows only, on by default (`frametop_host_input = disabled` turns it off). Lends this
+computer's keyboard and mouse to one Frametop client while its headset is worn: see
+[Frametop host input on Windows](windows-frametop-host-input.md). On Linux the
+`vibepollo-host-input.socket` unit does this instead, also on by default.
 
 ### global_state_cmd
 

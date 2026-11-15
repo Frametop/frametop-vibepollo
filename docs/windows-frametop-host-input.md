@@ -6,15 +6,15 @@ lease and the escape hotkey are the same as on Linux (see
 [the Hyprland guide](linux/hyprland.md)); only the way the input is taken
 differs.
 
-## Turning it on
+## Turning it off
 
-It is off until this computer's owner turns it on, in `sunshine.conf`:
+It is on by default. This computer's owner turns it off in `sunshine.conf`:
 
 ```ini
-frametop_host_input = enabled
+frametop_host_input = disabled
 ```
 
-Until then a client asking is told `off`. Once it is turned off again, a lease
+While it is off, a client asking is told `off`. When it is turned off, a lease
 already held lapses within 1.5 s.
 
 ## What it does
@@ -73,7 +73,7 @@ gets the input again on its next renewal once the desktop is back.
   and click on this desktop through Sunshine, so lending it the local keyboard
   and mouse grants nothing new on this computer. What it adds is that this
   computer's own keyboard and mouse stop working here while the lease holds.
-- **Opt-in.** `frametop_host_input` is off by default.
+- **On by default.** `frametop_host_input = disabled` turns it off.
 - **No driver.** Hooks and Raw Input are standard user-mode APIs. Nothing is
   installed (no Interception or filter driver), and the hooks go away with the
   lease, or with the process.
