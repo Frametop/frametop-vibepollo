@@ -211,6 +211,9 @@ jobs:
       # Omarchy's mirror: Frametop's Linux hosts run Omarchy, which trails current Arch (CMake and
       # OpenSSL majors the fork doesn't build with yet).
       arch_mirror: 'https://stable-mirror.omarchy.org/$repo/os/$arch'
+      # The image the release was tested in. Current images are ahead of the mirror (openssl-3
+      # owns libcrypto.so.3 there, so going back to the mirror's openssl conflicts).
+      arch_image: archlinux/archlinux:base-devel-20261027.0.617446
 
   release:
     name: Publish the release

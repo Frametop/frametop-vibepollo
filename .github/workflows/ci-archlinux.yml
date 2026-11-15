@@ -44,6 +44,14 @@ on:
         required: false
         type: string
         default: ''
+      arch_image:
+        description: >-
+          The container image to build in. A pinned image no newer than arch_mirror's packages, as
+          moving an image's packages back to an older mirror can conflict (a renamed package that
+          owns the same files)
+        required: false
+        type: string
+        default: archlinux/archlinux:base-devel
 
 jobs:
   build_archlinux:
@@ -66,7 +74,7 @@ jobs:
       contents: read
     runs-on: ${{ !inputs.validation_only && inputs.use_self_hosted && github.repository == 'Nonary/Vibepollo' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && fromJSON('["self-hosted", "Linux", "X64", "linux-release"]') || inputs.runner }}
     container:
-      image: archlinux/archlinux:base-devel
+      image: ${{ inputs.arch_image }}
     steps:
 
       - name: Update keyring
