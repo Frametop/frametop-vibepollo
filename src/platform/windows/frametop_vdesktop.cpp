@@ -13,11 +13,10 @@
 #include <iterator>
 
 namespace platf::frametop_vdesktop {
-  namespace {
-#ifndef DWM_CLOAKED_SHELL
-    constexpr DWORD DWM_CLOAKED_SHELL = 0x2;
-#endif
-
+  // Not in the anonymous namespace below: there, with no class of this file deriving from them,
+  // GCC takes it that no object of these interfaces can exist and compiles each call through their
+  // vtables to a jump to nowhere (-O2 and up; it crashed Vibepollo on Windows 11 26H2).
+  namespace shell_api {
     // The shell's interfaces, declared here with their ids: the documented one so no SDK version
     // is needed, the others as MScholtes/VirtualDesktop (VirtualDesktop11.cs, V1.21, 2025-08)
     // has them for Windows 11 23H2 and 24H2. Only the leading methods, the ones called: a
@@ -59,6 +58,14 @@ namespace platf::frametop_vdesktop {
       virtual HRESULT STDMETHODCALLTYPE GetCurrentDesktop(desktop_t **desktop) = 0;
       virtual HRESULT STDMETHODCALLTYPE GetDesktops(IObjectArray **desktops) = 0;
     };
+  }  // namespace shell_api
+
+  namespace {
+    using namespace shell_api;
+
+#ifndef DWM_CLOAKED_SHELL
+    constexpr DWORD DWM_CLOAKED_SHELL = 0x2;
+#endif
 
     // Holds one reference.
     template<class T>

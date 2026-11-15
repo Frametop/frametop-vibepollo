@@ -1,7 +1,8 @@
 /**
  * @file tests/unit/platform/windows/test_frametop_vdesktop.cpp
- * @brief Test src/platform/windows/frametop_vdesktop.cpp: desktop ids and the calls that can't
- * reach the shell. Moving windows between desktops needs a signed-in desktop: not tested here.
+ * @brief Test src/platform/windows/frametop_vdesktop.cpp: desktop ids, the calls that can't reach
+ * the shell, and one that asks it (where a shell answers: run in a signed-in session). Moving
+ * windows between desktops changes the user's desktop: not tested here.
  */
 #include "../../../tests_common.h"
 
@@ -14,6 +15,12 @@ namespace {
   // As Vibepollo when it can't get the signed-in user's token.
   bool refuses(const std::function<void()> &) {
     return false;
+  }
+
+  // As Vibepollo when it runs as the user already.
+  bool directly(const std::function<void()> &job) {
+    job();
+    return true;
   }
 }  // namespace
 
@@ -53,6 +60,14 @@ TEST(FrametopVdesktop, WithoutTheUserNothingMoves) {
   EXPECT_FALSE(vdesktop::bring_here(hwnd, refuses, &error).has_value());
   EXPECT_FALSE(error.empty());
   EXPECT_FALSE(vdesktop::send_back(hwnd, GUID {}, refuses));
+}
+
+// The calls through the shell's vtables are made (an -O3 build once compiled them to a jump to
+// nowhere). The desktop's own window is on no virtual desktop, so nothing is elsewhere.
+TEST(FrametopVdesktop, AskingTheShellAboutAWindowReturns) {
+  const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  EXPECT_TRUE(vdesktop::elsewhere({GetDesktopWindow()}, directly).empty());
+  if (SUCCEEDED(com)) CoUninitialize();
 }
 #else
 TEST(FrametopVdesktop, WindowsOnly) {
