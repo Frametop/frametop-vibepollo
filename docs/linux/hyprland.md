@@ -44,12 +44,16 @@ commands. Set `output_name` to an exact physical connector name from display
 enumeration before streaming; empty and numeric output aliases are rejected.
 Capture checks that selected connector's current DRM `HDR_OUTPUT_METADATA`
 state at initialization and before delivering frames. A zero blob or valid
-static metadata with SDR EOTF is required; missing/unreadable metadata,
-unsupported metadata types and every HDR EOTF fail closed. Display enumeration
-alone does not certify SDR state. The user must disable HDR in Hyprland on that
-connector; the host does not change its color pipeline or perform HDR-to-SDR
-conversion. Connectors without a readable standard HDR property are excluded
-from this experimental capture policy. The backend forces KMS and disables the global
+static metadata with SDR EOTF is captured as is. HDR10 (PQ) outputs are tone
+mapped to SDR on the GPU before encoding, with NVENC or VAAPI: SDR content up to
+`hdr_sdr_white_nits` keeps its exact values and brighter highlights are scaled
+down whole, so they keep their hue. Set `hdr_sdr_white_nits` to the output's SDR
+brightness in Hyprland (`sdrMaxLuminance`). The stream itself is always SDR.
+Missing/unreadable metadata, unsupported metadata types, other HDR EOTFs (HLG)
+and PQ outputs under the software or Vulkan encoders fail closed, as does any
+change of that state during a stream, which restarts capture. The host never
+changes the output's color pipeline. Connectors without a readable standard HDR
+property are excluded from this experimental capture policy. The backend forces KMS and disables the global
 private-display default for that host launch. Saved Plasma output topology is
 not applied. Existing managed kernel outputs and configured reserved outputs
 are excluded from capture selection.
@@ -74,22 +78,24 @@ arrangement or fractional scale. If the layout can't be read, the host logs a
 warning and treats each display as if it sat at the top left, unscaled. Rotated
 outputs aren't placed. Touch devices aren't mapped to an output here. The
 display role takes no display power guard here, so the display must already be
-on: if Hyprland's idle handling turns it off, capture fails. HDR outputs fail
-closed as above.
+on: if Hyprland's idle handling turns it off, capture fails. HDR outputs are
+tone mapped, or fail closed, as above.
 
 Frametop's build can also show single app windows of this session as Frametop
 panels. Those come from a second Vibepollo inside the desktop session, not from
 the machine service: see [Frametop app windows](../frametop-app-windows.md).
 
 Frametop's build can also lend this computer's keyboards and mice to one
-Frametop client (Frametop's host input). It is off until this computer's owner
-turns it on:
+Frametop client (Frametop's host input). It is on by default: the package
+turns `vibepollo-host-input.socket` on once, at the first install or the first
+upgrade from a build that shipped it off, and upgrades never turn it back on
+after that. To turn it off:
 
 ```bash
-sudo systemctl enable --now vibepollo-host-input.socket
+sudo systemctl disable --now vibepollo-host-input.socket
 ```
 
-Until then a client asking is told `off`. Once on, the client renews a 1.5 s
+While it is off, a client asking is told `off`. While it is on, the client renews a 1.5 s
 lease on the encrypted control stream (packet `0x3005`) while its headset is
 worn, and only a client allowed both keyboard and mouse input gets one. While a
 lease holds, `vibepollo-host-input.service` grabs the keyboards and mice
