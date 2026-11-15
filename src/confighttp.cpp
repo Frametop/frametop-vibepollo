@@ -6476,6 +6476,8 @@ namespace confighttp {
     // Frametop's window routes ask the desktop (Hyprland's IPC, or Windows' window thread) and can
     // wait on it: off the server thread, so a slow answer doesn't stall the Web UI, and on a thread of
     // their own, in the order they came, so a move or resize never overtakes the one before it.
+    // Open stays on the blocking pool: a launch waits up to 20 s for its app's window, and the
+    // others (a 5 s list, a window pull) mustn't wait behind it.
     thread_pool_util::ThreadPool frametop_windows_pool;
     frametop_windows_pool.start(1);
     clear_token_route_catalog();
@@ -6638,7 +6640,7 @@ namespace confighttp {
 #if defined(__linux__) || defined(_WIN32)
     register_blocking_api_route("^/api/frametop/windows$", "GET", getFrametopWindows, &frametop_windows_pool);
     register_blocking_api_route("^/api/frametop/windows/apps$", "GET", getFrametopWindowApps, &frametop_windows_pool);
-    register_blocking_api_route("^/api/frametop/windows/open$", "POST", postFrametopWindowOpen, &frametop_windows_pool);
+    register_blocking_api_route("^/api/frametop/windows/open$", "POST", postFrametopWindowOpen);
     register_blocking_api_route("^/api/frametop/windows/resize$", "POST", postFrametopWindowResize, &frametop_windows_pool);
     register_blocking_api_route("^/api/frametop/windows/at$", "POST", postFrametopWindowAt, &frametop_windows_pool);
     register_blocking_api_route("^/api/frametop/windows/release$", "POST", postFrametopWindowRelease, &frametop_windows_pool);
