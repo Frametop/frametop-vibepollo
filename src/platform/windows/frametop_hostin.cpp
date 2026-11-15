@@ -383,14 +383,16 @@ namespace platf::frametop_hostin {
         CloseDesktop(desktop);
         return hook_e::hooked;
       }
-      // A thread with no windows or hooks may move.
-      if (SetThreadDesktop(desktop)) {
-        if (desktop_ && desktop_ != desktop) CloseDesktop(desktop_);
-        desktop_ = desktop;
-      } else {
-        log("couldn't move to the input desktop: "s + std::to_string(GetLastError()));
+      // A thread with no windows or hooks may move. Hooks set from any other desktop would see
+      // none of the input, so not moving fails the take.
+      if (!SetThreadDesktop(desktop)) {
+        if (!hook_failure_logged_) log("couldn't move to the input desktop: "s + std::to_string(GetLastError()));
+        hook_failure_logged_ = true;
         CloseDesktop(desktop);
+        return hook_e::failed;
       }
+      if (desktop_ && desktop_ != desktop) CloseDesktop(desktop_);
+      desktop_ = desktop;
       const HINSTANCE module = GetModuleHandleW(nullptr);
       keyboard_hook_ = SetWindowsHookExW(WH_KEYBOARD_LL, keyboard_hook, module, 0);
       mouse_hook_ = SetWindowsHookExW(WH_MOUSE_LL, mouse_hook, module, 0);

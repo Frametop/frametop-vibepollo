@@ -750,6 +750,11 @@ namespace platf::hyprland_windows {
   }
 
   std::optional<nlohmann::json> at(const std::string &monitor, double u, double v, std::string *error) {
+    // As on Windows: a point off the monitor (or none: the route sends -1) is an error, not its edge.
+    if (!(u >= 0 && u <= 1 && v >= 0 && v <= 1)) {
+      *error = "x and y must be 0 to 1";
+      return std::nullopt;
+    }
     std::lock_guard guard {lock};
     std::optional<nlohmann::json> m;
     if (!window_output(monitor)) m = find_monitor(monitor);
