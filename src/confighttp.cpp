@@ -6473,6 +6473,11 @@ namespace confighttp {
     blocking_route_pool.start(1);
     thread_pool_util::ThreadPool metadata_route_pool;
     metadata_route_pool.start(1);
+    // Frametop's window routes ask the desktop (Hyprland's IPC, or Windows' window thread) and can
+    // wait on it: off the server thread, so a slow answer doesn't stall the Web UI, and on a thread of
+    // their own, in the order they came, so a move or resize never overtakes the one before it.
+    thread_pool_util::ThreadPool frametop_windows_pool;
+    frametop_windows_pool.start(1);
     clear_token_route_catalog();
     auto register_api_route = [&](const char *pattern, const char *method, const auto &handler, bool stream_start = false) {
       server.resource[pattern][method] = [method, handler, stream_start](resp_https_t response, req_https_t request) {
@@ -6631,12 +6636,12 @@ namespace confighttp {
     register_api_route("^/api/steam/force_sync$", "POST", postSteamForceSync);
     register_api_route("^/api/steam/launch$", "POST", postSteamLaunch);
 #if defined(__linux__) || defined(_WIN32)
-    register_api_route("^/api/frametop/windows$", "GET", getFrametopWindows);
-    register_api_route("^/api/frametop/windows/apps$", "GET", getFrametopWindowApps);
-    register_blocking_api_route("^/api/frametop/windows/open$", "POST", postFrametopWindowOpen);
-    register_api_route("^/api/frametop/windows/resize$", "POST", postFrametopWindowResize);
-    register_api_route("^/api/frametop/windows/at$", "POST", postFrametopWindowAt);
-    register_api_route("^/api/frametop/windows/release$", "POST", postFrametopWindowRelease);
+    register_blocking_api_route("^/api/frametop/windows$", "GET", getFrametopWindows, &frametop_windows_pool);
+    register_blocking_api_route("^/api/frametop/windows/apps$", "GET", getFrametopWindowApps, &frametop_windows_pool);
+    register_blocking_api_route("^/api/frametop/windows/open$", "POST", postFrametopWindowOpen, &frametop_windows_pool);
+    register_blocking_api_route("^/api/frametop/windows/resize$", "POST", postFrametopWindowResize, &frametop_windows_pool);
+    register_blocking_api_route("^/api/frametop/windows/at$", "POST", postFrametopWindowAt, &frametop_windows_pool);
+    register_blocking_api_route("^/api/frametop/windows/release$", "POST", postFrametopWindowRelease, &frametop_windows_pool);
 #endif
 #ifdef __linux__
     register_api_route("^/api/lutris/status$", "GET", getLutrisStatus);
@@ -6721,8 +6726,10 @@ namespace confighttp {
     tcp.join();
     blocking_route_pool.stop();
     metadata_route_pool.stop();
+    frametop_windows_pool.stop();
     blocking_route_pool.join();
     metadata_route_pool.join();
+    frametop_windows_pool.join();
     webrtc_stream::shutdown_all_sessions();
     // std::jthread (cleanup_thread) auto-joins on destruction, no need for joinable/join
   }
