@@ -63,10 +63,13 @@ namespace frametop_hostin::policy {
     if (payload.size() < 2 || std::uint8_t(payload[0]) != VERSION) return std::nullopt;
     const auto action = std::uint8_t(payload[1]);
     if ((action == lease_t::release || action == lease_t::drop) && payload.size() == 2) return lease_t {lease_t::action_e(action)};
-    if (action != lease_t::engage || payload.size() != 8) return std::nullopt;
+    if (action != lease_t::engage || (payload.size() != 8 && payload.size() != 9)) return std::nullopt;
     const auto ms = std::uint16_t(std::uint8_t(payload[6]) | std::uint8_t(payload[7]) << 8);
     if (!ms) return std::nullopt;
-    return lease_t {lease_t::engage, le32(payload, 2), std::min(std::chrono::milliseconds {ms}, MAX_LEASE)};
+    // A client from before the kinds byte asks for both.
+    const auto kinds = payload.size() == 9 ? std::uint8_t(payload[8]) : std::uint8_t(KEYBOARD | MOUSE);
+    if (!kinds || (kinds & ~(KEYBOARD | MOUSE))) return std::nullopt;
+    return lease_t {lease_t::engage, le32(payload, 2), std::min(std::chrono::milliseconds {ms}, MAX_LEASE), kinds};
   }
 
   std::optional<service_state_t> parse_service_state(std::string_view message) {

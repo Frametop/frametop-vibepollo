@@ -111,6 +111,14 @@ taken are ever opened. A device is grabbed only once no key is held on it (a key
 and brightness keys stay here: they are typed again on a uinput device of the
 service's own.
 
+A client can ask for the keyboards or the mice alone (Frametop's Keyboard and
+Mouse switches): the other kind then stays here and works as usual. A device
+that is both on one node (a keyboard with a pointer on it) is one device to the
+kernel's grab, so only a lease for both takes it. With the mice alone, the
+keyboards are read here too, without taking them, only for the escape below.
+Switching kinds during a lease gives back the devices it no longer takes (what
+they held on the client comes up there) and takes the rest.
+
 A touchpad's settings come from `VIBEPOLLO_HOST_INPUT_TOUCHPAD` in the
 service's environment: `tap=on|off`, `natural=on|off`, `click=fingers|areas`
 and `scroll=FACTOR` (0.05 to 10). The defaults are Hyprland's (tap on, natural

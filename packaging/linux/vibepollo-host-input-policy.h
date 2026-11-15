@@ -86,6 +86,32 @@ static inline enum vibepollo_host_input_kind vibepollo_host_input_kind_of(const 
   return caps->keys_letters || (caps->rel_xy && caps->btn_left) ? VIBEPOLLO_HOST_INPUT_EVDEV : VIBEPOLLO_HOST_INPUT_SKIP;
 }
 
+// The kinds a lease asks for and a device is (the host's KEYBOARD and MOUSE bits).
+#define VIBEPOLLO_HOST_INPUT_LENDS_KEYBOARD 1
+#define VIBEPOLLO_HOST_INPUT_LENDS_MOUSE 2
+#define VIBEPOLLO_HOST_INPUT_LENDS_BOTH (VIBEPOLLO_HOST_INPUT_LENDS_KEYBOARD | VIBEPOLLO_HOST_INPUT_LENDS_MOUSE)
+
+// What a device kind_of takes is: a keyboard (letter keys), a mouse (a touchpad, or relative X/Y
+// with a left button), or both on one node.
+static inline uint8_t vibepollo_host_input_kinds_of(const struct vibepollo_host_input_caps *caps) {
+  switch (vibepollo_host_input_kind_of(caps)) {
+    case VIBEPOLLO_HOST_INPUT_TOUCHPAD:
+      return VIBEPOLLO_HOST_INPUT_LENDS_MOUSE;
+    case VIBEPOLLO_HOST_INPUT_EVDEV:
+      return (uint8_t) ((caps->keys_letters ? VIBEPOLLO_HOST_INPUT_LENDS_KEYBOARD : 0) |
+                        (caps->rel_xy && caps->btn_left ? VIBEPOLLO_HOST_INPUT_LENDS_MOUSE : 0));
+    default:
+      return 0;
+  }
+}
+
+// Whether a lease for LEASED takes a device that is KINDS. A node that is both (a keyboard with a
+// pointer on it) is one device to the kernel's grab, so only a lease for both takes it: lent for
+// one kind, its other would stop working on this computer.
+static inline bool vibepollo_host_input_lends(uint8_t leased, uint8_t kinds) {
+  return kinds && !(kinds & (uint8_t) ~leased);
+}
+
 // After the kernel dropped a device's events (SYN_DROPPED): which of the keys that went down to
 // the Frame are up now (held and not in EVIOCGKEY's), into lost.
 static inline void vibepollo_host_input_lost_keys(
@@ -233,7 +259,8 @@ static inline bool vibepollo_host_input_escape_step(
   return false;
 }
 
-// The host's messages: exactly "engage", "release" or "drop". Anything else ends the connection.
+// The host's messages: exactly "engage" (keyboards and mice), "engage keyboard", "engage mouse",
+// "release" or "drop". Anything else ends the connection.
 enum vibepollo_host_input_request {
   VIBEPOLLO_HOST_INPUT_REQUEST_INVALID = 0,
   VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE,
@@ -241,8 +268,21 @@ enum vibepollo_host_input_request {
   VIBEPOLLO_HOST_INPUT_REQUEST_DROP,
 };
 
-static inline enum vibepollo_host_input_request vibepollo_host_input_parse_request(const char *data, size_t length) {
-  if (length == 6 && !memcmp(data, "engage", 6)) return VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE;
+// An engage's kinds go to *kinds.
+static inline enum vibepollo_host_input_request vibepollo_host_input_parse_request(const char *data, size_t length, uint8_t *kinds) {
+  *kinds = 0;
+  if (length == 6 && !memcmp(data, "engage", 6)) {
+    *kinds = VIBEPOLLO_HOST_INPUT_LENDS_BOTH;
+    return VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE;
+  }
+  if (length == 15 && !memcmp(data, "engage keyboard", 15)) {
+    *kinds = VIBEPOLLO_HOST_INPUT_LENDS_KEYBOARD;
+    return VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE;
+  }
+  if (length == 12 && !memcmp(data, "engage mouse", 12)) {
+    *kinds = VIBEPOLLO_HOST_INPUT_LENDS_MOUSE;
+    return VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE;
+  }
   if (length == 7 && !memcmp(data, "release", 7)) return VIBEPOLLO_HOST_INPUT_REQUEST_RELEASE;
   if (length == 4 && !memcmp(data, "drop", 4)) return VIBEPOLLO_HOST_INPUT_REQUEST_DROP;
   return VIBEPOLLO_HOST_INPUT_REQUEST_INVALID;
@@ -253,6 +293,7 @@ static inline enum vibepollo_host_input_request vibepollo_host_input_parse_reque
 struct vibepollo_host_input_lease {
   bool engaged;
   bool escaped;
+  uint8_t kinds;  // while engaged: what it takes (VIBEPOLLO_HOST_INPUT_LENDS_*)
   int64_t until;  // ms, CLOCK_MONOTONIC
 };
 
@@ -261,18 +302,23 @@ enum vibepollo_host_input_step {
   VIBEPOLLO_HOST_INPUT_TAKE,  // take the devices, and say "state engaged"
   VIBEPOLLO_HOST_INPUT_GIVE_BACK,  // give them back, and say "state released host"
   VIBEPOLLO_HOST_INPUT_STILL_ESCAPED,  // say "state released escape"
+  VIBEPOLLO_HOST_INPUT_CHANGE,  // engaged, for other kinds now: give back the devices it no
+                                // longer takes, take the new ones
 };
 
 static inline enum vibepollo_host_input_step vibepollo_host_input_lease_request(
-  struct vibepollo_host_input_lease *lease, enum vibepollo_host_input_request request, int64_t now
+  struct vibepollo_host_input_lease *lease, enum vibepollo_host_input_request request, uint8_t kinds, int64_t now
 ) {
   switch (request) {
-    case VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE:
+    case VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE: {
       if (lease->escaped) return VIBEPOLLO_HOST_INPUT_STILL_ESCAPED;
       lease->until = now + VIBEPOLLO_HOST_INPUT_LEASE_MS;
-      if (lease->engaged) return VIBEPOLLO_HOST_INPUT_STAY;
+      if (lease->engaged && lease->kinds == kinds) return VIBEPOLLO_HOST_INPUT_STAY;
+      const bool change = lease->engaged;
       lease->engaged = true;
-      return VIBEPOLLO_HOST_INPUT_TAKE;
+      lease->kinds = kinds;
+      return change ? VIBEPOLLO_HOST_INPUT_CHANGE : VIBEPOLLO_HOST_INPUT_TAKE;
+    }
     case VIBEPOLLO_HOST_INPUT_REQUEST_RELEASE:
       lease->escaped = false;
       // fall through

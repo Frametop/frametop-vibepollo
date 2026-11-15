@@ -88,6 +88,10 @@ namespace frametop_hostin {
         return off_ ? "off" : "service";
       }
 
+      bool lends_by_kind() const override {
+        return true;  // vibepollo-host-input takes only the devices of the kinds asked for
+      }
+
       std::uint64_t connection() const override {
         return connection_ ? connection_->id : 0;
       }

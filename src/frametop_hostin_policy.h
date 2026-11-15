@@ -17,9 +17,10 @@
  *     permission, overflow, dropped, stalled, closed, off, service, unsupported, and secure:
  *     a Windows host's secure desktop or lock screen has its input).
  *   - hello (3): the kinds it lends (bit 1 keyboard, bit 2 mouse), then this host's name.
- * - Client -> host, 0x3005: version (1), then engage (1) with a u32 sequence and a u16 lease
- *   in milliseconds; release (2), which also lifts the host's escape; or drop (3), which gives the
- *   input back but leaves an escape in place.
+ * - Client -> host, 0x3005: version (1), then engage (1) with a u32 sequence, a u16 lease
+ *   in milliseconds and, optionally, the kinds it asks for (bit 1 keyboard, bit 2 mouse; without
+ *   it, both: what clients from before it send); release (2), which also lifts the host's escape;
+ *   or drop (3), which gives the input back but leaves an escape in place.
  *
  * Both only on the encrypted control stream.
  */
@@ -60,6 +61,7 @@ namespace frametop_hostin::policy {
     } action = release;
     std::uint32_t sequence = 0;
     std::chrono::milliseconds duration {0};  ///< capped at MAX_LEASE
+    std::uint8_t kinds = 0;  ///< engage: KEYBOARD, MOUSE or both
     friend bool operator==(const lease_t &, const lease_t &) = default;
   };
 

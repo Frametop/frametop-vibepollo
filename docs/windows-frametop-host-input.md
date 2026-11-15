@@ -22,7 +22,9 @@ already held lapses within 1.5 s.
 The client renews a 1.5 s lease on the encrypted control stream (packet
 `0x3005`) while its headset is worn. Only a client allowed both keyboard and
 mouse input gets one, and one client at a time; another is told it's busy.
-While a lease holds:
+A lease for the keyboard or the mouse alone (Frametop's Keyboard and Mouse
+switches) is refused (`unsupported`) on Windows for now: the hooks would take
+both. Only Linux hosts lend one kind. While a lease holds:
 
 - Low-level keyboard and mouse hooks (`WH_KEYBOARD_LL`, `WH_MOUSE_LL`) take
   every hardware key, button, wheel and pointer event, so Windows and its apps

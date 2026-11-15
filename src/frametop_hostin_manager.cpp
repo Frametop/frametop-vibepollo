@@ -36,7 +36,7 @@ namespace frametop_hostin {
 
   void manager_t::tell(const void *session, bool engaged, std::string_view reason) {
     if (push(session, policy::state_payload(engaged, reason)) && engaged) {
-      push(session, policy::hello_payload(policy::KEYBOARD | policy::MOUSE, host_name_));
+      push(session, policy::hello_payload(kinds_, host_name_));
     }
   }
 
@@ -91,6 +91,12 @@ namespace frametop_hostin {
       return tell(session, false, "host");
     }
     if (owner_ && owner_ != session) return refuse(session, "busy", now);
+    const bool both = lease->kinds == (policy::KEYBOARD | policy::MOUSE);
+    if (!both && !service_.lends_by_kind()) {
+      // It would take both: the one the client keeps for this computer too.
+      if (owner_ == session) give_back("drop", "unsupported");
+      return refuse(session, "unsupported", now);
+    }
     const bool asking = owner_ != session;
     if (asking) {
       owner_ = session;
@@ -100,13 +106,17 @@ namespace frametop_hostin {
       log("a client asks for this computer's keyboard and mouse");
     }
     until_ = now + lease->duration;
+    const bool changed = !asking && kinds_ != lease->kinds;
+    kinds_ = lease->kinds;
+    // At once, so the client drops the device of a kind it no longer has.
+    if (changed && engaged_) tell(session, true, {});
     if (escaped_) {
       // Kept here too, so a service that started again doesn't hand the input straight back.
       reason_ = "escape";
       if (asking) tell(session, false, reason_);
       return;
     }
-    if (!service_.send("engage")) {
+    if (!service_.send(both ? "engage" : kinds_ == policy::KEYBOARD ? "engage keyboard" : "engage mouse")) {
       owner_ = nullptr;
       engaged_ = false;
       refuse(session, service_.unavailable(), now);
@@ -156,7 +166,10 @@ namespace frametop_hostin {
       return;
     }
     if (!owner_ || !engaged_) return;
-    if (auto events = policy::events_payload(message)) push(owner_, std::move(*events));
+    // Only the kinds its lease asks for: a key-up of one it gave up goes with that device's
+    // hostbye on the client.
+    auto events = policy::events_payload(message);
+    if (events && (std::uint8_t((*events)[2]) & kinds_)) push(owner_, std::move(*events));
   }
 
   void manager_t::service_gone(std::uint64_t connection) {

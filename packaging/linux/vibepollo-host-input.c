@@ -6,6 +6,9 @@
 // From the host, one message per packet:
 //   engage    a lease: keyboards and mice are taken until VIBEPOLLO_HOST_INPUT_LEASE_MS after
 //             the last one
+//   engage keyboard | engage mouse    a lease for keyboards or mice only: the other kind stays
+//             here, and a node that is both too. One for other kinds than the last gives back
+//             what it no longer takes and takes the rest
 //   release   give them back now, and lift an escape
 //   drop      give them back now, but keep an escape (the client went, or its lease lapsed)
 // To the host:
@@ -31,7 +34,8 @@
 // logged.
 //
 // The host can't read input without taking it: while it has a lease, this computer's keyboard and
-// mouse visibly stop working here.
+// mouse visibly stop working here. With a lease for mice only, the keyboards stay here but are read
+// too (not taken), for the escape alone: their keys go nowhere else.
 
 #define _GNU_SOURCE
 
@@ -67,6 +71,7 @@ struct device {
   dev_t rdev;
   bool grabbed;
   bool touchpad;
+  uint8_t kinds;  // VIBEPOLLO_HOST_INPUT_LENDS_*: what a lease must ask for to take it
   bool pad_failed;  // libinput couldn't add it: left alone until it is plugged in again
   char name[64];
   char path[32];
@@ -88,6 +93,23 @@ static struct vibepollo_host_input_lease lease;
 static int64_t rescan_at;
 static bool stalled;  // a message couldn't go: the host stopped reading
 static bool escape_check;  // a device caught up: is the escape held now? (see settled)
+
+// Whether the lease takes this device, once nothing is held on it.
+static bool lent(const struct device *device) {
+  return vibepollo_host_input_lends(lease.kinds, device->kinds);
+}
+
+// A keyboard the lease leaves here, read (not taken) only for the escape: a lease for mice can
+// still be taken back from this computer's keyboard.
+static bool watched(const struct device *device) {
+  return lease.engaged && !device->grabbed && !device->touchpad && (device->kinds & VIBEPOLLO_HOST_INPUT_LENDS_KEYBOARD) &&
+         !lent(device);
+}
+
+// Read here: taken (a touchpad's events come through libinput), or watched.
+static bool read_here(const struct device *device) {
+  return (device->grabbed && !device->touchpad) || watched(device);
+}
 
 static void say(const char *format, ...) __attribute__((format(printf, 1, 2)));
 static void say(const char *format, ...) {
@@ -278,7 +300,7 @@ static bool add_pad(struct device *device);
 
 // Takes a device once nothing is held on it, so no key stays down on either side.
 static void try_grab(struct device *device) {
-  if (device->grabbed || any_key_down(device->fd)) return;
+  if (device->grabbed || !lent(device) || any_key_down(device->fd)) return;
 #ifdef VIBEPOLLO_HOST_INPUT_LIBINPUT
   if (device->touchpad) {
     if (device->pad_failed || !add_pad(device)) return;
@@ -298,9 +320,11 @@ static void try_grab(struct device *device) {
     return;
   }
   device->grabbed = true;
-  // Events from before the grab went to the desktop too.
+  // Events from before the grab went to the desktop too. Nothing is held now, so neither is any
+  // part of the escape (a Shift let go while it wasn't read would otherwise still count).
   struct input_event events[64];
   while (read(device->fd, events, sizeof events) > 0) {}
+  memset(&device->escape, 0, sizeof device->escape);
   say("took %s", device->name);
 }
 
@@ -381,6 +405,7 @@ static void scan(void) {
     device->fd = fd;
     device->rdev = st.st_rdev;
     device->touchpad = kind == VIBEPOLLO_HOST_INPUT_TOUCHPAD;
+    device->kinds = vibepollo_host_input_kinds_of(&caps);
     snprintf(device->path, sizeof device->path, "/dev/input/%s", entry->d_name);
     if (ioctl(fd, EVIOCGNAME(sizeof device->name - 1), device->name) < 0) strcpy(device->name, "?");
     for (char *c = device->name; *c; ++c)
@@ -449,7 +474,7 @@ static bool settled(void) {
   nfds_t count = 0;
   for (size_t i = 0; i < device_count; ++i) {
     const struct vibepollo_host_input_escape *escape = &devices[i].escape;
-    if (devices[i].grabbed && (escape->left_shift || escape->right_shift || escape->escape))
+    if (read_here(&devices[i]) && (escape->left_shift || escape->right_shift || escape->escape))
       polls[count++] = (struct pollfd) {.fd = devices[i].fd, .events = POLLIN};
   }
   return poll(polls, count, 0) == 0;
@@ -599,6 +624,33 @@ static void pad_events(void) {
 }
 #endif
 
+// The lease no longer takes it: what went to the Frame from it comes up there, and it is this
+// computer's again (still open: watched, or taken again by a later lease).
+static void ungrab(struct device *device) {
+  lift(device);
+#ifdef VIBEPOLLO_HOST_INPUT_LIBINPUT
+  if (device->touchpad) {
+    remove_pad(device);
+    say("gave back %s", device->name);
+    return;
+  }
+#endif
+  (void) ioctl(device->fd, EVIOCGRAB, 0);
+  device->grabbed = false;
+  say("gave back %s", device->name);
+}
+
+// The lease asks for other kinds now: give back what it no longer takes; the rest is taken as it
+// is free (the main loop's try_grab). Still engaged, so no state changes.
+static void retake(void) {
+  for (size_t i = 0; i < device_count; ++i)
+    if (devices[i].grabbed && !lent(&devices[i])) ungrab(&devices[i]);
+  for (size_t i = 0; i < device_count; ++i) try_grab(&devices[i]);
+  say("now lends %s", lease.kinds == VIBEPOLLO_HOST_INPUT_LENDS_BOTH  ? "keyboards and mice"
+                      : lease.kinds == VIBEPOLLO_HOST_INPUT_LENDS_MOUSE ? "mice only"
+                                                                         : "keyboards only");
+}
+
 // One device's events. False when the device went away.
 static bool read_device(struct device *device) {
   struct input_event events[64];
@@ -631,6 +683,7 @@ static bool read_device(struct device *device) {
         escape_now();  // this device too
         return true;
       }
+      if (!device->grabbed) continue;  // watched: its keys are this computer's
       switch (vibepollo_host_input_route_event(event->type, event->code, event->value)) {
         case VIBEPOLLO_HOST_INPUT_KEEP:
           if (event->value == 0 || event->value == 1) set_bit(device->kept, event->code, event->value == 1);
@@ -664,14 +717,18 @@ static bool serve_request(void) {
   const ssize_t n = recv(host, request, sizeof request, MSG_DONTWAIT);
   if (n < 0 && (errno == EAGAIN || errno == EINTR)) return true;
   if (n <= 0) return false;
-  const enum vibepollo_host_input_request parsed = vibepollo_host_input_parse_request(request, (size_t) n);
+  uint8_t kinds;
+  const enum vibepollo_host_input_request parsed = vibepollo_host_input_parse_request(request, (size_t) n, &kinds);
   if (parsed == VIBEPOLLO_HOST_INPUT_REQUEST_INVALID) {
     say("an unknown request: the connection ends");
     return false;
   }
-  switch (vibepollo_host_input_lease_request(&lease, parsed, now_ms())) {
+  switch (vibepollo_host_input_lease_request(&lease, parsed, kinds, now_ms())) {
     case VIBEPOLLO_HOST_INPUT_TAKE:
       take();
+      break;
+    case VIBEPOLLO_HOST_INPUT_CHANGE:
+      retake();
       break;
     case VIBEPOLLO_HOST_INPUT_GIVE_BACK:
       give_back("host");
@@ -721,15 +778,15 @@ int main(void) {
     struct pollfd polls[2 + VIBEPOLLO_HOST_INPUT_MAX_DEVICES];
     polls[0] = (struct pollfd) {.fd = host, .events = POLLIN | (control_count ? POLLOUT : 0)};
     for (size_t i = 0; i < device_count; ++i) {
-      const bool read_here = devices[i].grabbed && !devices[i].touchpad;
-      polls[1 + i] = (struct pollfd) {.fd = devices[i].fd, .events = read_here ? POLLIN : 0};
+      polls[1 + i] = (struct pollfd) {.fd = devices[i].fd, .events = read_here(&devices[i]) ? POLLIN : 0};
     }
     int timeout = -1;
     if (lease.engaged) {
       const int64_t now = now_ms();
       int64_t next = lease.until < rescan_at ? lease.until : rescan_at;
       for (size_t i = 0; i < device_count; ++i)
-        if (!devices[i].grabbed && !devices[i].pad_failed && now + 100 < next) next = now + 100;  // waiting for its keys to come up
+        if (!devices[i].grabbed && lent(&devices[i]) && !devices[i].pad_failed && now + 100 < next)
+          next = now + 100;  // waiting for its keys to come up
       timeout = next > now ? (int) (next - now) : 0;
     }
     const nfds_t count = 1 + device_count;

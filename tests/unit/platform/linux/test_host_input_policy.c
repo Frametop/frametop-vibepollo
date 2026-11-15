@@ -6,6 +6,9 @@
 #include <assert.h>
 
 #define BITS_FOR_TEST 8
+#define BOTH VIBEPOLLO_HOST_INPUT_LENDS_BOTH
+#define KEYBOARD VIBEPOLLO_HOST_INPUT_LENDS_KEYBOARD
+#define MOUSE VIBEPOLLO_HOST_INPUT_LENDS_MOUSE
 
 static void takes_keyboards_mice_and_touchpads_only(void) {
   const struct vibepollo_host_input_caps keyboard = {.keys_letters = true};
@@ -38,6 +41,15 @@ static void takes_keyboards_mice_and_touchpads_only(void) {
   assert(vibepollo_host_input_kind_of(&nothing) == VIBEPOLLO_HOST_INPUT_SKIP);
   assert(vibepollo_host_input_kind_of(&keyboard_with_mouse) == VIBEPOLLO_HOST_INPUT_EVDEV);
   assert(vibepollo_host_input_kind_of(&touch_keyboard) == VIBEPOLLO_HOST_INPUT_SKIP);
+
+  // What each is, for a lease of one kind.
+  assert(vibepollo_host_input_kinds_of(&keyboard) == VIBEPOLLO_HOST_INPUT_LENDS_KEYBOARD);
+  assert(vibepollo_host_input_kinds_of(&mouse) == VIBEPOLLO_HOST_INPUT_LENDS_MOUSE);
+  assert(vibepollo_host_input_kinds_of(&touchpad) == VIBEPOLLO_HOST_INPUT_LENDS_MOUSE);
+  assert(vibepollo_host_input_kinds_of(&touchpad_with_rel) == VIBEPOLLO_HOST_INPUT_LENDS_MOUSE);
+  assert(vibepollo_host_input_kinds_of(&keyboard_with_mouse) == BOTH);
+  assert(vibepollo_host_input_kinds_of(&touchscreen) == 0);
+  assert(vibepollo_host_input_kinds_of(&passthrough) == 0);
 }
 
 static void parses_sysfs_bitmaps(void) {
@@ -195,10 +207,10 @@ static void escape_needs_both_shifts(void) {
 
 static void leases_and_the_escape_latch(void) {
   struct vibepollo_host_input_lease lease = {0};
-  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, 1000) == VIBEPOLLO_HOST_INPUT_TAKE);
+  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, BOTH, 1000) == VIBEPOLLO_HOST_INPUT_TAKE);
   assert(lease.engaged && lease.until == 1000 + VIBEPOLLO_HOST_INPUT_LEASE_MS);
   // A renewal keeps them and moves the end.
-  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, 1500) == VIBEPOLLO_HOST_INPUT_STAY);
+  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, BOTH, 1500) == VIBEPOLLO_HOST_INPUT_STAY);
   assert(lease.until == 1500 + VIBEPOLLO_HOST_INPUT_LEASE_MS);
   assert(!vibepollo_host_input_lease_lapsed(&lease, 1500 + VIBEPOLLO_HOST_INPUT_LEASE_MS - 1));
   assert(vibepollo_host_input_lease_lapsed(&lease, 1500 + VIBEPOLLO_HOST_INPUT_LEASE_MS));
@@ -206,33 +218,69 @@ static void leases_and_the_escape_latch(void) {
   assert(!vibepollo_host_input_lease_lapsed(&lease, 99999));  // once
 
   // Release and drop give them back; with nothing taken they do nothing.
-  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, 5000) == VIBEPOLLO_HOST_INPUT_TAKE);
-  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_DROP, 5100) == VIBEPOLLO_HOST_INPUT_GIVE_BACK);
-  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_DROP, 5200) == VIBEPOLLO_HOST_INPUT_STAY);
-  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_RELEASE, 5300) == VIBEPOLLO_HOST_INPUT_STAY);
+  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, BOTH, 5000) == VIBEPOLLO_HOST_INPUT_TAKE);
+  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_DROP, BOTH, 5100) == VIBEPOLLO_HOST_INPUT_GIVE_BACK);
+  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_DROP, BOTH, 5200) == VIBEPOLLO_HOST_INPUT_STAY);
+  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_RELEASE, BOTH, 5300) == VIBEPOLLO_HOST_INPUT_STAY);
 
   // The escape: refused until a release, which drop isn't.
-  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, 6000) == VIBEPOLLO_HOST_INPUT_TAKE);
+  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, BOTH, 6000) == VIBEPOLLO_HOST_INPUT_TAKE);
   vibepollo_host_input_lease_escape(&lease);
   assert(!lease.engaged && lease.escaped);
   assert(!vibepollo_host_input_lease_lapsed(&lease, 99999));
-  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, 6100) == VIBEPOLLO_HOST_INPUT_STILL_ESCAPED);
+  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, BOTH, 6100) == VIBEPOLLO_HOST_INPUT_STILL_ESCAPED);
   assert(!lease.engaged);
-  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_DROP, 6200) == VIBEPOLLO_HOST_INPUT_STAY);
-  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, 6300) == VIBEPOLLO_HOST_INPUT_STILL_ESCAPED);
-  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_RELEASE, 6400) == VIBEPOLLO_HOST_INPUT_STAY);
+  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_DROP, BOTH, 6200) == VIBEPOLLO_HOST_INPUT_STAY);
+  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, BOTH, 6300) == VIBEPOLLO_HOST_INPUT_STILL_ESCAPED);
+  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_RELEASE, BOTH, 6400) == VIBEPOLLO_HOST_INPUT_STAY);
   assert(!lease.escaped);
-  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, 6500) == VIBEPOLLO_HOST_INPUT_TAKE);
+  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, BOTH, 6500) == VIBEPOLLO_HOST_INPUT_TAKE);
+}
+
+static enum vibepollo_host_input_request request(const char *text, uint8_t *kinds) {
+  return vibepollo_host_input_parse_request(text, strlen(text), kinds);
 }
 
 static void accepts_exact_requests(void) {
-  assert(vibepollo_host_input_parse_request("engage", 6) == VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE);
-  assert(vibepollo_host_input_parse_request("release", 7) == VIBEPOLLO_HOST_INPUT_REQUEST_RELEASE);
-  assert(vibepollo_host_input_parse_request("drop", 4) == VIBEPOLLO_HOST_INPUT_REQUEST_DROP);
-  assert(vibepollo_host_input_parse_request("engage\n", 7) == VIBEPOLLO_HOST_INPUT_REQUEST_INVALID);
-  assert(vibepollo_host_input_parse_request("engag", 5) == VIBEPOLLO_HOST_INPUT_REQUEST_INVALID);
-  assert(vibepollo_host_input_parse_request("dropx", 5) == VIBEPOLLO_HOST_INPUT_REQUEST_INVALID);
-  assert(vibepollo_host_input_parse_request("", 0) == VIBEPOLLO_HOST_INPUT_REQUEST_INVALID);
+  uint8_t kinds;
+  assert(request("engage", &kinds) == VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE && kinds == BOTH);
+  assert(request("engage keyboard", &kinds) == VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE && kinds == KEYBOARD);
+  assert(request("engage mouse", &kinds) == VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE && kinds == MOUSE);
+  assert(request("release", &kinds) == VIBEPOLLO_HOST_INPUT_REQUEST_RELEASE && kinds == 0);
+  assert(request("drop", &kinds) == VIBEPOLLO_HOST_INPUT_REQUEST_DROP);
+  assert(request("engage\n", &kinds) == VIBEPOLLO_HOST_INPUT_REQUEST_INVALID);
+  assert(request("engag", &kinds) == VIBEPOLLO_HOST_INPUT_REQUEST_INVALID);
+  assert(request("engage keyboards", &kinds) == VIBEPOLLO_HOST_INPUT_REQUEST_INVALID);
+  assert(request("engage mouse ", &kinds) == VIBEPOLLO_HOST_INPUT_REQUEST_INVALID);
+  assert(request("engage both", &kinds) == VIBEPOLLO_HOST_INPUT_REQUEST_INVALID);
+  assert(request("dropx", &kinds) == VIBEPOLLO_HOST_INPUT_REQUEST_INVALID);
+  assert(request("", &kinds) == VIBEPOLLO_HOST_INPUT_REQUEST_INVALID);
+}
+
+static void leases_one_kind(void) {
+  struct vibepollo_host_input_lease lease = {0};
+  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, MOUSE, 1000) == VIBEPOLLO_HOST_INPUT_TAKE);
+  assert(lease.kinds == MOUSE);
+  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, MOUSE, 1500) == VIBEPOLLO_HOST_INPUT_STAY);
+  // Other kinds: a change, and the end moves as for any renewal.
+  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, BOTH, 2000) == VIBEPOLLO_HOST_INPUT_CHANGE);
+  assert(lease.engaged && lease.kinds == BOTH && lease.until == 2000 + VIBEPOLLO_HOST_INPUT_LEASE_MS);
+  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, KEYBOARD, 2500) == VIBEPOLLO_HOST_INPUT_CHANGE);
+  // After a give-back the next engage takes, whatever the kinds.
+  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_DROP, 0, 3000) == VIBEPOLLO_HOST_INPUT_GIVE_BACK);
+  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, KEYBOARD, 3500) == VIBEPOLLO_HOST_INPUT_TAKE);
+  // Escaped: no kind is taken.
+  vibepollo_host_input_lease_escape(&lease);
+  assert(vibepollo_host_input_lease_request(&lease, VIBEPOLLO_HOST_INPUT_REQUEST_ENGAGE, MOUSE, 4000) == VIBEPOLLO_HOST_INPUT_STILL_ESCAPED);
+}
+
+static void lends_only_whole_devices(void) {
+  assert(vibepollo_host_input_lends(BOTH, KEYBOARD) && vibepollo_host_input_lends(BOTH, MOUSE) && vibepollo_host_input_lends(BOTH, BOTH));
+  assert(vibepollo_host_input_lends(KEYBOARD, KEYBOARD) && !vibepollo_host_input_lends(KEYBOARD, MOUSE));
+  assert(vibepollo_host_input_lends(MOUSE, MOUSE) && !vibepollo_host_input_lends(MOUSE, KEYBOARD));
+  // A keyboard with a pointer on one node: only with both, or its other half stops working here.
+  assert(!vibepollo_host_input_lends(KEYBOARD, BOTH) && !vibepollo_host_input_lends(MOUSE, BOTH));
+  assert(!vibepollo_host_input_lends(BOTH, 0));
 }
 
 static void reads_capability_bits(void) {
@@ -255,6 +303,8 @@ int main(void) {
   escape_needs_both_shifts();
   accepts_exact_requests();
   leases_and_the_escape_latch();
+  leases_one_kind();
+  lends_only_whole_devices();
   reads_capability_bits();
   return 0;
 }

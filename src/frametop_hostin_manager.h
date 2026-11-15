@@ -24,10 +24,16 @@ namespace frametop_hostin {
     /// The capture service. Calls come with the manager's lock held.
     struct service_t {
       virtual ~service_t() = default;
-      /// "engage", "release" (also lifts an escape) or "drop" (gives the input back, keeps
-      /// an escape). The service answers each release and drop with "done". False when there's
-      /// no service now, or the request may not have reached it.
+      /// "engage" (keyboards and mice), "engage keyboard", "engage mouse", "release" (also
+      /// lifts an escape) or "drop" (gives the input back, keeps an escape). The service answers
+      /// each release and drop with "done". False when there's no service now, or the request may
+      /// not have reached it.
       virtual bool send(std::string_view request) = 0;
+      /// Whether it takes "engage keyboard" and "engage mouse". A lease for one kind is refused
+      /// ("unsupported") by a service that would take both.
+      virtual bool lends_by_kind() const {
+        return false;
+      }
       /// Why there's none: "service" (it couldn't be reached) or "unsupported".
       virtual const char *unavailable() const = 0;
       /// The connection messages come from now; a reader of an older one is ignored.
@@ -74,6 +80,9 @@ namespace frametop_hostin {
     const void *owner_ = nullptr;
     clock::time_point until_ {};
     bool engaged_ = false;
+    /// What the owner's lease asks for (policy::KEYBOARD, MOUSE or both): its hello says it,
+    /// and only those events go to it.
+    std::uint8_t kinds_ = 0;
     std::string reason_ = "lease";
     /// Releases and drops sent and not yet answered "done": until then, what the service says
     /// belongs to a lease that ended, never to the owner now.

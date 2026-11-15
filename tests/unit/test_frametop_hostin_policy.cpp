@@ -24,6 +24,15 @@ TEST(FrametopHostInputPolicy, ParsesALease) {
   EXPECT_EQ(lease->action, lease_t::engage);
   EXPECT_EQ(lease->sequence, 0x01020304u);
   EXPECT_EQ(lease->duration, std::chrono::milliseconds {1000});
+  EXPECT_EQ(lease->kinds, KEYBOARD | MOUSE);  // a client from before the kinds byte: both
+}
+
+TEST(FrametopHostInputPolicy, ParsesTheKindsALeaseAsksFor) {
+  EXPECT_EQ(parse_lease(engage(1, 1000) + char(KEYBOARD))->kinds, KEYBOARD);
+  EXPECT_EQ(parse_lease(engage(1, 1000) + char(MOUSE))->kinds, MOUSE);
+  EXPECT_EQ(parse_lease(engage(1, 1000) + char(KEYBOARD | MOUSE))->kinds, KEYBOARD | MOUSE);
+  EXPECT_FALSE(parse_lease(engage(1, 1000) + char(4)));  // no such kind
+  EXPECT_FALSE(parse_lease(engage(1, 1000) + char(KEYBOARD | 4)));
 }
 
 TEST(FrametopHostInputPolicy, CapsALongLease) {
@@ -48,7 +57,8 @@ TEST(FrametopHostInputPolicy, RejectsOtherLeasePackets) {
   EXPECT_FALSE(parse_lease(bytes({VERSION, 0})));
   EXPECT_FALSE(parse_lease(engage(1, 0)));  // a lease of nothing
   EXPECT_FALSE(parse_lease(engage(1, 500).substr(0, 7)));
-  EXPECT_FALSE(parse_lease(engage(1, 500) + '\0'));
+  EXPECT_FALSE(parse_lease(engage(1, 500) + '\0'));  // asks for nothing
+  EXPECT_FALSE(parse_lease(engage(1, 500) + char(KEYBOARD) + '\0'));
 }
 
 TEST(FrametopHostInputPolicy, ParsesServiceStates) {

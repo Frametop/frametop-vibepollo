@@ -31,10 +31,20 @@ namespace {
     std::uint64_t connection() const override {
       return id;
     }
+
+    bool by_kind = true;
+
+    bool lends_by_kind() const override {
+      return by_kind;
+    }
   };
 
   std::string engage(std::uint16_t ms = 1500) {
     return {char(policy::VERSION), 1, 0, 0, 0, 0, char(ms & 0xff), char(ms >> 8)};
+  }
+
+  std::string engage_only(std::uint8_t kinds) {
+    return engage() + char(kinds);
   }
 
   const std::string release {char(policy::VERSION), 2};
@@ -69,6 +79,42 @@ TEST_F(FrametopHostInputManager, EngagesForAPermittedLease) {
   EXPECT_EQ(out[1], hello);
   EXPECT_EQ(out[2], *policy::events_payload("ev k 1 30 1 0 0 0"));
   EXPECT_TRUE(manager.take(b, true, t0).empty());
+}
+
+TEST_F(FrametopHostInputManager, LendsOnlyTheKindsALeaseAsksFor) {
+  manager.lease(a, true, engage_only(policy::KEYBOARD), t0);
+  EXPECT_EQ(service.sent, std::vector<std::string> {"engage keyboard"});
+  manager.service_message(1, "state engaged");
+  manager.service_message(1, "ev k 1 30 1 0 0 0");
+  manager.service_message(1, "ev m 2 0 5 0 0 0");  // not asked for: never sent
+  EXPECT_EQ(manager.take(a, true, t0),
+            (std::vector<std::string> {state(true), policy::hello_payload(policy::KEYBOARD, "oma7"), *policy::events_payload("ev k 1 30 1 0 0 0")}));
+  manager.lease(a, true, engage_only(policy::MOUSE), t0 + 500ms);
+  EXPECT_EQ(service.sent, (std::vector<std::string> {"engage keyboard", "engage mouse"}));
+}
+
+TEST_F(FrametopHostInputManager, ANewKindIsToldAtOnce) {
+  manager.lease(a, true, engage(), t0);
+  manager.service_message(1, "state engaged");
+  manager.take(a, true, t0);
+  manager.lease(a, true, engage_only(policy::MOUSE), t0 + 500ms);
+  // The hello says mouse only, so the client lets go of its host keyboard.
+  EXPECT_EQ(manager.take(a, true, t0 + 500ms), (std::vector<std::string> {state(true), policy::hello_payload(policy::MOUSE, "oma7")}));
+  manager.lease(a, true, engage_only(policy::MOUSE), t0 + 600ms);
+  EXPECT_TRUE(manager.take(a, true, t0 + 600ms).empty());
+}
+
+TEST_F(FrametopHostInputManager, RefusesOneKindFromAServiceThatTakesBoth) {
+  service.by_kind = false;
+  manager.lease(a, true, engage_only(policy::KEYBOARD), t0);
+  EXPECT_TRUE(service.sent.empty());
+  EXPECT_FALSE(manager.active());
+  EXPECT_EQ(manager.take(a, true, t0), std::vector<std::string> {state(false, "unsupported")});
+  // Lent both, then asked for one: given back.
+  manager.lease(a, true, engage(), t0 + 1s);
+  manager.lease(a, true, engage_only(policy::MOUSE), t0 + 1500ms);
+  EXPECT_EQ(service.sent, (std::vector<std::string> {"engage", "drop"}));
+  EXPECT_FALSE(manager.active());
 }
 
 TEST_F(FrametopHostInputManager, ReportsTheStateEverySecond) {
