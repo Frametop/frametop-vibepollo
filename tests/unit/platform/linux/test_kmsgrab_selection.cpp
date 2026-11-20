@@ -454,6 +454,18 @@ TEST(OutputLayout, MovesTheLayoutToItsBoundingBoxOrigin) {
   EXPECT_EQ(layout->outputs[1], (platf::linux_display::layout::output_rect_t {"DP-2", 0, 0, 5120, 1440}));
 }
 
+TEST(OutputLayout, NormalizesCaptureOutputsTheWayParseDoes) {
+  // wlgrab's outputs on the oma7 windows instance: the laptop panel sets the box's left edge.
+  using namespace platf::linux_display::layout;
+  const auto layout = normalize({{"eDP-2", 1536, 2880, 2048, 1280}, {"FT-W1", 30000, 0, 672, 1200}, {"FT-W2", 38200, 0, 646, 1200}});
+  EXPECT_EQ(layout.width, 38200 + 646 - 1536);
+  EXPECT_EQ(layout.height, 2880 + 1280);
+  EXPECT_EQ(layout.outputs[1], (output_rect_t {"FT-W1", 30000 - 1536, 0, 672, 1200}));
+  EXPECT_EQ(layout.outputs[2].x, 38200 - 1536);
+  EXPECT_EQ(normalize({}).width, 0);
+  EXPECT_TRUE(normalize({}).outputs.empty());
+}
+
 TEST(OutputLayout, AcceptsNegativePositions) {
   const auto layout = platf::linux_display::layout::parse("L\tHDMI-A-1\t-1920\t0\t1920\t1080\nL\tDP-1\t0\t0\t2560\t1440\n");
   ASSERT_TRUE(layout);

@@ -55,6 +55,24 @@ namespace platf::linux_display::layout {
   }  // namespace detail
 
   /**
+   * The layout of these outputs, moved so its bounding box starts at (0, 0): compositors map an
+   * absolute pointer's range onto that box, wherever its top left corner sits.
+   */
+  inline layout_t normalize(std::vector<output_rect_t> outputs) {
+    layout_t result {std::move(outputs), 0, 0};
+    if (result.outputs.empty()) return result;
+    const auto left = std::ranges::min(result.outputs, {}, &output_rect_t::x).x;
+    const auto top = std::ranges::min(result.outputs, {}, &output_rect_t::y).y;
+    for (auto &output : result.outputs) {
+      output.x -= left;
+      output.y -= top;
+      result.width = std::max(result.width, output.x + output.width);
+      result.height = std::max(result.height, output.y + output.height);
+    }
+    return result;
+  }
+
+  /**
    * Parse the observer's reply: one "L\tname\tx\ty\twidth\theight" line per output.
    * The reply crosses the session boundary, so any malformed or duplicate line rejects all of it.
    * Positions come back moved so the bounding box starts at (0, 0).
@@ -87,17 +105,7 @@ namespace platf::linux_display::layout {
       outputs.push_back({std::string(fields[1]), *x, *y, *width, *height});
     }
     if (outputs.empty()) return std::nullopt;
-
-    const auto left = std::ranges::min(outputs, {}, &output_rect_t::x).x;
-    const auto top = std::ranges::min(outputs, {}, &output_rect_t::y).y;
-    layout_t result {std::move(outputs), 0, 0};
-    for (auto &output : result.outputs) {
-      output.x -= left;
-      output.y -= top;
-      result.width = std::max(result.width, output.x + output.width);
-      result.height = std::max(result.height, output.y + output.height);
-    }
-    return result;
+    return normalize(std::move(outputs));
   }
 
   // A capture output the layout can place. Viewport is platf::touch_port_t.

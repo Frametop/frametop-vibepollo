@@ -164,12 +164,15 @@ namespace wl {
     zwlr_screencopy_manager_v1 *screencopy_manager {nullptr};
     zwp_linux_dmabuf_v1 *dmabuf_interface {nullptr};
     zxdg_output_manager_v1 *output_manager {nullptr};
+    // Counts wl_output globals added and removed (a capture restarts when it changes).
+    std::uint32_t output_changes {0};
 
   private:
     void add_interface(wl_registry *registry, std::uint32_t id, const char *interface, std::uint32_t version);
     void del_interface(wl_registry *registry, uint32_t id);
 
     std::bitset<MAX_INTERFACES> interface;
+    std::vector<std::uint32_t> output_ids;
     wl_registry_listener listener;
   };
 
