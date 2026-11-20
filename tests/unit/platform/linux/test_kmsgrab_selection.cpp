@@ -494,9 +494,9 @@ TEST(OutputLayout, PlacementFollowsTheLayoutsEdges) {
   with_left.push_back({"FT-W3", 0, 0, 640, 1200});
   EXPECT_EQ(placement_of(with_left, 1), (placement_t {30000, 0, 30672, 4160}));
 
-  // Removing the output that set the top edge moves it the other way.
-  const std::vector<output_rect_t> panel_only {{"FT-W1", 30000, 0, 672, 1200}};
-  EXPECT_EQ(placement_of(panel_only, 0), (placement_t {0, 0, 672, 1200}));
+  // Removing the outputs that set the left and bottom edges shrinks the box to this one.
+  const std::vector<output_rect_t> window_only {{"FT-W1", 30000, 0, 672, 1200}};
+  EXPECT_EQ(placement_of(window_only, 0), (placement_t {0, 0, 672, 1200}));
 }
 
 TEST(OutputLayout, PlacementLeavesUnsizedOutputsOutOfTheBox) {

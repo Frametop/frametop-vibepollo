@@ -18,9 +18,6 @@
 using namespace std::literals;
 
 namespace wl {
-  static int env_width;
-  static int env_height;
-
   struct img_t: public platf::img_t {
     ~img_t() override {
       delete[] data;
@@ -117,9 +114,15 @@ namespace wl {
       offset_y = placement_at_init.y;
       this->env_logical_width = placement_at_init.desktop_width;
       this->env_logical_height = placement_at_init.desktop_height;
-      // Physical size, the fallback when an output has no logical size.
-      this->env_width = ::wl::env_width;
-      this->env_height = ::wl::env_height;
+      // Physical size, the fallback when an output has no logical size. Read from this
+      // capture's own connection: captures start on their own threads, all at once after a
+      // layout change.
+      this->env_width = 0;
+      this->env_height = 0;
+      for (const auto &m : interface.monitors) {
+        this->env_width = std::max(this->env_width, m->viewport.offset_x + m->viewport.width);
+        this->env_height = std::max(this->env_height, m->viewport.offset_y + m->viewport.height);
+      }
 
       BOOST_LOG(info) << "[wlgrab] Selected monitor ["sv << monitor->description << "] for streaming"sv;
       BOOST_LOG(debug) << "[wlgrab] Offset: "sv << offset_x << 'x' << offset_y;
@@ -506,9 +509,6 @@ namespace platf {
       return {};
     }
 
-    wl::env_width = 0;
-    wl::env_height = 0;
-
     for (auto &monitor : interface.monitors) {
       monitor->listen(interface.output_manager);
     }
@@ -519,9 +519,6 @@ namespace platf {
 
     for (int x = 0; x < interface.monitors.size(); ++x) {
       auto monitor = interface.monitors[x].get();
-
-      wl::env_width = std::max(wl::env_width, monitor->viewport.offset_x + monitor->viewport.width);
-      wl::env_height = std::max(wl::env_height, monitor->viewport.offset_y + monitor->viewport.height);
 
       BOOST_LOG(info) << "[wlgrab] Monitor " << x << " is "sv << monitor->name << ": "sv << monitor->description;
 
