@@ -114,9 +114,8 @@ namespace wl {
       offset_y = placement_at_init.y;
       this->env_logical_width = placement_at_init.desktop_width;
       this->env_logical_height = placement_at_init.desktop_height;
-      // Physical size, the fallback when an output has no logical size. Read from this
-      // capture's own connection: captures start on their own threads, all at once after a
-      // layout change.
+      // Physical size, from this capture's own outputs: the fallback when an output has no
+      // logical size.
       this->env_width = 0;
       this->env_height = 0;
       for (const auto &m : interface.monitors) {
