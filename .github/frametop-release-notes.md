@@ -2,6 +2,7 @@ Vibepollo with Frametop's changes, for streaming a computer's displays to a Stea
 
 ## Install
 
+- Windows, the quick way: run `FrametopHostSetup.exe`. It runs Frametop's Windows host kit from Frametop's `main` branch, which installs Vibepollo 2.0.3 if needed and the build Frametop pins, checking every file's SHA-256. It isn't signed: Windows may say "Windows protected your PC" (More info, then Run anyway).
 - Windows: `sunshine.exe`, with `frametop_clipboard.exe` and `sunshine_wgc_capture.exe` for its `tools` folder, go into a Vibepollo 2.0.3 install (Nonary's `VibepolloSetup-v2.0.3.exe`). Frametop's Windows host kit installs them: it checks each hash, keeps the originals, and puts them back with `-Undo`. Steps: https://github.com/Frametop/frametop/blob/experimental/host/windows/README.md
 - Arch Linux and CachyOS: `vibepollo-*.pkg.tar.zst`, installed with Vibepollo's installer (`sudo bash scripts/linux_install.sh --package ./vibepollo-*.pkg.tar.zst`). Steps: https://github.com/Frametop/frametop/blob/experimental/host/linux/README.md
 

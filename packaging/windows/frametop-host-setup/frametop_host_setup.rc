@@ -1,0 +1,33 @@
+// FrametopHostSetup.exe's resources: the manifest and the version shown in its Properties.
+// The manifest says asInvoker: without one, Windows guesses from "Setup" in the name that this
+// is an installer and asks for admin up front. The host setup asks for admin itself, once the
+// kit is in the user's own folder. supportedOS is Windows 10 and 11.
+#include <winver.h>
+
+1 24 "frametop_host_setup.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "Frametop"
+      VALUE "FileDescription", "Frametop host setup (runs host/windows/get.ps1 from Frametop/frametop)"
+      VALUE "FileVersion", "1.0.0"
+      VALUE "InternalName", "FrametopHostSetup"
+      VALUE "LegalCopyright", "GPL-3.0"
+      VALUE "OriginalFilename", "FrametopHostSetup.exe"
+      VALUE "ProductName", "Frametop"
+      VALUE "ProductVersion", "1.0.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

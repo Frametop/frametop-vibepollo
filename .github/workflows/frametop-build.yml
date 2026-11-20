@@ -168,15 +168,26 @@ jobs:
           ctest --test-dir build --output-on-failure \
             -R '^test_component_(remote_display_topology|remote_session|rtsp_pending_policy|clipboard_image|clipboard_read|frametop_vdesktop|frametop_hostin_capture)$'
 
+      # FrametopHostSetup.exe: the Windows host setup to double-click. It runs Frametop's
+      # host/windows/get.ps1 from main and holds no pins, so any release's copy installs the
+      # build Frametop pins (packaging/windows/frametop-host-setup).
+      - name: Build the host setup exe
+        run: |
+          set -euo pipefail
+          cd packaging/windows/frametop-host-setup
+          windres -O coff -o ../../../build/frametop_host_setup.res frametop_host_setup.rc
+          gcc -O2 -Wall -Wextra -Werror -static -o ../../../build/FrametopHostSetup.exe frametop_host_setup.c \
+            ../../../build/frametop_host_setup.res -lshell32
+
       # The exes go into an existing Vibepollo 2.0.3 install (the clipboard reader and the
       # capture helper, which draws a Frametop window and its popups, into its tools folder),
       # so they may only load DLLs that Windows or that install has.
       - name: Check DLLs and package
         run: |
           set -euo pipefail
-          strip --strip-all build/sunshine.exe build/tools/frametop_clipboard.exe build/tools/sunshine_wgc_capture.exe
+          strip --strip-all build/sunshine.exe build/tools/frametop_clipboard.exe build/tools/sunshine_wgc_capture.exe build/FrametopHostSetup.exe
           bad=0
-          for dll in $(objdump -p build/sunshine.exe build/tools/frametop_clipboard.exe build/tools/sunshine_wgc_capture.exe | sed -n 's/^\s*DLL Name: //p' | tr -d '\r' | sort -u); do
+          for dll in $(objdump -p build/sunshine.exe build/tools/frametop_clipboard.exe build/tools/sunshine_wgc_capture.exe build/FrametopHostSetup.exe | sed -n 's/^\s*DLL Name: //p' | tr -d '\r' | sort -u); do
             lower=$(echo "$dll" | tr '[:upper:]' '[:lower:]')
             case $lower in
               libwebrtc.dll|zlib1.dll) echo "from the install: $dll" ;;
@@ -186,10 +197,10 @@ jobs:
           done
           [ "$bad" = 0 ]
           mkdir -p dist/tools
-          cp build/sunshine.exe dist/
+          cp build/sunshine.exe build/FrametopHostSetup.exe dist/
           cp build/tools/frametop_clipboard.exe build/tools/sunshine_wgc_capture.exe dist/tools/
           printf 'Vibepollo %s with Frametop'"'"'s changes\ncommit %s (%s)\n' "$BUILD_VERSION" "$GITHUB_SHA" "$GITHUB_REF_NAME" > dist/BUILD-INFO.txt
-          sha256sum dist/sunshine.exe dist/tools/frametop_clipboard.exe dist/tools/sunshine_wgc_capture.exe
+          sha256sum dist/sunshine.exe dist/tools/frametop_clipboard.exe dist/tools/sunshine_wgc_capture.exe dist/FrametopHostSetup.exe
 
       - name: Upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -251,4 +262,5 @@ jobs:
             { echo "::error::$TAG doesn't match the Windows build: $(head -1 artifacts/frametop-windows/BUILD-INFO.txt)"; exit 1; }
           bash .github/frametop-publish.sh "$TAG" artifacts/frametop-windows/sunshine.exe \
             artifacts/frametop-windows/tools/frametop_clipboard.exe \
-            artifacts/frametop-windows/tools/sunshine_wgc_capture.exe "${pkgs[0]}"
+            artifacts/frametop-windows/tools/sunshine_wgc_capture.exe \
+            artifacts/frametop-windows/FrametopHostSetup.exe "${pkgs[0]}"
