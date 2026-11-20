@@ -70,11 +70,14 @@ int main(void) {
   wchar_t powershell[MAX_PATH + 64];
   swprintf(powershell, sizeof powershell / sizeof powershell[0], L"%ls\\WindowsPowerShell\\v1.0\\powershell.exe", system);
 
-  // TLS 1.2 before the download: Windows PowerShell 5.1 on an older .NET may not offer it,
-  // and GitHub needs it. Then get.ps1, as the README's "pass options" line runs it.
+  // Stop on any error, so a failed download exits 1 (by default PowerShell would go on to the
+  // exit with $LASTEXITCODE unset, which is 0). TLS 1.2 before the download: Windows
+  // PowerShell 5.1 on an older .NET may not offer it, and GitHub needs it. Then get.ps1, as the
+  // README's "pass options" line runs it.
   wchar_t command[2048];
   int len = swprintf(command, sizeof command / sizeof command[0],
     L"\"%ls\" -NoProfile -ExecutionPolicy Bypass -Command \""
+    L"$ErrorActionPreference = 'Stop'; "
     L"[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; "
     L"& ([scriptblock]::Create((irm '%ls')))%ls; exit $LASTEXITCODE\"",
     powershell, GET_PS1, pass);
@@ -108,7 +111,8 @@ int main(void) {
                     "%%ProgramData%%\\Frametop\\host-setup.log has the setup's log.\n", code);
     wait_for_enter();
   } else if (argc == 1) {
-    printf("The setup goes on in the admin window, if one opened.\n");
+    // Already admin, the setup ran here and waited for Enter itself.
+    printf("If an admin window opened, the setup goes on there.\n");
     Sleep(3000);
   }
   return (int) code;
