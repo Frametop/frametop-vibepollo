@@ -143,7 +143,9 @@ namespace wl {
       do {
         auto remaining_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(to - std::chrono::steady_clock::now());
         if (remaining_time_ms.count() < 0 || !display.dispatch(remaining_time_ms)) {
-          return platf::capture_e::timeout;
+          // An output with nothing changing on it sends no frames: check the layout here too,
+          // or its touch port would stay where it was until the next frame.
+          return layout_changed() ? platf::capture_e::reinit : platf::capture_e::timeout;
         }
       } while (dmabuf.status == dmabuf_t::WAITING);
 
@@ -157,15 +159,22 @@ namespace wl {
         return platf::capture_e::reinit;
       }
 
-      // An output came or went, or one moved or resized: start again, so the touch port
-      // follows the layout (kmsgrab does the same on a Hyprland layout change). A removed
-      // output stays in interface.monitors, so only the count shows it went.
-      if (interface.output_changes != outputs_at_init || placement() != placement_at_init) {
-        BOOST_LOG(info) << "[wlgrab] Output layout changed; restarting the capture so input follows it"sv;
+      if (layout_changed()) {
         return platf::capture_e::reinit;
       }
 
       return platf::capture_e::ok;
+    }
+
+    // An output came or went, or one moved or resized: the capture starts again, so the touch
+    // port follows the layout (kmsgrab does the same on a Hyprland layout change). A removed
+    // output stays in interface.monitors, so only the count shows it went.
+    bool layout_changed() const {
+      if (interface.output_changes == outputs_at_init && placement() == placement_at_init) {
+        return false;
+      }
+      BOOST_LOG(info) << "[wlgrab] Output layout changed; restarting the capture so input follows it"sv;
+      return true;
     }
 
     // Where the streamed output sits in the layout's bounding box, and that box's size.
