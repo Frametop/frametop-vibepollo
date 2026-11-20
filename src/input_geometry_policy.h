@@ -114,8 +114,11 @@ namespace input::geometry {
              snapshot.geometry_sequence < _current.geometry_sequence)) {
           return snapshot_result_e::stale;
         }
+        // Generation 0 is a backend with no versioned geometry (every Linux capture, which
+        // restarts to change its map). Its version never moves, so a new map is a change.
         if (snapshot.capture_generation == _current.capture_generation &&
-            snapshot.geometry_sequence == _current.geometry_sequence) {
+            snapshot.geometry_sequence == _current.geometry_sequence &&
+            (snapshot.capture_generation != 0 || snapshot == _current)) {
           return snapshot_result_e::unchanged;
         }
 

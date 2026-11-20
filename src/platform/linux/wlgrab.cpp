@@ -63,6 +63,10 @@ namespace wl {
         return -1;
       }
 
+      // Counted before the roundtrip below: an output that comes or goes during it gets no
+      // xdg_output info here, so the first frame restarts the capture to take it in.
+      outputs_at_init = interface.output_changes;
+
       // Populate xdg_output info (name, viewport) for every monitor up
       // front so we can match by stable name in addition to index.
       for (auto &m : interface.monitors) {
@@ -100,24 +104,20 @@ namespace wl {
 
       output = monitor->output;
       selected = monitor;
-      outputs_at_init = interface.output_changes;
 
       width = monitor->viewport.width;
       height = monitor->viewport.height;
       this->logical_width = monitor->viewport.logical_width;
       this->logical_height = monitor->viewport.logical_height;
 
-      // The touch port, in the layout's own coordinates. The compositor maps an absolute
-      // pointer's range onto the bounding box of every output, which needn't start at (0, 0)
-      // (Hyprland's laptop panel at 1536x2880 under Frametop's window outputs at y 0), and the
-      // windows instance adds and removes outputs while this capture runs: placed from a stale
-      // or (0, 0)-based box, the pointer landed on another output.
+      // The compositor maps absolute input onto the bounding box of every output, which needn't
+      // start at (0, 0), so the touch port is placed in that box.
       placement_at_init = placement();
       offset_x = placement_at_init.x;
       offset_y = placement_at_init.y;
       this->env_logical_width = placement_at_init.desktop_width;
       this->env_logical_height = placement_at_init.desktop_height;
-      // (the physical size, used only when an output reports no logical size)
+      // Physical size, the fallback when an output has no logical size.
       this->env_width = ::wl::env_width;
       this->env_height = ::wl::env_height;
 
@@ -158,7 +158,8 @@ namespace wl {
       }
 
       // An output came or went, or one moved or resized: start again, so the touch port
-      // follows the layout (kmsgrab does the same on a Hyprland layout change).
+      // follows the layout (kmsgrab does the same on a Hyprland layout change). A removed
+      // output stays in interface.monitors, so only the count shows it went.
       if (interface.output_changes != outputs_at_init || placement() != placement_at_init) {
         BOOST_LOG(info) << "[wlgrab] Output layout changed; restarting the capture so input follows it"sv;
         return platf::capture_e::reinit;
@@ -168,12 +169,7 @@ namespace wl {
     }
 
     // Where the streamed output sits in the layout's bounding box, and that box's size.
-    struct placement_t {
-      int x = 0, y = 0, desktop_width = 0, desktop_height = 0;
-      bool operator==(const placement_t &) const = default;
-    };
-
-    placement_t placement() const {
+    platf::linux_display::layout::placement_t placement() const {
       std::vector<platf::linux_display::layout::output_rect_t> rects;
       std::size_t streamed = 0;
       for (auto &m : interface.monitors) {
@@ -181,10 +177,7 @@ namespace wl {
         const auto &v = m->viewport;
         rects.push_back({{}, v.offset_x, v.offset_y, std::max(0, v.logical_width), std::max(0, v.logical_height)});
       }
-      const auto layout = platf::linux_display::layout::normalize(std::move(rects));
-      if (layout.outputs.empty()) return {};
-      const auto &own = layout.outputs[streamed];
-      return {own.x, own.y, layout.width, layout.height};
+      return platf::linux_display::layout::placement_of(std::move(rects), streamed);
     }
 
     platf::mem_type_e mem_type;
@@ -198,7 +191,7 @@ namespace wl {
     wl_output *output;
     wl::monitor_t *selected = nullptr;
     std::uint32_t outputs_at_init = 0;
-    placement_t placement_at_init;
+    platf::linux_display::layout::placement_t placement_at_init;
   };
 
   class wlr_ram_t: public wlr_t {

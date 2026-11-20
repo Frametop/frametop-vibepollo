@@ -307,6 +307,41 @@ TEST(InputGeometryTransport, FullEventWithSameVersionCannotReplaceCurrentMapping
   EXPECT_EQ(local_port.env_height, 1080);
 }
 
+TEST(InputGeometryTransport, UnversionedCaptureRestartReplacesTheMapping) {
+  // A Linux capture has no geometry version: a layout change restarts it, and the new
+  // capture's port must move the pointer map instead of keeping the first capture's offset.
+  input::geometry::transport_t transport;
+  test_port_t local_port;
+  const auto first_event = test_port_t {};
+  const auto first = snapshot(0, 0, true, 28464, 0, 37310, 4160);
+  EXPECT_EQ(
+    transport.refresh_from_event(first, local_port, first_event, [] {}),
+    input::geometry::snapshot_result_e::initial
+  );
+  EXPECT_EQ(local_port.offset_x, 28464);
+  EXPECT_EQ(transport.touch(input::geometry::contact_event_e::down, 7, static_cast<bool>(local_port)), input::geometry::contact_result_e::accept);
+
+  int cancel_calls = 0;
+  EXPECT_EQ(
+    transport.refresh_from_event(first, local_port, first_event, [&] { ++cancel_calls; }),
+    input::geometry::snapshot_result_e::unchanged
+  );
+  EXPECT_EQ(cancel_calls, 0);
+
+  auto restarted_event = first_event;
+  restarted_event.env_width = 40000;
+  const auto restarted = snapshot(0, 0, true, 0, 0, 40000, 4160);
+  EXPECT_EQ(
+    transport.refresh_from_event(restarted, local_port, restarted_event, [&] { ++cancel_calls; }),
+    input::geometry::snapshot_result_e::updated
+  );
+  EXPECT_EQ(cancel_calls, 1);
+  EXPECT_EQ(local_port.offset_x, 0);
+  EXPECT_EQ(local_port.env_width, 40000);
+  // A contact from the old map can't carry on into the new one.
+  EXPECT_EQ(transport.touch(input::geometry::contact_event_e::move, 7, static_cast<bool>(local_port)), input::geometry::contact_result_e::suppress);
+}
+
 TEST(InputGeometryTransport, LateDynamicGeometryRefreshCannotReplaceNewerEventPayload) {
   using namespace std::chrono_literals;
   auto event = std::make_shared<safe::event_t<test_port_t>>();
