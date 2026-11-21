@@ -3,6 +3,7 @@
  * @brief Definitions for Wayland capture.
  */
 // standard includes
+#include <algorithm>
 #include <cstdlib>
 
 // platform includes
@@ -208,6 +209,8 @@ namespace wl {
           (wl_output *) wl_registry_bind(registry, id, &wl_output_interface, 2)
         )
       );
+      output_ids.push_back(id);
+      ++output_changes;
     } else if (!std::strcmp(interface, zxdg_output_manager_v1_interface.name)) {
       BOOST_LOG(info) << "[wayland] Found interface: "sv << interface << '(' << id << ") version "sv << version;
       output_manager = (zxdg_output_manager_v1 *) wl_registry_bind(registry, id, &zxdg_output_manager_v1_interface, version);
@@ -228,6 +231,10 @@ namespace wl {
 
   void interface_t::del_interface(wl_registry *registry, uint32_t id) {
     BOOST_LOG(info) << "[wayland] Delete: "sv << id;
+    if (const auto it = std::ranges::find(output_ids, id); it != output_ids.end()) {
+      output_ids.erase(it);
+      ++output_changes;
+    }
   }
 
   // Initialize GBM

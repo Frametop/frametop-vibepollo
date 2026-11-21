@@ -454,6 +454,62 @@ TEST(OutputLayout, MovesTheLayoutToItsBoundingBoxOrigin) {
   EXPECT_EQ(layout->outputs[1], (platf::linux_display::layout::output_rect_t {"DP-2", 0, 0, 5120, 1440}));
 }
 
+TEST(OutputLayout, NormalizeMovesTheBoxToTheOrigin) {
+  // A laptop panel below window outputs far to its right: the panel sets the box's left edge.
+  using namespace platf::linux_display::layout;
+  const auto layout = normalize({{"eDP-2", 1536, 2880, 2048, 1280}, {"FT-W1", 30000, 0, 672, 1200}, {"FT-W2", 38200, 0, 646, 1200}});
+  EXPECT_EQ(layout.width, 38200 + 646 - 1536);
+  EXPECT_EQ(layout.height, 2880 + 1280);
+  EXPECT_EQ(layout.outputs[1], (output_rect_t {"FT-W1", 30000 - 1536, 0, 672, 1200}));
+  EXPECT_EQ(layout.outputs[2].x, 38200 - 1536);
+  EXPECT_EQ(normalize({}).width, 0);
+  EXPECT_TRUE(normalize({}).outputs.empty());
+}
+
+TEST(OutputLayout, PlacesTheStreamedOutputInTheBox) {
+  using namespace platf::linux_display::layout;
+  const std::vector<output_rect_t> outputs {{"eDP-2", 1536, 2880, 2048, 1280}, {"FT-W1", 30000, 0, 672, 1200}, {"FT-W2", 38200, 0, 646, 1200}};
+  constexpr int width = 38200 + 646 - 1536;
+  constexpr int height = 2880 + 1280;
+  EXPECT_EQ(placement_of(outputs, 0), (placement_t {0, 2880, width, height}));
+  EXPECT_EQ(placement_of(outputs, 1), (placement_t {30000 - 1536, 0, width, height}));
+  EXPECT_EQ(placement_of(outputs, 2), (placement_t {38200 - 1536, 0, width, height}));
+  EXPECT_EQ(placement_of(outputs, 3), placement_t {});
+  EXPECT_EQ(placement_of({}, 0), placement_t {});
+}
+
+TEST(OutputLayout, PlacementFollowsTheLayoutsEdges) {
+  using namespace platf::linux_display::layout;
+  std::vector<output_rect_t> outputs {{"eDP-2", 1536, 2880, 2048, 1280}, {"FT-W1", 30000, 0, 672, 1200}, {"FT-W2", 10000, 0, 640, 1200}};
+  const auto before = placement_of(outputs, 1);
+  EXPECT_EQ(before, (placement_t {30000 - 1536, 0, 30672 - 1536, 4160}));
+
+  // Moving an output inside the box changes nothing for the streamed one.
+  auto moved_inside = outputs;
+  moved_inside[2].x = 12000;
+  EXPECT_EQ(placement_of(moved_inside, 1), before);
+
+  // A new output left of the box moves the streamed output along it.
+  auto with_left = outputs;
+  with_left.push_back({"FT-W3", 0, 0, 640, 1200});
+  EXPECT_EQ(placement_of(with_left, 1), (placement_t {30000, 0, 30672, 4160}));
+
+  // Removing the outputs around it (eDP-2 set the left and bottom edges) shrinks the box to this one.
+  const std::vector<output_rect_t> window_only {{"FT-W1", 30000, 0, 672, 1200}};
+  EXPECT_EQ(placement_of(window_only, 0), (placement_t {0, 0, 672, 1200}));
+}
+
+TEST(OutputLayout, PlacementLeavesUnsizedOutputsOutOfTheBox) {
+  using namespace platf::linux_display::layout;
+  // An output announced but without its xdg_output yet reads as (0, 0, 0, 0): counted, it
+  // would pull the box's left edge to 0 and put the pointer on another output.
+  const std::vector<output_rect_t> outputs {{"eDP-2", 1536, 2880, 2048, 1280}, {"FT-W1", 30000, 0, 672, 1200}, {"", 0, 0, 0, 0}};
+  EXPECT_EQ(placement_of(outputs, 1), (placement_t {30000 - 1536, 0, 30672 - 1536, 4160}));
+  // The streamed output itself is always placed.
+  const std::vector<output_rect_t> unsized_own {{"eDP-2", 1536, 2880, 2048, 1280}, {"FT-W1", 30000, 0, 0, 0}};
+  EXPECT_EQ(placement_of(unsized_own, 1), (placement_t {30000 - 1536, 0, 30000 - 1536, 4160}));
+}
+
 TEST(OutputLayout, AcceptsNegativePositions) {
   const auto layout = platf::linux_display::layout::parse("L\tHDMI-A-1\t-1920\t0\t1920\t1080\nL\tDP-1\t0\t0\t2560\t1440\n");
   ASSERT_TRUE(layout);

@@ -55,6 +55,54 @@ namespace platf::linux_display::layout {
   }  // namespace detail
 
   /**
+   * The layout of these outputs, moved so its bounding box starts at (0, 0): compositors map an
+   * absolute pointer's range onto that box, wherever its top left corner sits.
+   */
+  inline layout_t normalize(std::vector<output_rect_t> outputs) {
+    layout_t result {std::move(outputs), 0, 0};
+    if (result.outputs.empty()) return result;
+    const auto left = std::ranges::min(result.outputs, {}, &output_rect_t::x).x;
+    const auto top = std::ranges::min(result.outputs, {}, &output_rect_t::y).y;
+    for (auto &output : result.outputs) {
+      output.x -= left;
+      output.y -= top;
+      result.width = std::max(result.width, output.x + output.width);
+      result.height = std::max(result.height, output.y + output.height);
+    }
+    return result;
+  }
+
+  // Where one output sits in the normalized layout, and the size of that layout's box.
+  struct placement_t {
+    int x = 0;
+    int y = 0;
+    int desktop_width = 0;
+    int desktop_height = 0;
+    bool operator==(const placement_t &) const = default;
+  };
+
+  /**
+   * Place outputs[selected] in the layout of all of them. Other outputs with no size yet (a
+   * wl_output whose xdg_output hasn't arrived) stay out of the box. Out of range places nothing.
+   */
+  inline placement_t placement_of(std::vector<output_rect_t> outputs, std::size_t selected) {
+    if (selected >= outputs.size()) return {};
+    std::vector<output_rect_t> sized;
+    std::size_t own = 0;
+    for (std::size_t i = 0; i < outputs.size(); ++i) {
+      if (i == selected) {
+        own = sized.size();
+      } else if (outputs[i].width <= 0 || outputs[i].height <= 0) {
+        continue;
+      }
+      sized.push_back(std::move(outputs[i]));
+    }
+    const auto layout = normalize(std::move(sized));
+    const auto &rect = layout.outputs[own];
+    return {rect.x, rect.y, layout.width, layout.height};
+  }
+
+  /**
    * Parse the observer's reply: one "L\tname\tx\ty\twidth\theight" line per output.
    * The reply crosses the session boundary, so any malformed or duplicate line rejects all of it.
    * Positions come back moved so the bounding box starts at (0, 0).
@@ -87,17 +135,7 @@ namespace platf::linux_display::layout {
       outputs.push_back({std::string(fields[1]), *x, *y, *width, *height});
     }
     if (outputs.empty()) return std::nullopt;
-
-    const auto left = std::ranges::min(outputs, {}, &output_rect_t::x).x;
-    const auto top = std::ranges::min(outputs, {}, &output_rect_t::y).y;
-    layout_t result {std::move(outputs), 0, 0};
-    for (auto &output : result.outputs) {
-      output.x -= left;
-      output.y -= top;
-      result.width = std::max(result.width, output.x + output.width);
-      result.height = std::max(result.height, output.y + output.height);
-    }
-    return result;
+    return normalize(std::move(outputs));
   }
 
   // A capture output the layout can place. Viewport is platf::touch_port_t.
