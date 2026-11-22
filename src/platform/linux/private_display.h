@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <display_device/types.h>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
 #include <vector>
@@ -118,4 +119,10 @@ namespace platf::linux_private_display {
     display_device::DeviceEnumerationDetail detail
   );
   std::string enumerate_devices_json(display_device::DeviceEnumerationDetail detail);
+
+  /// Frametop's monitor plan (frametop_monitors_kscreen): KScreen's configuration, and
+  /// kscreen-doctor arguments applied under the same gates as every display change here
+  /// (through the session broker from the machine service). "" when applied, else why not.
+  std::optional<nlohmann::json> kscreen_configuration();
+  std::string kscreen_apply(const std::vector<std::string> &arguments);
 }  // namespace platf::linux_private_display

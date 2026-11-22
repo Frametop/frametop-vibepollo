@@ -52,6 +52,7 @@
 #include "display_device.h"
 #include "display_helper_integration.h"
 #include "file_handler.h"
+#include "frametop_monitors_service.h"
 #include "globals.h"
 #include "hardware_metrics.h"
 #include "hdr_request_policy.h"
@@ -5191,6 +5192,9 @@ namespace nvhttp {
         if (monitor_profile) launch_session->monitor_profile_uuid = monitor_profile->uuid;
         launch_session->host_audio = remote_session::uses_host_audio(launch_session->role);
         launch_session->continuous_audio = false;
+        // Frametop is using this host: its monitor plan holds (monitors on or off, their modes)
+        // before any display is looked up, so a monitor the plan turns on can be streamed.
+        launch_session->frametop_monitors_hold = frametop_monitors::service::hold();
         if (launch_session->role == remote_session::role_e::display) {
           // Capture an existing display as it is: no display is created and the
           // layout isn't touched, so ending this stream has nothing to undo.

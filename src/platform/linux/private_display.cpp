@@ -3339,4 +3339,14 @@ namespace platf::linux_private_display {
     }
     return display_device::toJson(*devices, std::nullopt);
   }
+
+  std::optional<nlohmann::json> kscreen_configuration() {
+    return query_configuration();
+  }
+
+  std::string kscreen_apply(const std::vector<std::string> &arguments) {
+    const auto result = run_doctor(arguments, true);
+    if (result.success) return {};
+    return result.stderr_text.empty() ? std::string {"kscreen-doctor failed"} : result.stderr_text;
+  }
 }  // namespace platf::linux_private_display

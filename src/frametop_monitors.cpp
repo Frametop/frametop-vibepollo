@@ -228,6 +228,8 @@ namespace frametop_monitors {
 
   bool manager_t::start() {
     std::lock_guard lock {mutex_};
+    // A stream that came meanwhile owns what is changed now: its release puts it back.
+    if (holders_ > 0) return true;
     plan_.clear();
     saved_.clear();
     set_.clear();

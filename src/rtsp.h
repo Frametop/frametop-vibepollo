@@ -45,6 +45,9 @@ namespace rtsp_stream {
     // until the active capture has acquired its own reference. Deliberately
     // omitted from retained app/display-recovery snapshots.
     std::shared_ptr<void> display_power_guard;
+    // Frametop's monitor plan holds while this Frametop stream starts and runs (pending
+    // launch, then the active session), like display_power_guard.
+    std::shared_ptr<void> frametop_monitors_hold;
     // Pre-display role snapshot, shared by pending launch and active capture.
     // Native app metadata can retain the original until app termination;
     // display-request/recovery snapshots deliberately omit this owner.

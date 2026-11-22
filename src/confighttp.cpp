@@ -587,6 +587,10 @@ namespace confighttp {
   void postSteamForceSync(resp_https_t response, req_https_t request);
   void postSteamLaunch(resp_https_t response, req_https_t request);
 
+  // Frametop's monitor plan (confighttp_frametop_monitors.cpp).
+  void getFrametopMonitors(resp_https_t response, req_https_t request);
+  void postFrametopMonitors(resp_https_t response, req_https_t request);
+
 #ifdef __linux__
   void getLutrisStatus(resp_https_t response, req_https_t request);
   void getLutrisGames(resp_https_t response, req_https_t request);
@@ -6637,6 +6641,8 @@ namespace confighttp {
     register_api_route("^/api/steam/games$", "GET", getSteamGames);
     register_api_route("^/api/steam/force_sync$", "POST", postSteamForceSync);
     register_api_route("^/api/steam/launch$", "POST", postSteamLaunch);
+    register_blocking_api_route("^/api/frametop/monitors$", "GET", getFrametopMonitors);
+    register_blocking_api_route("^/api/frametop/monitors$", "POST", postFrametopMonitors);
 #if defined(__linux__) || defined(_WIN32)
     register_blocking_api_route("^/api/frametop/windows$", "GET", getFrametopWindows, &frametop_windows_pool);
     register_blocking_api_route("^/api/frametop/windows/apps$", "GET", getFrametopWindowApps, &frametop_windows_pool);

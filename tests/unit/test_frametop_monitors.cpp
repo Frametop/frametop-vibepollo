@@ -260,6 +260,22 @@ TEST_F(FrametopMonitors, StartWhenItCantReadTriesAgainLater) {
   EXPECT_TRUE(platform.get("B").on);
 }
 
+TEST_F(FrametopMonitors, AStreamDuringStartRetriesKeepsThePlan) {
+  {
+    auto manager = make();
+    manager.set_plan(off("B"));
+    new std::shared_ptr<void>(manager.hold());
+  }
+  platform.readable = false;
+  auto manager = make();
+  EXPECT_FALSE(manager.start());
+  platform.readable = true;
+  auto lease = manager.hold();  // a stream came before the retry
+  EXPECT_FALSE(platform.get("B").on);
+  EXPECT_TRUE(manager.start()) << "the retry is done: the stream owns the change now";
+  EXPECT_FALSE(platform.get("B").on);
+}
+
 TEST_F(FrametopMonitors, StateShowsTheWish) {
   auto manager = make();
   manager.set_plan(off("B"));

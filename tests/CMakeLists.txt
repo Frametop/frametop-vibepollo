@@ -696,6 +696,12 @@ sunshine_register_component(NAME test_component_frametop_monitors TEST_SOURCE un
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/frametop_monitors.cpp"
     LINK_LIBRARIES nlohmann_json::nlohmann_json)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    sunshine_register_component(NAME test_component_linux_frametop_monitors
+        TEST_SOURCE unit/platform/linux/test_frametop_monitors_linux.cpp
+        PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/frametop_monitors.cpp"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/linux/frametop_monitors_hyprland.cpp"
+            "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/linux/frametop_monitors_kscreen.cpp"
+        LINK_LIBRARIES nlohmann_json::nlohmann_json)
     sunshine_register_component(NAME test_component_linux_routed_link
         TEST_SOURCE unit/platform/linux/test_routed_link.cpp
         PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/platform/linux/routed_link.cpp"
@@ -1506,6 +1512,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND SUNSHINE_TEST_ENABLE_COMPONENT)
         "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_host_input_policy.c")
     add_test(NAME test_component_linux_host_input_policy COMMAND test_linux_host_input_policy)
     set_tests_properties(test_component_linux_host_input_policy PROPERTIES LABELS "component" TIMEOUT 5)
+
+    add_executable(test_linux_hypr_monitor_policy
+        "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_hypr_monitor_policy.c")
+    add_test(NAME test_component_linux_hypr_monitor_policy COMMAND test_linux_hypr_monitor_policy)
+    set_tests_properties(test_component_linux_hypr_monitor_policy PROPERTIES LABELS "component" TIMEOUT 5)
 
     add_executable(test_linux_clipboard_protocol
         "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_clipboard_protocol.c")

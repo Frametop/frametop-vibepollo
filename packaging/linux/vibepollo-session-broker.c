@@ -3,6 +3,7 @@
 #include "vibepollo-session-protocol.h"
 #include "vibepollo-session-stream-environment.h"
 #include "vibepollo-touch-map-policy.h"
+#include "vibepollo-hypr-monitor-policy.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -1306,11 +1307,12 @@ static bool display_observe_arguments_are_safe(int argc, char **argv) {
 static bool display_request_uses_bounded_reply(int argc, char **argv) {
   return argc >= 2 && (!strcmp(argv[1], "display-query") ||
                        !strcmp(argv[1], "display-apply") ||
+                       !strcmp(argv[1], "hypr-monitors") || !strcmp(argv[1], "hypr-monitor") ||
                        (argc == 2 && (!strcmp(argv[1], "display-observe") || !strcmp(argv[1], "display-layout"))));
 }
 
 static bool display_request_is_mutating(const char *operation) {
-  return operation && !strcmp(operation, "display-apply");
+  return operation && (!strcmp(operation, "display-apply") || !strcmp(operation, "hypr-monitor"));
 }
 
 static const char *steam_big_picture_uri(const char *command) {
@@ -1334,6 +1336,8 @@ static bool steam_big_picture_request(const char *operation, const char *command
 static bool hyprland_request_supported(const struct session_identity *identity, const char *operation) {
   return !strcmp(operation, "display-observe") || !strcmp(operation, "display-observe-events") ||
          !strcmp(operation, "display-layout") ||
+         // Frametop's monitor plan: on, off and modes of the session's own outputs.
+         !strcmp(operation, "hypr-monitors") || !strcmp(operation, "hypr-monitor") ||
          !strncmp(operation, "audio-", 6) || !strncmp(operation, "provider-", 9) ||
          !strcmp(operation, VIBEPOLLO_SESSION_CLIPBOARD_OPERATION) ||
          !strcmp(operation, "app") ||
@@ -1349,7 +1353,8 @@ static int execute_request(int argc, char **argv,
   enum operation {
     DISPLAY_QUERY, DISPLAY_APPLY, DISPLAY_OBSERVE, DISPLAY_LAYOUT, DISPLAY_POWER, DISPLAY_WAKE, DISPLAY_INHIBIT, DISPLAY_RETAIN, TOUCH_MAP, AUDIO_GET_DEFAULT, AUDIO_LIST_SINKS, AUDIO_SET_DEFAULT,
     AUDIO_CREATE_NULL, AUDIO_REMOVE_NULL, AUDIO_CAPTURE, AUDIO_MIC_SOURCE, CLIPBOARD, STEAM, STEAM_BIG_PICTURE, STEAM_DIRECT, GLOBAL_LIMITER, LUTRIS, LUTRIS_WAYLAND_HDR, MANAGED_FOCUS,
-    PROVIDER_STEAM_SCAN, PROVIDER_LUTRIS_SCAN, PROVIDER_STEAM_ARTWORK, PROVIDER_LUTRIS_ARTWORK, RTX_HDR_FOREGROUND, APP, APP_WAYLAND_HDR
+    PROVIDER_STEAM_SCAN, PROVIDER_LUTRIS_SCAN, PROVIDER_STEAM_ARTWORK, PROVIDER_LUTRIS_ARTWORK, RTX_HDR_FOREGROUND, APP, APP_WAYLAND_HDR,
+    HYPR_MONITORS, HYPR_MONITOR
   } operation;
   unsigned long first_number = 0, second_number = 0, third_number = 0;
   unsigned char channel_mapping[8] = {0};
@@ -1377,6 +1382,8 @@ static int execute_request(int argc, char **argv,
   else if (!strcmp(argv[1], "touch-map") && argc == 4 &&
            touch_map_arguments_are_safe(argv[2], argv[3])) operation = TOUCH_MAP;
   else if (!strcmp(argv[1], "display-apply") && display_apply_arguments_are_safe(argc, argv)) operation = DISPLAY_APPLY;
+  else if (!strcmp(argv[1], "hypr-monitors") && argc == 2 && hyprland_kms_identity(identity)) operation = HYPR_MONITORS;
+  else if (hypr_monitor_arguments_are_safe(argc, argv) && hyprland_kms_identity(identity)) operation = HYPR_MONITOR;
   else if (!strcmp(argv[1], "audio-get-default") && argc == 2) operation = AUDIO_GET_DEFAULT;
   else if (!strcmp(argv[1], "audio-list-sinks") &&
            (argc == 2 || (argc == 3 && !strcmp(argv[2], "details")))) operation = AUDIO_LIST_SINKS;
@@ -1497,6 +1504,18 @@ static int execute_request(int argc, char **argv,
       argv[1] = "kscreen-doctor";
       execv("/usr/bin/kscreen-doctor", &argv[1]);
       break;
+    case HYPR_MONITORS: {
+      char *const arguments[] = {"hyprctl", "-i", "0", "-j", "monitors", "all", NULL};
+      execv("/usr/bin/hyprctl", arguments);
+      break;
+    }
+    case HYPR_MONITOR: {
+      char lua[512];
+      if (!hypr_monitor_lua(argc, argv, lua, sizeof(lua))) return 126;
+      char *const arguments[] = {"hyprctl", "-i", "0", "eval", lua, NULL};
+      execv("/usr/bin/hyprctl", arguments);
+      break;
+    }
     case AUDIO_GET_DEFAULT: {
       char *const arguments[] = {"pactl", "get-default-sink", NULL};
       execv("/usr/bin/pactl", arguments);
@@ -2109,9 +2128,9 @@ int main(int argc, char **argv) {
   }
   const bool borrow=display_borrow_request(request.argc,request.argv);
   const bool mutation_context=display_mutation_request(request.argc,request.argv);
-  const bool native_mutation=mutation_context || (!borrow && request.argc>=2 && !strcmp(request.argv[1],"display-apply"));
+  const bool native_mutation=mutation_context || (!borrow && request.argc>=2 && display_request_is_mutating(request.argv[1]));
   const bool lock_required=borrow || mutation_context || (request.argc>=2 &&
-    (!strcmp(request.argv[1],"display-apply") || !strcmp(request.argv[1],"display-power") || !strcmp(request.argv[1],"display-wake")));
+    (display_request_is_mutating(request.argv[1]) || !strcmp(request.argv[1],"display-power") || !strcmp(request.argv[1],"display-wake")));
   int mutation_lock=-1;
   if(lock_required) {
     mutation_lock=display_borrow_open_lock();

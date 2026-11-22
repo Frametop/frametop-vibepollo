@@ -42,6 +42,7 @@
 #include "session_history.h"
 #include "state_storage.h"
 #include "shutdown_phase.h"
+#include "frametop_monitors_service.h"
 #include "steam_auto_sync.h"
 #ifdef __linux__
   #include "lutris_auto_sync.h"
@@ -1061,6 +1062,8 @@ int main(int argc, char *argv[]) {
   // Frametop windows: put back any a crash left out, then watch them.
   platf::frametop_windows::start();
 #endif
+  // Frametop monitors: put back any a run before this one turned off or changed.
+  frametop_monitors::service::start();
   std::thread rtspThread {rtsp_stream::start};
 
 #ifdef _WIN32

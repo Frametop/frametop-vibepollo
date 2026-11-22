@@ -4,6 +4,7 @@
 
   #include "src/logging.h"
   #include "src/platform/windows/display.h"
+  #include "src/platform/windows/frametop_display_access.h"
   #include "src/platform/windows/impersonating_display_device.h"
   #include "src/platform/windows/misc.h"
   #include "src/platform/windows/utf_utils.h"
@@ -43,30 +44,6 @@ namespace platf::frametop_display_mode {
     std::mutex g_mutex;
     std::map<std::string, held_t> g_holds;  // device id -> its hold
 
-    std::shared_ptr<display_device::WinDisplayDeviceInterface> make_display_device() {
-      auto api = std::make_shared<display_device::WinApiLayer>();
-      auto dd = std::make_shared<display_device::WinDisplayDevice>(api);
-      return std::make_shared<display_device::ImpersonatingDisplayDevice>(dd);
-    }
-
-    // Runs a display change as the logged-in user, like ImpersonatingDisplayDevice does.
-    template<class Fn>
-    bool as_user(Fn &&fn) {
-      if (!platf::is_running_as_system()) {
-        return fn();
-      }
-      HANDLE token = platf::retrieve_users_token(/*elevated*/ true);
-      if (!token) {
-        return !platf::has_active_console_session() && fn();
-      }
-      bool result = false;
-      (void) platf::impersonate_current_user(token, [&]() {
-        result = fn();
-      });
-      CloseHandle(token);
-      return result;
-    }
-
     std::optional<DisplayMode> current_mode(display_device::WinDisplayDeviceInterface &dd, const std::string &device_id) {
       const auto modes = dd.getCurrentDisplayModes({device_id});
       const auto mode = modes.find(device_id);
@@ -85,22 +62,8 @@ namespace platf::frametop_display_mode {
     // shape. Windows takes only sizes the display lists: 1921x1080 failed outright on a monitor
     // with 1920x1080 (2026-10-13). The refresh rate stays the display's own where that size has it.
     std::optional<DisplayMode> closest_mode(const std::string &output_name, const DisplayMode &original, unsigned width, unsigned height) {
-      struct listed_t {
-        unsigned w, h, hz;
-      };
-
-      std::vector<listed_t> modes;
-      const std::wstring name = utf_utils::from_utf8(output_name);
-      (void) as_user([&]() {
-        DEVMODEW dm {};
-        dm.dmSize = sizeof dm;
-        for (DWORD i = 0; EnumDisplaySettingsW(name.c_str(), i, &dm); ++i) {
-          if ((dm.dmFields & (DM_PELSWIDTH | DM_PELSHEIGHT)) == (DM_PELSWIDTH | DM_PELSHEIGHT) && dm.dmPelsWidth && dm.dmPelsHeight) {
-            modes.push_back({dm.dmPelsWidth, dm.dmPelsHeight, dm.dmDisplayFrequency});
-          }
-        }
-        return true;
-      });
+      using listed_t = frametop_display_access::listed_mode_t;
+      const auto modes = frametop_display_access::listed_modes(output_name);
       if (modes.empty() || !width || !height) {
         return std::nullopt;
       }
@@ -108,13 +71,13 @@ namespace platf::frametop_display_mode {
       const double hz = rate.m_denominator ? double(rate.m_numerator) / rate.m_denominator : 0.0;
       const double shape = double(width) / height, area = double(width) * height;
       const auto score = [&](const listed_t &m) {
-        const double off = std::abs(std::log(double(m.w) / m.h / shape));
-        return std::make_tuple(off > 0.01 ? off : 0.0, std::abs(std::log(double(m.w) * m.h / area)), std::abs(double(m.hz) - hz));
+        const double off = std::abs(std::log(double(m.width) / m.height / shape));
+        return std::make_tuple(off > 0.01 ? off : 0.0, std::abs(std::log(double(m.width) * m.height / area)), std::abs(double(m.hz) - hz));
       };
       const auto best = *std::min_element(modes.begin(), modes.end(), [&](const listed_t &a, const listed_t &b) {
         return score(a) < score(b);
       });
-      DisplayMode mode {{best.w, best.h}, rate};
+      DisplayMode mode {{best.width, best.height}, rate};
       if (std::lround(hz) != long(best.hz)) {
         mode.m_refresh_rate = {best.hz, 1};  // the display's own rate isn't listed at that size
       }
@@ -176,45 +139,6 @@ namespace platf::frametop_display_mode {
       }
     }
 
-    // Puts every listed display back in its place in one change that Windows doesn't save, so it
-    // is all or nothing. Displays added since keep theirs.
-    bool put_places_back(const std::map<std::string, Point> &places) {
-      if (places.empty()) {
-        return true;
-      }
-      return as_user([&] {
-        display_device::WinApiLayer api;
-        auto data = api.queryDisplayConfig(display_device::QueryType::Active);
-        if (!data) {
-          return false;
-        }
-        bool moved = false;
-        for (const auto &[device_id, place] : places) {
-          const auto *path = display_device::win_utils::getActivePath(api, device_id, data->m_paths);
-          if (!path) {
-            continue;
-          }
-          auto *source = display_device::win_utils::getSourceMode(display_device::win_utils::getSourceIndex(*path, data->m_modes), data->m_modes);
-          if (!source || (source->position.x == place.m_x && source->position.y == place.m_y)) {
-            continue;
-          }
-          source->position.x = place.m_x;
-          source->position.y = place.m_y;
-          moved = true;
-        }
-        if (!moved) {
-          return true;
-        }
-        const LONG result = api.setDisplayConfig(data->m_paths, data->m_modes, SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_VIRTUAL_MODE_AWARE);
-        if (result != ERROR_SUCCESS) {
-          BOOST_LOG(warning) << "Frametop display: couldn't put the displays back in their places: " << api.getErrorString(result);
-          return false;
-        }
-        BOOST_LOG(info) << "Frametop display: displays back in their places.";
-        return true;
-      });
-    }
-
     std::map<std::string, Point> places_from_json(const nlohmann::json &tree) {
       std::map<std::string, Point> places;
       for (const auto &[device_id, place] : tree.items()) {
@@ -228,7 +152,7 @@ namespace platf::frametop_display_mode {
     // Caller holds g_mutex. False leaves the display listed for restore_after_restart().
     bool put_back(const std::string &device_id, const DisplayMode &original, const std::string &label, const bool log_failure = true) {
       try {
-        if (!make_display_device()->setDisplayModesTemporary({{device_id, original}})) {
+        if (!frametop_display_access::make_display_device()->setDisplayModesTemporary({{device_id, original}})) {
           if (log_failure) {
             BOOST_LOG(warning) << "Frametop display: couldn't put " << label << " back to " << describe(original)
                                << "; trying again when Vibepollo next starts.";
@@ -245,7 +169,7 @@ namespace platf::frametop_display_mode {
       auto pending = load_pending();
       pending["displays"].erase(device_id);
       if (pending["displays"].empty()) {
-        put_places_back(places_from_json(pending["places"]));
+        frametop_display_access::put_places_back(places_from_json(pending["places"]), "Frametop display: ");
         pending["places"] = nlohmann::json::object();
       }
       save_pending(pending);
@@ -264,7 +188,7 @@ namespace platf::frametop_display_mode {
         const auto set = mode_from_json(entry.value("set", nlohmann::json {}));
         std::optional<DisplayMode> now;
         try {
-          now = current_mode(*make_display_device(), device_id);
+          now = current_mode(*frametop_display_access::make_display_device(), device_id);
         } catch (const std::exception &) {
         }
         if (!now) {
@@ -356,7 +280,7 @@ namespace platf::frametop_display_mode {
     {
       std::lock_guard lock {g_mutex};
       try {
-        auto dd = make_display_device();
+        auto dd = frametop_display_access::make_display_device();
         const auto devices = dd->enumAvailableDevices(display_device::DeviceEnumerationDetail::Minimal);
         for (const auto &device : devices) {
           if (device.m_info && boost::iequals(device.m_display_name, output_name)) {

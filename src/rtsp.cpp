@@ -987,12 +987,13 @@ namespace rtsp_stream {
     // Socket aliases can outlive registry removal. Retire outside both mutexes;
     // synchronize the audio field with the existing paused-app retirement path.
     void release_pending_runtime_holds(const std::shared_ptr<launch_session_t> &pending) {
-      std::shared_ptr<void> audio_hold, power_hold, target_hold;
+      std::shared_ptr<void> audio_hold, power_hold, monitors_hold, target_hold;
       {
         std::lock_guard lock {_launch_sessions_mutex};
         std::lock_guard audio_lock {audio::launch_audio_guard_mutex};
         audio_hold = std::move(pending->audio_context_guard);
         power_hold = std::move(pending->display_power_guard);
+        monitors_hold = std::move(pending->frametop_monitors_hold);
         target_hold = std::move(pending->exact_target_hold);
       }
     }
@@ -1005,6 +1006,7 @@ namespace rtsp_stream {
             entry.session->unique_id == snapshot->unique_id && entry.expires_at > now) {
           audio::copy_launch_audio_guard(*entry.session, *snapshot);
           snapshot->display_power_guard = entry.session->display_power_guard;
+          snapshot->frametop_monitors_hold = entry.session->frametop_monitors_hold;
           snapshot->exact_target_hold = entry.session->exact_target_hold;
           return true;
         }
@@ -2716,6 +2718,7 @@ namespace rtsp_stream {
         auto release_startup_holds = util::fail_guard([&] {
           launch_session->audio_context_guard.reset();
           launch_session->display_power_guard.reset();
+          launch_session->frametop_monitors_hold.reset();
           launch_session->exact_target_hold.reset();
         });
         config::maybe_apply_deferred();
