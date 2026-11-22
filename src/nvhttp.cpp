@@ -5195,7 +5195,7 @@ namespace nvhttp {
         // A Frametop display stream holds the monitor plan (monitors on or off, their modes):
         // once its display is found (below), or before the lookup when the plan turns that
         // monitor on, so a panel retrying a display that isn't there never applies the plan.
-        // Windows and host input alone leave the monitors as they are.
+        // Windows, host input and outputs that aren't monitors leave the monitors as they are.
         if (launch_session->role == remote_session::role_e::display) {
           // Capture an existing display as it is: no display is created and the
           // layout isn't touched, so ending this stream has nothing to undo.
@@ -5212,7 +5212,7 @@ namespace nvhttp {
           if (plan_use == display_use_e::refuse) {
             tree.put("root.resume", 0);
             tree.put("root.<xmlattr>.status_code", 409);
-            tree.put("root.<xmlattr>.status_message", requested_display + " is turned off while Frametop uses this host (Remote Displays, Monitors)");
+            tree.put("root.<xmlattr>.status_message", requested_display + " is turned off while Frametop uses this host (its Remote Displays panel is off or missing)");
             return;
           }
           if (plan_use == display_use_e::hold_first) launch_session->frametop_monitors_hold = frametop_monitors::service::hold();
@@ -5276,7 +5276,7 @@ namespace nvhttp {
           }
 #endif
           launch_session->remote_capture_output = *output;
-          if (!launch_session->frametop_monitors_hold) {
+          if (!launch_session->frametop_monitors_hold && plan_use != display_use_e::none) {
             launch_session->frametop_monitors_hold = frametop_monitors::service::hold();
 #if defined(_WIN32) || defined(__linux__)
             // The plan may just have changed the displays (Windows renumbers \\.\DISPLAYn).

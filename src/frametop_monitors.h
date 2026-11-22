@@ -63,13 +63,18 @@ namespace frametop_monitors {
     /// A Frametop display stream: the plan applies while any hold lives, and for the grace after.
     std::shared_ptr<void> hold();
 
+    /// At a clean shutdown, once the streams are gone: puts every monitor back now, not a
+    /// grace later (start() puts back what this couldn't). Nothing holds the plan after this.
+    void shut_down();
+
     /// What a stream of the existing display `id` does with the plan.
     enum class display_use_e {
       refuse,  ///< the plan turns it off (and it isn't the one kept on): no stream of it while
                ///< Frametop uses this host
       hold_first,  ///< off now, and the plan turns it on: hold before looking it up
-      hold_after,  ///< anything else: hold once it's found, so a display that isn't there
-                   ///< (a retrying panel) never applies the plan
+      hold_after,  ///< one of its monitors, or the monitors couldn't be read: hold once it's
+                   ///< found, so a display that isn't there (a retrying panel) never applies the plan
+      none,  ///< not one of its monitors (a window's output, a virtual display): no hold
     };
     display_use_e display_use(const std::string &id);
 

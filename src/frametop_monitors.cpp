@@ -103,6 +103,12 @@ namespace frametop_monitors {
     });
   }
 
+  void manager_t::shut_down() {
+    std::lock_guard lock {mutex_};
+    ++generation_;  // no grace or recheck after this
+    restore_all_locked();
+  }
+
   manager_t::display_use_e manager_t::display_use(const std::string &id) {
     const auto same = [&](const std::string &other) {
       return id.size() == other.size() && std::equal(id.begin(), id.end(), other.begin(), [](unsigned char a, unsigned char b) {
@@ -115,7 +121,7 @@ namespace frametop_monitors {
     const auto m = std::find_if(now->monitors.begin(), now->monitors.end(), [&](const monitor_t &x) {
       return same(x.id);
     });
-    if (m == now->monitors.end()) return display_use_e::hold_after;
+    if (m == now->monitors.end()) return display_use_e::none;
     const auto plan = plan_for(*now);
     const auto wish = plan.find(m->id);
     if (wish == plan.end()) return display_use_e::hold_after;
@@ -220,12 +226,15 @@ namespace frametop_monitors {
   }
 
   std::vector<target_t> manager_t::targets_locked(const plan_t &plan, const inventory_t &now, std::string *kept_on) const {
-    // Monitors this changed that the plan no longer names go back as they were.
-    std::vector<std::string> dropped;
-    for (const auto &[id, wish] : set_) {
-      if (!plan.contains(id)) dropped.push_back(id);
+    // Monitors this changed that the plan no longer names go back as they were, and so does
+    // the mode of one it keeps on in its own mode ("Its own mode" picked after another).
+    std::vector<std::string> back;
+    for (const auto &[id, made] : set_) {
+      const auto wish = plan.find(id);
+      const auto *was = find(saved_, id);
+      if (wish == plan.end() || (wish->second.on && !wish->second.mode && made.on && was && was->on)) back.push_back(id);
     }
-    auto targets = restore_targets(dropped, saved_, set_, now);
+    auto targets = restore_targets(back, saved_, set_, now);
     std::string kept;
     const auto planned = plan_targets(plan, now, saved_, &kept);
     targets.insert(targets.end(), planned.begin(), planned.end());

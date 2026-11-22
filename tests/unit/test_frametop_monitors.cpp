@@ -330,7 +330,7 @@ TEST_F(FrametopMonitors, ADisplayStreamHoldsOnlyForAMonitorItCanHave) {
   EXPECT_EQ(manager.display_use("b"), use::refuse) << "the plan turns it off (ids match in any case)";
   EXPECT_EQ(manager.display_use("C"), use::hold_first) << "the plan turns it on: hold before the lookup";
   EXPECT_EQ(manager.display_use("A"), use::hold_after);
-  EXPECT_EQ(manager.display_use("HDMI-9"), use::hold_after) << "not one of its monitors";
+  EXPECT_EQ(manager.display_use("HDMI-9"), use::none) << "not one of its monitors (a window's output): no hold";
   platform.readable = false;
   EXPECT_EQ(manager.display_use("B"), use::hold_after);
 }
@@ -483,4 +483,38 @@ TEST_F(FrametopMonitors, DroppingOthersOffPutsThemBack) {
   ASSERT_FALSE(platform.get("B").on);
   ASSERT_EQ(manager.set_plan({{"monitors", json::object()}}), "");
   EXPECT_TRUE(platform.get("B").on);
+}
+
+TEST_F(FrametopMonitors, ItsOwnModeAfterAnotherPutsItsModeBack) {
+  auto manager = make();
+  const json picked {{"monitors", {{"A", {{"on", true}, {"mode", to_json(lo)}}}}}, {"others_off", true}};
+  ASSERT_EQ(manager.set_plan(picked), "");
+  auto lease = manager.hold();
+  ASSERT_TRUE(same_mode(*platform.get("A").mode, lo));
+  ASSERT_EQ(manager.set_plan({{"monitors", {{"A", {{"on", true}}}}}, {"others_off", true}}), "");
+  EXPECT_TRUE(same_mode(*platform.get("A").mode, hi)) << "its own mode: the one it had before";
+  EXPECT_FALSE(platform.get("B").on) << "the rest of the plan stays";
+  EXPECT_FALSE(manager.state()["monitors"][0]["changed"].get<bool>()) << "nothing of A's left to put back";
+}
+
+TEST_F(FrametopMonitors, ItsOwnModeLeavesAModeSomeoneElseSet) {
+  auto manager = make();
+  ASSERT_EQ(manager.set_plan({{"monitors", {{"A", {{"on", true}, {"mode", to_json(lo)}}}}}}), "");
+  auto lease = manager.hold();
+  platform.get("A").mode = video_mode_t {1920, 1080, 60000};  // the user's own change since
+  ASSERT_EQ(manager.set_plan({{"monitors", {{"A", {{"on", true}}}}}}), "");
+  EXPECT_EQ(platform.get("A").mode->width, 1920u);
+}
+
+TEST_F(FrametopMonitors, AShutdownPutsThemBackNow) {
+  auto manager = make();
+  ASSERT_EQ(manager.set_plan(off("B")), "");
+  auto lease = manager.hold();
+  ASSERT_FALSE(platform.get("B").on);
+  lease.reset();
+  manager.shut_down();
+  EXPECT_TRUE(platform.get("B").on) << "no grace at shutdown";
+  timers.run_all();  // the grace, now stale
+  EXPECT_TRUE(platform.get("B").on);
+  EXPECT_TRUE((*store.state)["set"].empty());
 }

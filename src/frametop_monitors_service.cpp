@@ -87,6 +87,10 @@ namespace frametop_monitors::service {
     }).detach();
   }
 
+  void stop() {
+    if (auto *manager = instance()->manager.get()) manager->shut_down();
+  }
+
   std::shared_ptr<void> hold() {
     auto *manager = instance()->manager.get();
     return manager ? manager->hold() : nullptr;

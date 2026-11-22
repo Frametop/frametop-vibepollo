@@ -1135,6 +1135,8 @@ int main(int argc, char *argv[]) {
   configThread.join();
   shutdown_phase_state.set(shutdown_phase::phase_e::rtsp_thread_join);
   rtspThread.join();
+  // Frametop monitors: the streams are gone, so they go back now (not two minutes later).
+  frametop_monitors::service::stop();
 
 #ifdef __linux__
   shutdown_phase_state.set(shutdown_phase::phase_e::lutris_autosync_stop);

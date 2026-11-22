@@ -22,6 +22,10 @@ namespace frametop_monitors::service {
   /// desktop isn't there yet.
   void start();
 
+  /// At a clean shutdown, after the streams: every monitor back as it was (KDE and Windows keep
+  /// what was applied after Vibepollo exits).
+  void stop();
+
   /// A Frametop stream's hold on the plan; nullptr where monitors can't be changed.
   std::shared_ptr<void> hold();
 
