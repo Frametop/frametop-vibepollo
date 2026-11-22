@@ -692,6 +692,9 @@ sunshine_register_component(NAME test_component_frametop_hostin_capture TEST_SOU
 sunshine_register_component(NAME test_component_frametop_hostin_manager TEST_SOURCE unit/test_frametop_hostin_manager.cpp
     PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/frametop_hostin_manager.cpp"
         "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/frametop_hostin_policy.cpp")
+sunshine_register_component(NAME test_component_frametop_monitors TEST_SOURCE unit/test_frametop_monitors.cpp
+    PRODUCT_SOURCES "${SUNSHINE_TEST_REPOSITORY_ROOT}/src/frametop_monitors.cpp"
+    LINK_LIBRARIES nlohmann_json::nlohmann_json)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     sunshine_register_component(NAME test_component_linux_routed_link
         TEST_SOURCE unit/platform/linux/test_routed_link.cpp
