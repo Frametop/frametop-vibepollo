@@ -131,6 +131,13 @@ namespace frametop_monitors {
     return out;
   }
 
+  plan_t with_others_off(plan_t plan, const inventory_t &now) {
+    for (const auto &m : now.monitors) {
+      if (!plan.contains(m.id)) plan[m.id] = {false, std::nullopt};
+    }
+    return plan;
+  }
+
   std::string validate(const plan_t &plan, const inventory_t &now, const std::vector<monitor_t> &going_back) {
     int on = 0;
     for (const auto &m : now.monitors) {

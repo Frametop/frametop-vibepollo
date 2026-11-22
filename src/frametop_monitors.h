@@ -1,10 +1,10 @@
 /**
  * @file src/frametop_monitors.h
  * @brief Frametop: the host's physical monitors, turned on or off and set to a mode from
- *        Frametop's Remote Displays page, for as long as Frametop streams from this host.
+ *        Frametop's Remote Displays page, for as long as Frametop streams one of its displays.
  *
  * Frametop keeps a plan here: for each monitor it names, on or off, and the mode it should be
- * in. The plan applies while at least one Frametop stream runs (each holds a lease), and for a
+ * in. The plan applies while at least one Frametop display stream runs (each holds a lease), and for a
  * grace period after the last one ends; then every monitor this changed goes back to how it
  * was, unless someone has changed it since. Before the first change, every monitor's state is
  * saved through the store, so a restart after a crash puts them back too (start()).
@@ -60,7 +60,7 @@ namespace frametop_monitors {
     /// that couldn't be done yet (the caller may try again).
     bool start();
 
-    /// A Frametop stream: the plan applies while any hold lives, and for the grace after.
+    /// A Frametop display stream: the plan applies while any hold lives, and for the grace after.
     std::shared_ptr<void> hold();
 
     /// What a stream of the existing display `id` does with the plan.
@@ -73,7 +73,8 @@ namespace frametop_monitors {
     };
     display_use_e display_use(const std::string &id);
 
-    /// Replaces the plan ({"monitors": {...}}); it applies now if a stream holds it. "" when
+    /// Replaces the plan ({"monitors": {...}, "others_off": bool}: with others_off, every
+    /// monitor it doesn't name goes off too); it applies now if a stream holds it. "" when
     /// taken, else why not (nothing changed).
     std::string set_plan(const nlohmann::json &body);
 
@@ -95,6 +96,8 @@ namespace frametop_monitors {
     /// The changes that make `now` match the plan, with monitors the plan no longer names going
     /// back; *kept_on names a monitor that stays on because the desktop needs one.
     std::vector<target_t> targets_locked(const inventory_t &now, std::string *kept_on) const;
+    /// The plan for the monitors `now` has: with others_off_, the ones it doesn't name are off.
+    plan_t plan_for(const inventory_t &now) const;
     /// Applies the plan to the monitors as they are now; snapshots them first.
     void apply_locked();
     /// Puts back every monitor this changed; false if some couldn't be (kept for later).
@@ -108,6 +111,7 @@ namespace frametop_monitors {
 
     mutable std::mutex mutex_;
     plan_t plan_;
+    bool others_off_ = false;  // monitors the plan doesn't name go off too
     std::vector<monitor_t> saved_;  // before the first change; empty when nothing is changed
     std::map<std::string, wish_t> set_;  // what this made each changed monitor
     std::map<std::string, wish_t> pending_;  // what a change under way is making them (in the store, for a crash)

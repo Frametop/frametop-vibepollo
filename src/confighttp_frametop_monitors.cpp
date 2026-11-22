@@ -1,7 +1,7 @@
 /**
  * @file src/confighttp_frametop_monitors.cpp
  * @brief /api/frametop/monitors: the host's physical monitors and Frametop's plan for them
- *        (which are on, at what mode). The plan holds while Frametop streams from this host.
+ *        (which are on, at what mode). The plan holds while Frametop streams a display of this host.
  */
 #include "confighttp.h"
 #include "frametop_monitors_service.h"

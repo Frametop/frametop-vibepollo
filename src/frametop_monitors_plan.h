@@ -73,6 +73,10 @@ namespace frametop_monitors {
   std::optional<plan_t> plan_from_json(const nlohmann::json &value, std::string *error);
   nlohmann::json to_json(const plan_t &plan);
 
+  /// The plan with every monitor of `now` it doesn't name turned off (a plan with others_off:
+  /// Frametop's Remote Displays name only the monitors that have a display there).
+  plan_t with_others_off(plan_t plan, const inventory_t &now);
+
   /// Why the plan can't be taken ("" if it can): every monitor it names is one of these, each
   /// mode is one that monitor lists (if it lists any), and a physical monitor stays on. `going_back`: monitors
   /// the plan no longer names that go back as they were saved (on or off).

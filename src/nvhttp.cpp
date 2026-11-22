@@ -5192,13 +5192,10 @@ namespace nvhttp {
         if (monitor_profile) launch_session->monitor_profile_uuid = monitor_profile->uuid;
         launch_session->host_audio = remote_session::uses_host_audio(launch_session->role);
         launch_session->continuous_audio = false;
-        // Frametop is using this host: its monitor plan holds (monitors on or off, their modes).
-        // A display stream holds it once its display is found (below), or before the lookup when
-        // the plan turns that monitor on, so a panel retrying a display that isn't there never
-        // applies the plan.
-        if (launch_session->role != remote_session::role_e::display) {
-          launch_session->frametop_monitors_hold = frametop_monitors::service::hold();
-        }
+        // A Frametop display stream holds the monitor plan (monitors on or off, their modes):
+        // once its display is found (below), or before the lookup when the plan turns that
+        // monitor on, so a panel retrying a display that isn't there never applies the plan.
+        // Windows and host input alone leave the monitors as they are.
         if (launch_session->role == remote_session::role_e::display) {
           // Capture an existing display as it is: no display is created and the
           // layout isn't touched, so ending this stream has nothing to undo.

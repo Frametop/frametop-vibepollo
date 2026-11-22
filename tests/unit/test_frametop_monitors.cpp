@@ -422,3 +422,65 @@ TEST(FrametopMonitorsLayout, TheMainDisplayBackOnPutsNoPlacesBack) {
   EXPECT_EQ(wanted.primary, "A");
   EXPECT_TRUE(wanted.places.empty()) << "B's 0,0 was noted around B: putting it back would cover A";
 }
+
+TEST(FrametopMonitorsPlan, OthersOffTurnsOffWhatThePlanDoesntName) {
+  inventory_t now;
+  now.monitors = {monitor("A", true, true), monitor("B", true), monitor("C", false)};
+  const auto plan = with_others_off({{"A", {true, lo}}}, now);
+  ASSERT_EQ(plan.size(), 3u);
+  EXPECT_TRUE(plan.at("A").on);
+  EXPECT_TRUE(same_mode(*plan.at("A").mode, lo));
+  EXPECT_FALSE(plan.at("B").on);
+  EXPECT_FALSE(plan.at("C").on);
+  EXPECT_FALSE(plan.at("B").mode);
+}
+
+TEST_F(FrametopMonitors, OthersOffAppliesToEveryMonitorItDoesntName) {
+  platform.now.monitors = {monitor("A", true, true), monitor("B", true), monitor("C", true)};
+  auto manager = make();
+  ASSERT_EQ(manager.set_plan({{"monitors", {{"A", {{"on", true}, {"mode", to_json(lo)}}}}}, {"others_off", true}}), "");
+  const auto state = manager.state();
+  EXPECT_TRUE(state["others_off"].get<bool>());
+  EXPECT_FALSE(state["monitors"][2]["wish"]["on"].get<bool>()) << "the wish shows the others going off";
+  EXPECT_EQ(manager.display_use("B"), manager_t::display_use_e::refuse) << "its monitor goes off";
+  auto lease = manager.hold();
+  EXPECT_TRUE(same_mode(*platform.get("A").mode, lo));
+  EXPECT_FALSE(platform.get("B").on);
+  EXPECT_FALSE(platform.get("C").on);
+  lease.reset();
+  timers.run_all();
+  EXPECT_TRUE(platform.get("B").on);
+  EXPECT_TRUE(platform.get("C").on);
+  EXPECT_TRUE(same_mode(*platform.get("A").mode, hi));
+}
+
+TEST_F(FrametopMonitors, OthersOffKeepsOneOnAndOnlyTakesBooleans) {
+  auto manager = make();
+  EXPECT_NE(manager.set_plan({{"monitors", json::object()}, {"others_off", 1}}), "");
+  EXPECT_NE(manager.set_plan({{"monitors", {{"A", {{"on", false}}}}}, {"others_off", true}}), "")
+    << "every monitor would go off";
+  ASSERT_EQ(manager.set_plan({{"monitors", {{"B", {{"on", true}}}}}, {"others_off", true}}), "");
+  auto lease = manager.hold();
+  EXPECT_FALSE(platform.get("A").on) << "the main monitor goes off too when another stays on";
+  EXPECT_TRUE(platform.get("B").on);
+}
+
+TEST_F(FrametopMonitors, OthersOffSurvivesARestart) {
+  {
+    auto manager = make();
+    ASSERT_EQ(manager.set_plan({{"monitors", {{"A", {{"on", true}}}}}, {"others_off", true}}), "");
+  }
+  auto manager = make();
+  EXPECT_TRUE(manager.start());
+  auto lease = manager.hold();
+  EXPECT_FALSE(platform.get("B").on);
+}
+
+TEST_F(FrametopMonitors, DroppingOthersOffPutsThemBack) {
+  auto manager = make();
+  ASSERT_EQ(manager.set_plan({{"monitors", {{"A", {{"on", true}}}}}, {"others_off", true}}), "");
+  auto lease = manager.hold();
+  ASSERT_FALSE(platform.get("B").on);
+  ASSERT_EQ(manager.set_plan({{"monitors", json::object()}}), "");
+  EXPECT_TRUE(platform.get("B").on);
+}
