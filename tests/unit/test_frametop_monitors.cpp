@@ -133,8 +133,11 @@ TEST(FrametopMonitorsPlan, ValidateNeedsKnownMonitorsModesAndOneOn) {
   EXPECT_NE(validate({{"A", {true, video_mode_t {1920, 1080, 60000}}}}, now), "");
   EXPECT_EQ(validate({{"A", {true, video_mode_t {2560, 1600, 59950}}}}, now), "");
   EXPECT_NE(validate({{"A", {false, {}}}, {"B", {false, {}}}}, now), "");
-  now.other_outputs = 1;  // a virtual display keeps the desktop going
-  EXPECT_EQ(validate({{"A", {false, {}}}, {"B", {false, {}}}}, now), "");
+  now.other_outputs = 1;  // a virtual display goes with its stream: it doesn't count
+  EXPECT_NE(validate({{"A", {false, {}}}, {"B", {false, {}}}}, now), "");
+  // B goes back off as it was saved, so A off would leave none.
+  EXPECT_NE(validate({{"A", {false, {}}}}, now, {monitor("B", false)}), "");
+  EXPECT_EQ(validate({{"A", {false, {}}}}, now, {monitor("B", true)}), "");
 }
 
 TEST(FrametopMonitorsPlan, KeepsThePrimaryOnWhenEverythingWouldGo) {
@@ -285,4 +288,53 @@ TEST_F(FrametopMonitors, StateShowsTheWish) {
   EXPECT_TRUE(state["monitors"][0]["wish"].is_null());
   EXPECT_FALSE(state["monitors"][1]["wish"]["on"].get<bool>());
   EXPECT_FALSE(state["monitors"][1].contains("place"));
+}
+
+TEST_F(FrametopMonitors, AMonitorGoingBackOffCountsAgainstTheLastOneOn) {
+  platform.now.monitors = {monitor("A", true, true), monitor("B", false)};
+  auto manager = make();
+  ASSERT_EQ(manager.set_plan({{"monitors", {{"B", {{"on", true}}}}}}), "");
+  auto lease = manager.hold();
+  ASSERT_TRUE(platform.get("B").on);
+  EXPECT_NE(manager.set_plan(off("A")), "") << "B would go back off with A off";
+  EXPECT_TRUE(platform.get("A").on);
+}
+
+TEST_F(FrametopMonitors, AStreamBetweenStartRetriesStillGetsItsGrace) {
+  {
+    auto manager = make();
+    manager.set_plan(off("B"));
+    new std::shared_ptr<void>(manager.hold());
+  }
+  platform.readable = false;
+  auto manager = make();
+  EXPECT_FALSE(manager.start());
+  platform.readable = true;
+  manager.hold().reset();  // a stream came and went before the retry
+  EXPECT_TRUE(manager.start());
+  EXPECT_FALSE(platform.get("B").on) << "the retry doesn't cut the grace short";
+  timers.run_all();
+  EXPECT_TRUE(platform.get("B").on);
+}
+
+TEST_F(FrametopMonitors, ADisplayStreamHoldsOnlyForAMonitorItCanHave) {
+  platform.now.monitors = {monitor("A", true, true), monitor("B", true), monitor("C", false)};
+  auto manager = make();
+  using use = manager_t::display_use_e;
+  EXPECT_EQ(manager.display_use("B"), use::hold_after) << "no plan for it";
+  ASSERT_EQ(manager.set_plan({{"monitors", {{"B", {{"on", false}}}, {"C", {{"on", true}}}}}}), "");
+  EXPECT_EQ(manager.display_use("b"), use::refuse) << "the plan turns it off (ids match in any case)";
+  EXPECT_EQ(manager.display_use("C"), use::hold_first) << "the plan turns it on: hold before the lookup";
+  EXPECT_EQ(manager.display_use("A"), use::hold_after);
+  EXPECT_EQ(manager.display_use("HDMI-9"), use::hold_after) << "not one of its monitors";
+  platform.readable = false;
+  EXPECT_EQ(manager.display_use("B"), use::hold_after);
+}
+
+TEST_F(FrametopMonitors, StateSaysWhichMonitorIsSideways) {
+  platform.get("B").sideways = true;
+  auto manager = make();
+  const auto state = manager.state();
+  EXPECT_FALSE(state["monitors"][0]["sideways"].get<bool>());
+  EXPECT_TRUE(state["monitors"][1]["sideways"].get<bool>());
 }

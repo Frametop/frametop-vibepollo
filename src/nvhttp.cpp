@@ -5192,13 +5192,26 @@ namespace nvhttp {
         if (monitor_profile) launch_session->monitor_profile_uuid = monitor_profile->uuid;
         launch_session->host_audio = remote_session::uses_host_audio(launch_session->role);
         launch_session->continuous_audio = false;
-        // Frametop is using this host: its monitor plan holds (monitors on or off, their modes)
-        // before any display is looked up, so a monitor the plan turns on can be streamed.
-        launch_session->frametop_monitors_hold = frametop_monitors::service::hold();
+        // Frametop is using this host: its monitor plan holds (monitors on or off, their modes).
+        // A display stream holds it once its display is found (below), or before the lookup when
+        // the plan turns that monitor on, so a panel retrying a display that isn't there never
+        // applies the plan.
+        if (launch_session->role != remote_session::role_e::display) {
+          launch_session->frametop_monitors_hold = frametop_monitors::service::hold();
+        }
         if (launch_session->role == remote_session::role_e::display) {
           // Capture an existing display as it is: no display is created and the
           // layout isn't touched, so ending this stream has nothing to undo.
           const auto requested_display = get_arg(args, std::string {remote_session::display_launch_arg}.c_str(), "");
+          using display_use_e = frametop_monitors::manager_t::display_use_e;
+          const auto plan_use = frametop_monitors::service::display_use(requested_display);
+          if (plan_use == display_use_e::refuse) {
+            tree.put("root.resume", 0);
+            tree.put("root.<xmlattr>.status_code", 409);
+            tree.put("root.<xmlattr>.status_message", requested_display + " is turned off while Frametop uses this host (Remote Displays, Monitors)");
+            return;
+          }
+          if (plan_use == display_use_e::hold_first) launch_session->frametop_monitors_hold = frametop_monitors::service::hold();
 #ifdef __linux__
           // An idle desktop may have blanked the display; wake it as a Remote Monitor does.
           // A Hyprland session has no display power control (its broker refuses
@@ -5259,6 +5272,7 @@ namespace nvhttp {
           }
 #endif
           launch_session->remote_capture_output = *output;
+          if (!launch_session->frametop_monitors_hold) launch_session->frametop_monitors_hold = frametop_monitors::service::hold();
 #ifdef _WIN32
           launch_session->remote_capture_device_id = existing_display_device_id(requested_display);
 #endif

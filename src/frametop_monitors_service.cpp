@@ -76,20 +76,25 @@ namespace frametop_monitors::service {
   void start() {
     auto *manager = instance()->manager.get();
     if (!manager || manager->start()) return;
-    // Started before anyone logged in (after a crash, then a sign-out): keep trying a while.
+    // Started before anyone logged in (after a crash or a reboot, then no login yet): keep
+    // trying until it's done or a stream takes over, every 15 s for half an hour, then each
+    // minute (KDE keeps what was applied, so only this brings a monitor back there).
     std::thread([manager] {
-      const auto deadline = std::chrono::steady_clock::now() + 30min;
-      while (std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(15s);
-        if (manager->start()) return;
-      }
-      BOOST_LOG(warning) << "Frametop monitors: couldn't put the monitors back as they were; giving up.";
+      const auto slow_after = std::chrono::steady_clock::now() + 30min;
+      do {
+        std::this_thread::sleep_for(std::chrono::steady_clock::now() < slow_after ? 15s : 60s);
+      } while (!manager->start());
     }).detach();
   }
 
   std::shared_ptr<void> hold() {
     auto *manager = instance()->manager.get();
     return manager ? manager->hold() : nullptr;
+  }
+
+  manager_t::display_use_e display_use(const std::string &id) {
+    auto *manager = instance()->manager.get();
+    return manager ? manager->display_use(id) : manager_t::display_use_e::hold_after;
   }
 
   nlohmann::json state() {

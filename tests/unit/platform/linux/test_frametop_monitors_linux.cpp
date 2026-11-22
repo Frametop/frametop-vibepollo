@@ -62,6 +62,15 @@ TEST(FrametopMonitorsHyprland, ListsTheRealMonitorsAndCountsTheRest) {
   EXPECT_FALSE(off.mode);  // a disabled output's fields are stale
   EXPECT_TRUE(off.place.empty());
   EXPECT_EQ(off.modes.size(), 2u);  // still listed, to pick one before it comes on
+  EXPECT_FALSE(laptop.sideways);
+}
+
+TEST(FrametopMonitorsHyprland, AQuarterTurnIsSideways) {
+  auto listed = hypr_monitors();
+  listed[0]["transform"] = 3;
+  const auto now = hypr::parse_monitors(listed, never_virtual);
+  ASSERT_TRUE(now);
+  EXPECT_TRUE(now->monitors[0].sideways);
 }
 
 TEST(FrametopMonitorsHyprland, RefusesWhatIsNotItsList) {
@@ -206,6 +215,10 @@ TEST(FrametopMonitorsKScreen, ListsConnectedMonitors) {
   EXPECT_EQ(main.place["priority"], 1);
   EXPECT_FALSE(now->monitors[1].on);
   EXPECT_FALSE(now->monitors[1].primary);
+  EXPECT_FALSE(main.sideways) << "rotation 1 is none";
+  auto turned = kscreen_config();
+  turned["outputs"][0]["rotation"] = 8;
+  EXPECT_TRUE(kscreen::parse_outputs(turned, never_virtual)->monitors[0].sideways);
   EXPECT_FALSE(kscreen::parse_outputs(json::array(), never_virtual));
 }
 

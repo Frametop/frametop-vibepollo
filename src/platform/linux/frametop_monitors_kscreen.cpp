@@ -115,6 +115,8 @@ namespace platf::frametop_monitors_kscreen {
         const auto pos = output.value("pos", json::object());
         monitor.place = {{"x", pos.value("x", 0)}, {"y", pos.value("y", 0)}, {"scale", output.value("scale", 1.0)},
                          {"rotation", output.value("rotation", 1)}, {"priority", output.value("priority", 0)}};
+        const int rotation = output.value("rotation", 1);
+        monitor.sideways = rotation == 2 || rotation == 8 || rotation == 32 || rotation == 128;  // left, right, flipped90/270
       }
       out.monitors.push_back(std::move(monitor));
     }

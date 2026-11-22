@@ -4,6 +4,8 @@
  */
 #include "frametop_monitors.h"
 
+#include <cctype>
+
 #include <algorithm>
 
 namespace frametop_monitors {
@@ -35,7 +37,7 @@ namespace frametop_monitors {
 
     // How many outputs stay on once `targets` are made so.
     int on_after(const inventory_t &now, const std::vector<target_t> &targets) {
-      int on = now.other_outputs;
+      int on = 0;
       for (const auto &m : now.monitors) {
         const auto t = std::find_if(targets.begin(), targets.end(), [&](const target_t &x) {
           return x.id == m.id;
@@ -71,7 +73,8 @@ namespace frametop_monitors {
     json modes = json::array();
     for (const auto &mode : m.modes) modes.push_back(to_json(mode));
     return {{"id", m.id}, {"name", m.name}, {"on", m.on}, {"primary", m.primary},
-            {"mode", m.mode ? to_json(*m.mode) : json(nullptr)}, {"modes", std::move(modes)}, {"place", m.place}};
+            {"mode", m.mode ? to_json(*m.mode) : json(nullptr)}, {"modes", std::move(modes)}, {"place", m.place},
+            {"sideways", m.sideways}};
   }
 
   std::optional<monitor_t> monitor_from_json(const json &value) {
@@ -88,6 +91,7 @@ namespace frametop_monitors {
       }
     }
     if (value.contains("place") && value["place"].is_object()) m.place = value["place"];
+    m.sideways = value.value("sideways", false) == true;
     return m;
   }
 
@@ -125,11 +129,12 @@ namespace frametop_monitors {
     return out;
   }
 
-  std::string validate(const plan_t &plan, const inventory_t &now) {
-    int on = now.other_outputs;
+  std::string validate(const plan_t &plan, const inventory_t &now, const std::vector<monitor_t> &going_back) {
+    int on = 0;
     for (const auto &m : now.monitors) {
       const auto wish = plan.find(m.id);
-      on += (wish == plan.end() ? m.on : wish->second.on) ? 1 : 0;
+      const auto *back = find(going_back, m.id);
+      on += (wish != plan.end() ? wish->second.on : back ? back->on : m.on) ? 1 : 0;
     }
     for (const auto &[id, wish] : plan) {
       const auto *m = find(now.monitors, id);
@@ -161,23 +166,27 @@ namespace frametop_monitors {
         targets.push_back({id, true, wish.mode, m->place});
       }
     }
-    if (on_after(now, targets) == 0) {
-      // Never every output off: the primary monitor stays (else the first one turned off).
-      auto keep = std::find_if(targets.begin(), targets.end(), [&](const target_t &t) {
-        const auto *m = find(now.monitors, t.id);
-        return !t.on && m && m->primary;
-      });
-      if (keep == targets.end()) {
-        keep = std::find_if(targets.begin(), targets.end(), [](const target_t &t) {
-          return !t.on;
-        });
-      }
-      if (keep != targets.end()) {
-        if (kept_on) *kept_on = label(*find(now.monitors, keep->id));
-        targets.erase(keep);
-      }
-    }
+    keep_one_on(targets, now, kept_on);
     return targets;
+  }
+
+  void keep_one_on(std::vector<target_t> &targets, const inventory_t &now, std::string *kept_on) {
+    if (on_after(now, targets) > 0) return;
+    // Never every monitor off: the primary monitor stays (else the first one turned off).
+    auto keep = std::find_if(targets.begin(), targets.end(), [&](const target_t &t) {
+      const auto *m = find(now.monitors, t.id);
+      return !t.on && m && m->on && m->primary;
+    });
+    if (keep == targets.end()) {
+      keep = std::find_if(targets.begin(), targets.end(), [&](const target_t &t) {
+        const auto *m = find(now.monitors, t.id);
+        return !t.on && m && m->on;
+      });
+    }
+    if (keep != targets.end()) {
+      if (kept_on) *kept_on = label(*find(now.monitors, keep->id));
+      targets.erase(keep);
+    }
   }
 
   bool still_as_set(const monitor_t &now, const wish_t &set) {
@@ -228,24 +237,24 @@ namespace frametop_monitors {
 
   bool manager_t::start() {
     std::lock_guard lock {mutex_};
-    // A stream that came meanwhile owns what is changed now: its release puts it back.
-    if (holders_ > 0) return true;
-    plan_.clear();
-    saved_.clear();
-    set_.clear();
-    const auto state = store_.load();
-    if (!state || !state->is_object()) return true;
-    if (state->contains("plan")) {
-      if (auto plan = plan_from_json((*state)["plan"], nullptr)) plan_ = std::move(*plan);
-    }
-    if (state->contains("saved") && (*state)["saved"].is_array()) {
-      for (const auto &m : (*state)["saved"]) {
-        if (auto parsed = monitor_from_json(m)) saved_.push_back(std::move(*parsed));
+    if (!loaded_) {
+      loaded_ = true;
+      if (const auto state = store_.load(); state && state->is_object()) {
+        if (state->contains("plan")) {
+          if (auto plan = plan_from_json((*state)["plan"], nullptr)) plan_ = std::move(*plan);
+        }
+        if (state->contains("saved") && (*state)["saved"].is_array()) {
+          for (const auto &m : (*state)["saved"]) {
+            if (auto parsed = monitor_from_json(m)) saved_.push_back(std::move(*parsed));
+          }
+        }
+        if (state->contains("set") && (*state)["set"].is_object()) {
+          if (auto set = plan_from_json((*state)["set"], nullptr)) set_ = std::move(*set);
+        }
       }
     }
-    if (state->contains("set") && (*state)["set"].is_object()) {
-      if (auto set = plan_from_json((*state)["set"], nullptr)) set_ = std::move(*set);
-    }
+    // A stream that came since owns what is changed now: its release (and grace) puts it back.
+    if (held_) return true;
     if (set_.empty()) {
       saved_.clear();
       return true;
@@ -258,12 +267,32 @@ namespace frametop_monitors {
     {
       std::lock_guard lock {mutex_};
       ++holders_;
+      held_ = true;
       ++generation_;  // a pending grace no longer ends it
       if (!plan_.empty() || !set_.empty()) apply_locked();
     }
     return std::shared_ptr<void>(this, [](manager_t *self) {
       self->release();
     });
+  }
+
+  manager_t::display_use_e manager_t::display_use(const std::string &id) {
+    const auto same = [&](const std::string &other) {
+      return id.size() == other.size() && std::equal(id.begin(), id.end(), other.begin(), [](unsigned char a, unsigned char b) {
+               return std::tolower(a) == std::tolower(b);
+             });
+    };
+    std::lock_guard lock {mutex_};
+    const auto now = platform_.inventory();
+    if (!now) return display_use_e::hold_after;
+    const auto m = std::find_if(now->monitors.begin(), now->monitors.end(), [&](const monitor_t &x) {
+      return same(x.id);
+    });
+    if (m == now->monitors.end()) return display_use_e::hold_after;
+    const auto wish = plan_.find(m->id);
+    if (wish == plan_.end()) return display_use_e::hold_after;
+    if (!wish->second.on) return display_use_e::refuse;
+    return m->on ? display_use_e::hold_after : display_use_e::hold_first;
   }
 
   void manager_t::release() {
@@ -309,17 +338,21 @@ namespace frametop_monitors {
     std::string kept_on;
     const auto planned = plan_targets(plan_, *now, saved_, &kept_on);
     targets.insert(targets.end(), planned.begin(), planned.end());
+    if (kept_on.empty()) keep_one_on(targets, *now, &kept_on);  // with the ones going back too
     last_error_ = kept_on.empty() ? std::string {} : kept_on + " stays on: the desktop needs one display";
     if (!kept_on.empty()) log(last_error_);
-    // Each monitor is saved as it is just before this first changes it.
-    for (const auto &t : planned) {
-      if (set_.contains(t.id)) continue;
-      const auto *m = find(now->monitors, t.id);
-      std::erase_if(saved_, [&](const monitor_t &x) {
-        return x.id == t.id;
-      });
-      saved_.push_back(*m);
-      set_[t.id] = {t.on, t.mode};  // in the store before the change, for a crash
+    // Each monitor is saved as it is just before this first changes it, and what it's made
+    // now is in the store before the change, for a crash.
+    for (const auto &t : targets) {
+      if (!plan_.contains(t.id)) continue;  // going back: set_ has it already
+      if (!set_.contains(t.id)) {
+        const auto *m = find(now->monitors, t.id);
+        std::erase_if(saved_, [&](const monitor_t &x) {
+          return x.id == t.id;
+        });
+        saved_.push_back(*m);
+      }
+      set_[t.id] = {t.on, t.mode};
     }
     if (targets.empty()) {
       if (set_.empty()) saved_.clear();
@@ -387,7 +420,12 @@ namespace frametop_monitors {
     std::lock_guard lock {mutex_};
     const auto now = platform_.inventory();
     if (!now) return "couldn't read the monitors";
-    if (error = validate(*plan, *now); !error.empty()) return error;
+    std::vector<monitor_t> going_back;
+    for (const auto &[id, wish] : set_) {
+      const auto *was = find(saved_, id);
+      if (!plan->contains(id) && was) going_back.push_back(*was);
+    }
+    if (error = validate(*plan, *now, going_back); !error.empty()) return error;
     plan_ = std::move(*plan);
     save_locked();
     if (holders_ > 0 || !set_.empty()) apply_locked();

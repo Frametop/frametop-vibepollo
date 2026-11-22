@@ -168,6 +168,7 @@ namespace platf::frametop_monitors_hyprland {
         }
         monitor.place = {{"x", m.value("x", 0)}, {"y", m.value("y", 0)}, {"scale", m.value("scale", 1.0)},
                          {"transform", m.value("transform", 0)}};
+        monitor.sideways = m.value("transform", 0) % 2 == 1;  // 90 and 270, flipped or not
       }
       out.monitors.push_back(std::move(monitor));
     }

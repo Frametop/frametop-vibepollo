@@ -3,6 +3,8 @@
 
 #undef NDEBUG
 #include <assert.h>
+#include <stdbool.h>
+#include <string.h>
 
 static bool safe(int argc, const char *const *argv) {
   return hypr_monitor_arguments_are_safe(argc, (char **) argv);

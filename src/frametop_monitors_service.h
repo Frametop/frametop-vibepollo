@@ -25,6 +25,9 @@ namespace frametop_monitors::service {
   /// A Frametop stream's hold on the plan; nullptr where monitors can't be changed.
   std::shared_ptr<void> hold();
 
+  /// What a stream of the existing display `id` does with the plan (hold_after without one).
+  manager_t::display_use_e display_use(const std::string &id);
+
   /// GET /api/frametop/monitors: {"status": true, "backend", "monitors": [...], ...}, or
   /// {"status": false, "error"} where monitors can't be changed.
   nlohmann::json state();
