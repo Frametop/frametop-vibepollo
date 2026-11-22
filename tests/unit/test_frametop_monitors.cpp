@@ -497,6 +497,17 @@ TEST_F(FrametopMonitors, ItsOwnModeAfterAnotherPutsItsModeBack) {
   EXPECT_FALSE(manager.state()["monitors"][0]["changed"].get<bool>()) << "nothing of A's left to put back";
 }
 
+TEST_F(FrametopMonitors, ItsOwnModeKeepsTheModeOfOneThatWasOff) {
+  platform.now.monitors = {monitor("A", true, true), monitor("C", false)};
+  auto manager = make();
+  ASSERT_EQ(manager.set_plan({{"monitors", {{"C", {{"on", true}, {"mode", to_json(lo)}}}}}}), "");
+  auto lease = manager.hold();
+  ASSERT_TRUE(platform.get("C").on);
+  ASSERT_EQ(manager.set_plan({{"monitors", {{"C", {{"on", true}}}}}}), "");
+  EXPECT_TRUE(platform.get("C").on) << "it stays on: the plan wants it";
+  EXPECT_TRUE(same_mode(*platform.get("C").mode, lo)) << "it had no mode before this, so it keeps the one it has";
+}
+
 TEST_F(FrametopMonitors, ItsOwnModeLeavesAModeSomeoneElseSet) {
   auto manager = make();
   ASSERT_EQ(manager.set_plan({{"monitors", {{"A", {{"on", true}, {"mode", to_json(lo)}}}}}}), "");

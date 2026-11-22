@@ -64,7 +64,8 @@ namespace frametop_monitors {
     std::shared_ptr<void> hold();
 
     /// At a clean shutdown, once the streams are gone: puts every monitor back now, not a
-    /// grace later (start() puts back what this couldn't). Nothing holds the plan after this.
+    /// grace later (start() puts back what this couldn't). Called once nothing can take a hold
+    /// any more (main.cpp: after the HTTP and RTSP threads end); a hold after it applies again.
     void shut_down();
 
     /// What a stream of the existing display `id` does with the plan.
