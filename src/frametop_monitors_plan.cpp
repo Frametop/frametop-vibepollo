@@ -89,7 +89,8 @@ namespace frametop_monitors {
     for (const auto &mode : m.modes) modes.push_back(to_json(mode));
     return {{"id", m.id}, {"name", m.name}, {"on", m.on}, {"primary", m.primary},
             {"mode", m.mode ? to_json(*m.mode) : json(nullptr)}, {"modes", std::move(modes)}, {"place", m.place},
-            {"sideways", m.sideways}, {"scale", m.scale ? json(*m.scale) : json(nullptr)}, {"scales", m.scales}};
+            {"sideways", m.sideways}, {"scale", m.scale ? json(*m.scale) : json(nullptr)}, {"scales", m.scales},
+            {"any_mode", m.any_mode}};
   }
 
   std::optional<monitor_t> monitor_from_json(const json &value) {
@@ -107,6 +108,7 @@ namespace frametop_monitors {
     }
     if (value.contains("place") && value["place"].is_object()) m.place = value["place"];
     m.sideways = value.value("sideways", false) == true;
+    m.any_mode = value.value("any_mode", false) == true;
     if (value.contains("scale")) m.scale = scale_from_json(value["scale"]);
     if (value.contains("scales") && value["scales"].is_array()) {
       for (const auto &scale : value["scales"]) {
@@ -163,6 +165,39 @@ namespace frametop_monitors {
     return {true, m.mode, m.scale};
   }
 
+  plan_t resolve_sizes(plan_t plan, const inventory_t &now, const std::vector<monitor_t> &saved) {
+    for (auto &[id, wish] : plan) {
+      if (!wish.mode || wish.mode->refresh_mhz != 0) continue;
+      const auto *m = find(now.monitors, id);
+      if (!m) continue;
+      const auto *was = find(saved, id);
+      const auto own = was && was->on ? was->mode : m->on ? m->mode : std::nullopt;
+      const auto size = *wish.mode;
+      const auto sized = [&](const video_mode_t &x) {
+        return x.width == size.width && x.height == size.height;
+      };
+      if (own && sized(*own)) {
+        wish.mode.reset();
+        continue;
+      }
+      std::optional<video_mode_t> best;
+      for (const auto &listed : m->modes) {
+        if (!sized(listed)) continue;
+        if (own && same_mode({size.width, size.height, own->refresh_mhz}, listed)) {
+          best = listed;
+          break;
+        }
+        if (!best || listed.refresh_mhz > best->refresh_mhz) best = listed;
+      }
+      if (best) {
+        wish.mode = best;
+      } else if (m->any_mode) {
+        wish.mode = video_mode_t {size.width, size.height, 60000};
+      }
+    }
+    return plan;
+  }
+
   plan_t with_others_off(plan_t plan, const inventory_t &now) {
     for (const auto &m : now.monitors) {
       if (!plan.contains(m.id)) plan[m.id] = {false, std::nullopt};
@@ -180,8 +215,11 @@ namespace frametop_monitors {
     for (const auto &[id, wish] : plan) {
       const auto *m = find(now.monitors, id);
       if (!m) return "There's no monitor " + id;
+      if (wish.mode && wish.mode->refresh_mhz == 0) {
+        return label(*m) + " can't be " + std::to_string(wish.mode->width) + "x" + std::to_string(wish.mode->height);
+      }
       // Checked only against a list: Windows lists no modes for a monitor while it's off.
-      if (wish.mode && !m->modes.empty() && std::none_of(m->modes.begin(), m->modes.end(), [&](const video_mode_t &listed) {
+      if (wish.mode && !m->any_mode && !m->modes.empty() && std::none_of(m->modes.begin(), m->modes.end(), [&](const video_mode_t &listed) {
             return same_mode(listed, *wish.mode);
           })) {
         return label(*m) + " has no " + describe(*wish.mode) + " mode";

@@ -579,6 +579,47 @@ TEST_F(FrametopMonitors, AScaleSomeoneElseSetIsLeftAlone) {
   EXPECT_DOUBLE_EQ(*platform.get("A").scale, 1.25);
 }
 
+TEST(FrametopMonitorsPlan, ASizeIsItsOwnModeAListedOneOrACustomOne) {
+  inventory_t now {{monitor("A", true, true)}};
+  now.monitors[0].modes = {hi, lo, {1920, 1200, 60000}, {1920, 1200, 120000}};
+  const auto size = [](unsigned w, unsigned h) {
+    return plan_t {{"A", {true, video_mode_t {w, h, 0}}}};
+  };
+  EXPECT_FALSE(resolve_sizes(size(2560, 1600), now, {})["A"].mode) << "its own size: its own mode";
+  auto was = monitor("A", true, true);
+  was.mode = lo;
+  EXPECT_FALSE(resolve_sizes(size(2560, 1600), now, {was})["A"].mode) << "its own as saved, though changed since";
+  const auto listed = resolve_sizes(size(1920, 1200), now, {was})["A"].mode;
+  ASSERT_TRUE(listed);
+  EXPECT_EQ(listed->refresh_mhz, 60000u) << "its own refresh, where that size has it";
+  EXPECT_EQ(resolve_sizes(size(1920, 1200), now, {})["A"].mode->refresh_mhz, 120000u) << "else the fastest";
+  EXPECT_EQ(resolve_sizes(size(2560, 1200), now, {})["A"].mode->refresh_mhz, 0u) << "a size it can't take stays asked";
+  EXPECT_NE(validate(resolve_sizes(size(2560, 1200), now, {}), now), "");
+  now.monitors[0].any_mode = true;
+  const auto custom = resolve_sizes(size(2560, 1200), now, {})["A"].mode;
+  ASSERT_TRUE(custom);
+  EXPECT_TRUE(same_mode(*custom, {2560, 1200, 60000})) << "one that takes any mode: that size at 60 Hz";
+  EXPECT_EQ(validate(resolve_sizes(size(2560, 1200), now, {}), now), "");
+}
+
+TEST_F(FrametopMonitors, AStreamSizeSetsTheMonitorAndGoesBack) {
+  platform.get("A").any_mode = true;
+  auto manager = make();
+  const json sized {{"monitors", {{"A", {{"on", true}, {"mode", to_json(video_mode_t {2560, 1200, 0})}, {"scale", 1.25}}}}}};
+  ASSERT_EQ(manager.set_plan(sized), "");
+  auto lease = manager.hold();
+  EXPECT_TRUE(same_mode(*platform.get("A").mode, {2560, 1200, 60000}));
+  EXPECT_DOUBLE_EQ(*platform.get("A").scale, 1.25);
+  EXPECT_EQ(manager.state()["monitors"][0]["wish"]["mode"]["height"], 1200) << "the wish as it was resolved";
+  const auto applied = platform.applied.size();
+  ASSERT_EQ(manager.set_plan(sized), "");
+  EXPECT_EQ(platform.applied.size(), applied) << "the same size again changes nothing";
+  ASSERT_EQ(manager.set_plan({{"monitors", {{"A", {{"on", true}, {"mode", to_json(video_mode_t {2560, 1600, 0})}}}}}}), "");
+  EXPECT_TRUE(same_mode(*platform.get("A").mode, hi)) << "its own size: back to its own mode";
+  EXPECT_DOUBLE_EQ(*platform.get("A").scale, 1.0);
+  EXPECT_FALSE(manager.state()["monitors"][0]["changed"].get<bool>());
+}
+
 TEST_F(FrametopMonitors, AShutdownPutsThemBackNow) {
   auto manager = make();
   ASSERT_EQ(manager.set_plan(off("B")), "");

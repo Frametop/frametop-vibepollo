@@ -14,7 +14,8 @@
 
 namespace frametop_monitors {
   /// A display mode. The refresh rate is in millihertz: Windows lists whole hertz,
-  /// Hyprland and KScreen fractions (59.951 Hz).
+  /// Hyprland and KScreen fractions (59.951 Hz). In a wish, a refresh of 0 asks for a size:
+  /// resolve_sizes picks the mode.
   struct video_mode_t {
     unsigned width = 0;
     unsigned height = 0;
@@ -45,6 +46,8 @@ namespace frametop_monitors {
     std::optional<double> scale;
     /// The scales it takes in its mode now (none: its scale can't be set here, or it's off).
     std::vector<double> scales;
+    /// It takes a mode it doesn't list too (Hyprland makes a custom mode for any size).
+    bool any_mode = false;
     /// The platform's own placement (position, scale, rotation...), to put it back as it was.
     nlohmann::json place = nlohmann::json::object();
   };
@@ -91,12 +94,19 @@ namespace frametop_monitors {
   /// What it is now, as a wish: on in its mode and scale, or off.
   wish_t as_it_is(const monitor_t &m);
 
+  /// The plan with each size it asks for (a mode with refresh 0) made a mode: none (its own)
+  /// when it's the size of its own mode (as `saved` has it, else as it is), else a mode it lists
+  /// in that size (its own refresh if it has it, else the fastest), else, where it takes any
+  /// mode, that size at 60 Hz. A size it can't take stays as asked, for validate to refuse.
+  plan_t resolve_sizes(plan_t plan, const inventory_t &now, const std::vector<monitor_t> &saved);
+
   /// The plan with every monitor of `now` it doesn't name turned off (a plan with others_off:
   /// Frametop's Remote Displays name only the monitors that have a display there).
   plan_t with_others_off(plan_t plan, const inventory_t &now);
 
   /// Why the plan can't be taken ("" if it can): every monitor it names is one of these, each
-  /// mode is one that monitor lists (if it lists any), a scale is asked only of one on that
+  /// mode is one that monitor lists (if it lists any and takes no other), each size is
+  /// resolved (resolve_sizes), a scale is asked only of one on that
   /// lists scales (or off: it's tried when it comes on), and a physical monitor stays on. `going_back`: monitors
   /// the plan no longer names that go back as they were saved (on or off).
   std::string validate(const plan_t &plan, const inventory_t &now, const std::vector<monitor_t> &going_back = {});

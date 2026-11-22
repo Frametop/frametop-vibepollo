@@ -63,6 +63,7 @@ TEST(FrametopMonitorsHyprland, ListsTheRealMonitorsAndCountsTheRest) {
   EXPECT_TRUE(off.place.empty());
   EXPECT_EQ(off.modes.size(), 2u);  // still listed, to pick one before it comes on
   EXPECT_FALSE(laptop.sideways);
+  EXPECT_TRUE(laptop.any_mode) << "Hyprland makes a custom mode for a size it doesn't list";
 }
 
 TEST(FrametopMonitorsHyprland, ListsTheScalesItsModeTakes) {

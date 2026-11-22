@@ -218,7 +218,7 @@ namespace frametop_monitors {
   }
 
   plan_t manager_t::plan_for(const inventory_t &now) const {
-    return others_off_ ? with_others_off(plan_, now) : plan_;
+    return resolve_sizes(others_off_ ? with_others_off(plan_, now) : plan_, now, saved_);
   }
 
   std::vector<target_t> manager_t::targets_locked(const plan_t &plan, const inventory_t &now, std::string *kept_on) const {
@@ -298,7 +298,7 @@ namespace frametop_monitors {
     std::lock_guard lock {mutex_};
     const auto now = platform_.inventory();
     if (!now) return "couldn't read the monitors";
-    const auto whole = others_off ? with_others_off(*plan, *now) : *plan;
+    const auto whole = resolve_sizes(others_off ? with_others_off(*plan, *now) : *plan, *now, saved_);
     std::vector<monitor_t> going_back;
     for (const auto &[id, wish] : set_) {
       const auto *was = find(saved_, id);

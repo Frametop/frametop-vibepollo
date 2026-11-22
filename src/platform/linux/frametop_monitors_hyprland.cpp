@@ -178,6 +178,7 @@ namespace platf::frametop_monitors_hyprland {
       monitor.name = m.value("description", std::string {});
       if (monitor.name.empty()) monitor.name = name;
       monitor.on = on;
+      monitor.any_mode = true;  // a size it doesn't list becomes a custom mode
       if (m.contains("availableModes") && m["availableModes"].is_array()) {
         for (const auto &text : m["availableModes"]) {
           if (!text.is_string()) continue;
