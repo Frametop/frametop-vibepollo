@@ -21,7 +21,7 @@ namespace {
     m.on = on;
     m.primary = primary;
     m.modes = {hi, lo};
-    if (on) m.mode = hi;
+    if (on) m.mode = hi, m.scale = 1.0, m.scales = {1.0, 1.25, 2.0};
     m.place = {{"x", primary ? 0 : 2560}, {"y", 0}};
     return m;
   }
@@ -55,6 +55,7 @@ namespace {
         auto &m = get(t.id);
         m.on = t.on;
         m.mode = t.on ? (t.mode ? t.mode : m.mode ? m.mode : std::optional<video_mode_t> {hi}) : std::nullopt;
+        m.scale = t.on ? (t.scale ? t.scale : m.scale ? m.scale : std::optional<double> {1.0}) : std::nullopt;
         if (t.on && !t.place.empty()) m.place = t.place;
         if (!t.on) m.place = json::object();
       }
@@ -142,6 +143,28 @@ TEST(FrametopMonitorsPlan, ValidateNeedsKnownMonitorsModesAndOneOn) {
   // B goes back off as it was saved, so A off would leave none.
   EXPECT_NE(validate({{"A", {false, {}}}}, now, {monitor("B", false)}), "");
   EXPECT_EQ(validate({{"A", {false, {}}}}, now, {monitor("B", true)}), "");
+}
+
+TEST(FrametopMonitorsPlan, ParsesAScale) {
+  std::string error;
+  const auto plan = plan_from_json(json::parse(R"({"A":{"on":true,"scale":1.25},"B":{"on":false,"scale":2}})"), &error);
+  ASSERT_TRUE(plan);
+  ASSERT_TRUE(plan->at("A").scale);
+  EXPECT_DOUBLE_EQ(*plan->at("A").scale, 1.25);
+  EXPECT_FALSE(plan->at("B").scale) << "an off monitor has no scale";
+  EXPECT_TRUE(plan_from_json(json::parse(R"({"A":{"on":true,"scale":null}})"), &error)) << "null: its own";
+  EXPECT_FALSE(plan_from_json(json::parse(R"({"A":{"on":true,"scale":5}})"), &error));
+  EXPECT_FALSE(plan_from_json(json::parse(R"({"A":{"on":true,"scale":0}})"), &error));
+  EXPECT_FALSE(plan_from_json(json::parse(R"({"A":{"on":true,"scale":"1.25"}})"), &error));
+  EXPECT_EQ(to_json(*plan_from_json(to_json(*plan), &error)), to_json(*plan));
+}
+
+TEST(FrametopMonitorsPlan, AScaleOnlyWhereItCanBeSet) {
+  inventory_t now {{monitor("A", true, true), monitor("B", true)}, 0};
+  EXPECT_EQ(validate({{"A", {true, std::nullopt, 1.25}}}, now), "");
+  now.monitors[0].scales.clear();  // Windows: no scale to set
+  EXPECT_NE(validate({{"A", {true, std::nullopt, 1.25}}}, now), "");
+  EXPECT_EQ(validate({{"A", {true, std::nullopt, std::nullopt}}}, now), "");
 }
 
 TEST(FrametopMonitorsPlan, KeepsThePrimaryOnWhenEverythingWouldGo) {
@@ -515,6 +538,45 @@ TEST_F(FrametopMonitors, ItsOwnModeLeavesAModeSomeoneElseSet) {
   platform.get("A").mode = video_mode_t {1920, 1080, 60000};  // the user's own change since
   ASSERT_EQ(manager.set_plan({{"monitors", {{"A", {{"on", true}}}}}}), "");
   EXPECT_EQ(platform.get("A").mode->width, 1920u);
+}
+
+TEST_F(FrametopMonitors, APickedScaleAppliesAndGoesBack) {
+  auto manager = make();
+  ASSERT_EQ(manager.set_plan({{"monitors", {{"A", {{"on", true}, {"scale", 2}}}}}}), "");
+  EXPECT_DOUBLE_EQ(*platform.get("A").scale, 1.0) << "nothing without a stream";
+  auto lease = manager.hold();
+  EXPECT_DOUBLE_EQ(*platform.get("A").scale, 2.0);
+  EXPECT_TRUE(same_mode(*platform.get("A").mode, hi)) << "its mode stays";
+  EXPECT_EQ(manager.state()["monitors"][0]["wish"]["scale"], 2.0);
+  lease.reset();
+  timers.run_all();
+  EXPECT_DOUBLE_EQ(*platform.get("A").scale, 1.0) << "back after the grace";
+  EXPECT_TRUE((*store.state)["set"].empty());
+}
+
+TEST_F(FrametopMonitors, ItsOwnScaleAfterAnotherKeepsThePickedMode) {
+  auto manager = make();
+  ASSERT_EQ(manager.set_plan({{"monitors", {{"A", {{"on", true}, {"mode", to_json(lo)}, {"scale", 2}}}}}}), "");
+  auto lease = manager.hold();
+  ASSERT_DOUBLE_EQ(*platform.get("A").scale, 2.0);
+  platform.applied.clear();
+  ASSERT_EQ(manager.set_plan({{"monitors", {{"A", {{"on", true}, {"mode", to_json(lo)}}}}}}), "");
+  EXPECT_DOUBLE_EQ(*platform.get("A").scale, 1.0) << "its own scale: the one it had before";
+  EXPECT_TRUE(same_mode(*platform.get("A").mode, lo)) << "the picked mode stays";
+  ASSERT_EQ(platform.applied.size(), 1u);
+  EXPECT_EQ(platform.applied[0].size(), 1u) << "one change for A, not one back and one planned";
+  ASSERT_EQ(manager.set_plan({{"monitors", {{"A", {{"on", true}, {"mode", to_json(lo)}}}}}}), "");
+  EXPECT_EQ(platform.applied.size(), 1u) << "the same plan again changes nothing";
+}
+
+TEST_F(FrametopMonitors, AScaleSomeoneElseSetIsLeftAlone) {
+  auto manager = make();
+  ASSERT_EQ(manager.set_plan({{"monitors", {{"A", {{"on", true}, {"scale", 2}}}}}}), "");
+  auto lease = manager.hold();
+  platform.get("A").scale = 1.25;  // the user's own change since
+  lease.reset();
+  timers.run_all();
+  EXPECT_DOUBLE_EQ(*platform.get("A").scale, 1.25);
 }
 
 TEST_F(FrametopMonitors, AShutdownPutsThemBackNow) {

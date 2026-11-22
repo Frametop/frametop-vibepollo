@@ -117,6 +117,9 @@ namespace platf::frametop_monitors_kscreen {
                          {"rotation", output.value("rotation", 1)}, {"priority", output.value("priority", 0)}};
         const int rotation = output.value("rotation", 1);
         monitor.sideways = rotation == 2 || rotation == 8 || rotation == 32 || rotation == 128;  // left, right, flipped90/270
+        const auto scale = output.value("scale", 1.0);
+        if (scale > 0 && scale < 100) monitor.scale = scale;
+        monitor.scales = {1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 3.0};  // KDE takes any scale
       }
       out.monitors.push_back(std::move(monitor));
     }
@@ -149,7 +152,11 @@ namespace platf::frametop_monitors_kscreen {
       if (place.contains("x") && place["x"].is_number_integer() && place.contains("y") && place["y"].is_number_integer()) {
         on.push_back(prefix + "position." + std::to_string(place["x"].get<int>()) + "," + std::to_string(place["y"].get<int>()));
       }
-      if (place.contains("scale") && place["scale"].is_number()) on.push_back(prefix + "scale." + scale_text(place["scale"].get<double>()));
+      if (t.scale) {
+        on.push_back(prefix + "scale." + scale_text(*t.scale));
+      } else if (place.contains("scale") && place["scale"].is_number()) {
+        on.push_back(prefix + "scale." + scale_text(place["scale"].get<double>()));
+      }
       if (place.contains("rotation") && place["rotation"].is_number_integer()) {
         if (const auto r = rotations().find(place["rotation"].get<int>()); r != rotations().end()) {
           on.push_back(prefix + "rotation." + r->second);

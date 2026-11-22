@@ -65,6 +65,30 @@ TEST(FrametopMonitorsHyprland, ListsTheRealMonitorsAndCountsTheRest) {
   EXPECT_FALSE(laptop.sideways);
 }
 
+TEST(FrametopMonitorsHyprland, ListsTheScalesItsModeTakes) {
+  const auto now = hypr::parse_monitors(hypr_monitors(), never_virtual);
+  ASSERT_TRUE(now);
+  const auto &laptop = now->monitors[0];
+  ASSERT_TRUE(laptop.scale);
+  EXPECT_DOUBLE_EQ(*laptop.scale, 1.25);
+  EXPECT_EQ(laptop.scales, (std::vector<double> {1.0, 1.25, 1.6, 2.0, 2.5})) << "whole-pixel sizes of 2560x1600";
+  EXPECT_TRUE(now->monitors[1].scales.empty()) << "off: its scale comes with it";
+}
+
+TEST(FrametopMonitorsHyprland, APickedScaleFitsTheMode) {
+  const auto now = hypr::parse_monitors(hypr_monitors(), never_virtual);
+  ASSERT_TRUE(now);
+  target_t t;
+  t.id = "eDP-2";
+  t.on = true;
+  t.scale = 2.0;
+  EXPECT_EQ(hypr::rule_for(t, *now).scale, "2");
+  t.scale = 1.5;  // 1706.67 px wide: Hyprland would swap it
+  EXPECT_EQ(hypr::rule_for(t, *now).scale, "1.6");
+  t.mode = video_mode_t {1920, 1200, 59950};
+  EXPECT_EQ(hypr::rule_for(t, *now).scale, "1.5") << "1920x1200 takes 1.5";
+}
+
 TEST(FrametopMonitorsHyprland, AQuarterTurnIsSideways) {
   auto listed = hypr_monitors();
   listed[0]["transform"] = 3;
@@ -233,6 +257,16 @@ TEST(FrametopMonitorsKScreen, ArgumentsPickTheModeIdAndPutOnFirst) {
   EXPECT_EQ(kscreen::arguments_for({back}, kscreen_config(), &error),
             (std::vector<std::string> {"output.DP-1.enable", "output.DP-1.mode.3", "output.DP-1.position.0,0",
                                        "output.DP-1.scale.1.5", "output.DP-1.rotation.left", "output.DP-1.priority.1"}));
+}
+
+TEST(FrametopMonitorsKScreen, APickedScaleIsSentOverThePlaces) {
+  target_t back {"DP-1", true, std::nullopt, {{"x", 0}, {"y", 0}, {"scale", 1.5}}, 1.25};
+  std::string error;
+  EXPECT_EQ(kscreen::arguments_for({back}, kscreen_config(), &error),
+            (std::vector<std::string> {"output.DP-1.enable", "output.DP-1.position.0,0", "output.DP-1.scale.1.25"}));
+  const auto now = kscreen::parse_outputs(kscreen_config(), never_virtual);
+  ASSERT_TRUE(now);
+  EXPECT_FALSE(now->monitors[0].scales.empty());
 }
 
 TEST(FrametopMonitorsKScreen, ArgumentsRefuseWhatIsNotThere) {

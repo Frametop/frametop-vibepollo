@@ -80,6 +80,34 @@ namespace platf::frametop_monitors_hyprland {
       return out;
     }
 
+    // The scales Hyprland takes for a mode: ones that make a whole-pixel desktop size (it
+    // swaps any other for a nearby one and says the config is wrong).
+    bool whole_at(const video_mode_t &mode, double scale) {
+      const auto whole = [&](unsigned pixels) {
+        const auto size = pixels / scale;
+        return std::abs(size - std::round(size)) < 0.01;
+      };
+      return whole(mode.width) && whole(mode.height);
+    }
+
+    std::vector<double> scales_for(const video_mode_t &mode) {
+      std::vector<double> out;
+      for (const double scale : {1.0, 1.25, 1.5, 1.6, 1.75, 2.0, 2.25, 2.5, 3.0}) {
+        if (whole_at(mode, scale)) out.push_back(scale);
+      }
+      return out;
+    }
+
+    // The asked scale if the mode takes it, else the nearest one it does (1 takes every mode).
+    double fit_scale(double scale, const video_mode_t &mode) {
+      if (whole_at(mode, scale)) return scale;
+      double best = 1.0;
+      for (const auto s : scales_for(mode)) {
+        if (std::abs(s - scale) < std::abs(best - scale)) best = s;
+      }
+      return best;
+    }
+
     // "2560x1600@240.00Hz"
     std::optional<video_mode_t> parse_mode(const std::string &text) {
       unsigned w = 0, h = 0;
@@ -101,7 +129,9 @@ namespace platf::frametop_monitors_hyprland {
       const auto *m = find(now, t.id);
       if (!m) return true;  // gone: nothing to wait for
       if (m->on != t.on) return false;
-      return !t.on || !t.mode || (m->mode && frametop_monitors::same_mode(*m->mode, *t.mode));
+      if (!t.on) return true;
+      if (t.mode && !(m->mode && frametop_monitors::same_mode(*m->mode, *t.mode))) return false;
+      return !t.scale || !m->mode || (m->scale && frametop_monitors::same_scale(*m->scale, fit_scale(*t.scale, *m->mode)));
     }
   }  // namespace
 
@@ -169,6 +199,9 @@ namespace platf::frametop_monitors_hyprland {
         monitor.place = {{"x", m.value("x", 0)}, {"y", m.value("y", 0)}, {"scale", m.value("scale", 1.0)},
                          {"transform", m.value("transform", 0)}};
         monitor.sideways = m.value("transform", 0) % 2 == 1;  // 90 and 270, flipped or not
+        const auto scale = m.value("scale", 1.0);
+        if (scale > 0 && scale < 100) monitor.scale = scale;
+        if (monitor.mode) monitor.scales = scales_for(*monitor.mode);
       }
       out.monitors.push_back(std::move(monitor));
     }
@@ -181,16 +214,17 @@ namespace platf::frametop_monitors_hyprland {
     rule.on = target.on;
     if (!target.on) return rule;
     const auto *m = find(now, target.id);
-    if (target.mode) {
-      rule.mode = mode_text(*target.mode);
-    } else if (m && m->on && m->mode) {
-      rule.mode = mode_text(*m->mode);
-    }
+    const auto mode = target.mode ? target.mode : m && m->on ? m->mode : std::nullopt;
+    if (mode) rule.mode = mode_text(*mode);
     const auto &place = !target.place.empty() ? target.place : m && m->on ? m->place : json::object();
     if (place.contains("x") && place["x"].is_number_integer() && place.contains("y") && place["y"].is_number_integer()) {
       rule.position = std::to_string(place["x"].get<int>()) + "x" + std::to_string(place["y"].get<int>());
     }
-    if (place.contains("scale") && place["scale"].is_number()) rule.scale = scale_text(place["scale"].get<double>());
+    if (target.scale) {
+      rule.scale = scale_text(mode ? fit_scale(*target.scale, *mode) : *target.scale);
+    } else if (place.contains("scale") && place["scale"].is_number()) {
+      rule.scale = scale_text(place["scale"].get<double>());
+    }
     if (place.contains("transform") && place["transform"].is_number_integer()) {
       rule.transform = std::clamp(place["transform"].get<int>(), 0, 7);
     }

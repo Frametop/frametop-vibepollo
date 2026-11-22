@@ -37,11 +37,7 @@ namespace frametop_monitors {
   void manager_t::save_locked() {
     json saved = json::array();
     for (const auto &m : saved_) saved.push_back(to_json(m));
-    json set = json::object();
-    for (const auto &[id, wish] : set_) set[id] = {{"on", wish.on}, {"mode", wish.mode ? to_json(*wish.mode) : json(nullptr)}};
-    json pending = json::object();
-    for (const auto &[id, wish] : pending_) pending[id] = {{"on", wish.on}, {"mode", wish.mode ? to_json(*wish.mode) : json(nullptr)}};
-    store_.save({{"version", 1}, {"plan", to_json(plan_)}, {"others_off", others_off_}, {"saved", std::move(saved)}, {"set", std::move(set)}, {"pending", std::move(pending)}});
+    store_.save({{"version", 1}, {"plan", to_json(plan_)}, {"others_off", others_off_}, {"saved", std::move(saved)}, {"set", to_json(set_)}, {"pending", to_json(pending_)}});
   }
 
   void manager_t::settle_pending_locked(const inventory_t &now) {
@@ -51,8 +47,8 @@ namespace frametop_monitors {
       if (!m) continue;
       if (still_as_set(*m, wish)) {
         set_[id] = wish;
-      } else if (was && !set_.contains(id) && !still_as_set(*m, {was->on, was->mode})) {
-        set_[id] = {m->on, m->on ? m->mode : std::nullopt};  // part of it took (on, not yet in its mode)
+      } else if (was && !set_.contains(id) && !still_as_set(*m, as_it_is(*was))) {
+        set_[id] = as_it_is(*m);  // part of it took (on, not yet in its mode)
       }
     }
     pending_.clear();
@@ -187,7 +183,7 @@ namespace frametop_monitors {
         });
         saved_.push_back(*m);
       }
-      pending_[t.id] = {t.on, t.mode};
+      pending_[t.id] = {t.on, t.mode, t.scale};
     }
     if (targets.empty()) {
       if (set_.empty()) saved_.clear();
@@ -208,10 +204,10 @@ namespace frametop_monitors {
         const auto *m = find(after->monitors, t.id);
         const auto *was = find(saved_, t.id);
         if (!m || !set_.contains(t.id)) continue;
-        if (was && was->on == m->on && (!m->on || !was->mode || (m->mode && same_mode(*was->mode, *m->mode)))) {
+        if (was && still_as_set(*m, as_it_is(*was))) {
           set_.erase(t.id);
         } else {
-          set_[t.id] = {m->on, m->on ? m->mode : std::nullopt};
+          set_[t.id] = as_it_is(*m);
         }
       }
     }
@@ -226,18 +222,38 @@ namespace frametop_monitors {
   }
 
   std::vector<target_t> manager_t::targets_locked(const plan_t &plan, const inventory_t &now, std::string *kept_on) const {
-    // Monitors this changed that the plan no longer names go back as they were, and so does
-    // the mode of one it keeps on in its own mode ("Its own mode" picked after another).
+    // Monitors this changed that the plan no longer names go back as they were, and so do the
+    // mode and scale of one it keeps on in its own ("Its own mode" picked after another). One
+    // that keeps a picked mode but goes back to its own scale (or the other way) goes back with
+    // the picked one in place.
     std::vector<std::string> back;
     for (const auto &[id, made] : set_) {
       const auto wish = plan.find(id);
       const auto *was = find(saved_, id);
-      if (wish == plan.end() || (wish->second.on && !wish->second.mode && made.on && was && was->on)) back.push_back(id);
+      if (wish == plan.end() ||
+          (wish->second.on && (!wish->second.mode || !wish->second.scale) && made.on && was && was->on)) {
+        back.push_back(id);
+      }
     }
     auto targets = restore_targets(back, saved_, set_, now);
+    for (auto &t : targets) {
+      const auto wish = plan.find(t.id);
+      if (wish == plan.end()) continue;
+      if (wish->second.mode) t.mode = wish->second.mode;
+      if (wish->second.scale) t.scale = wish->second.scale;
+    }
+    std::erase_if(targets, [&](const target_t &t) {
+      const auto *m = find(now.monitors, t.id);
+      return m && plan.contains(t.id) && still_as_set(*m, {t.on, t.mode, t.scale});  // nothing left to change
+    });
     std::string kept;
-    const auto planned = plan_targets(plan, now, saved_, &kept);
-    targets.insert(targets.end(), planned.begin(), planned.end());
+    for (const auto &t : plan_targets(plan, now, saved_, &kept)) {
+      if (std::none_of(targets.begin(), targets.end(), [&](const target_t &x) {
+            return x.id == t.id;
+          })) {
+        targets.push_back(t);
+      }
+    }
     if (kept.empty()) keep_one_on(targets, now, &kept);  // with the ones going back too
     if (kept_on) *kept_on = kept;
     return targets;
@@ -306,9 +322,7 @@ namespace frametop_monitors {
         auto entry = to_json(m);
         entry.erase("place");
         const auto wish = plan.find(m.id);
-        entry["wish"] = wish == plan.end() ? json(nullptr) :
-                                              json {{"on", wish->second.on},
-                                                    {"mode", wish->second.mode ? to_json(*wish->second.mode) : json(nullptr)}};
+        entry["wish"] = wish == plan.end() ? json(nullptr) : to_json(plan_t {{m.id, wish->second}})[m.id];
         entry["changed"] = set_.contains(m.id);
         // Off, its rotation isn't listed: it comes back on as it was saved.
         if (const auto *was = find(saved_, m.id); !m.on && was) entry["sideways"] = was->sideways;

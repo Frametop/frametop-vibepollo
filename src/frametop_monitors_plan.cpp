@@ -55,6 +55,19 @@ namespace frametop_monitors {
     return a.width == b.width && a.height == b.height && diff <= 10;
   }
 
+  bool same_scale(double a, double b) {
+    return a - b <= 0.001 && b - a <= 0.001;
+  }
+
+  namespace {
+    std::optional<double> scale_from_json(const json &value) {
+      if (!value.is_number()) return std::nullopt;
+      const auto scale = value.get<double>();
+      if (!(scale >= min_scale && scale <= max_scale)) return std::nullopt;
+      return scale;
+    }
+  }  // namespace
+
   json to_json(const video_mode_t &mode) {
     return {{"width", mode.width}, {"height", mode.height}, {"refresh_mhz", mode.refresh_mhz}};
   }
@@ -76,7 +89,7 @@ namespace frametop_monitors {
     for (const auto &mode : m.modes) modes.push_back(to_json(mode));
     return {{"id", m.id}, {"name", m.name}, {"on", m.on}, {"primary", m.primary},
             {"mode", m.mode ? to_json(*m.mode) : json(nullptr)}, {"modes", std::move(modes)}, {"place", m.place},
-            {"sideways", m.sideways}};
+            {"sideways", m.sideways}, {"scale", m.scale ? json(*m.scale) : json(nullptr)}, {"scales", m.scales}};
   }
 
   std::optional<monitor_t> monitor_from_json(const json &value) {
@@ -94,6 +107,12 @@ namespace frametop_monitors {
     }
     if (value.contains("place") && value["place"].is_object()) m.place = value["place"];
     m.sideways = value.value("sideways", false) == true;
+    if (value.contains("scale")) m.scale = scale_from_json(value["scale"]);
+    if (value.contains("scales") && value["scales"].is_array()) {
+      for (const auto &scale : value["scales"]) {
+        if (const auto parsed = scale_from_json(scale)) m.scales.push_back(*parsed);
+      }
+    }
     return m;
   }
 
@@ -117,7 +136,14 @@ namespace frametop_monitors {
           return std::nullopt;
         }
       }
-      if (!w.on) w.mode.reset();  // an off monitor has no mode to be in
+      if (wish.contains("scale") && !wish["scale"].is_null()) {
+        w.scale = scale_from_json(wish["scale"]);
+        if (!w.scale) {
+          if (error) *error = "a scale is a number from 0.5 to 4";
+          return std::nullopt;
+        }
+      }
+      if (!w.on) w.mode.reset(), w.scale.reset();  // an off monitor has no mode or scale to be in
       plan[id] = w;
     }
     return plan;
@@ -126,9 +152,15 @@ namespace frametop_monitors {
   json to_json(const plan_t &plan) {
     json out = json::object();
     for (const auto &[id, wish] : plan) {
-      out[id] = {{"on", wish.on}, {"mode", wish.mode ? to_json(*wish.mode) : json(nullptr)}};
+      out[id] = {{"on", wish.on}, {"mode", wish.mode ? to_json(*wish.mode) : json(nullptr)},
+                 {"scale", wish.scale ? json(*wish.scale) : json(nullptr)}};
     }
     return out;
+  }
+
+  wish_t as_it_is(const monitor_t &m) {
+    if (!m.on) return {false, std::nullopt, std::nullopt};
+    return {true, m.mode, m.scale};
   }
 
   plan_t with_others_off(plan_t plan, const inventory_t &now) {
@@ -154,6 +186,7 @@ namespace frametop_monitors {
           })) {
         return label(*m) + " has no " + describe(*wish.mode) + " mode";
       }
+      if (wish.scale && m->on && m->scales.empty()) return label(*m) + "'s scale can't be set here";
     }
     if (on == 0) return "Keep one display on: this would turn every display off";
     return {};
@@ -171,9 +204,10 @@ namespace frametop_monitors {
         if (m->on) targets.push_back({id, false, std::nullopt, json::object()});
       } else if (!m->on) {
         targets.push_back({id, true, wish.mode ? wish.mode : was_on ? was->mode : std::nullopt,
-                           was_on ? was->place : json::object()});
-      } else if (wish.mode && (!m->mode || !same_mode(*m->mode, *wish.mode))) {
-        targets.push_back({id, true, wish.mode, m->place});
+                           was_on ? was->place : json::object(), wish.scale});
+      } else if ((wish.mode && (!m->mode || !same_mode(*m->mode, *wish.mode))) ||
+                 (wish.scale && (!m->scale || !same_scale(*m->scale, *wish.scale)))) {
+        targets.push_back({id, true, wish.mode, m->place, wish.scale});
       }
     }
     keep_one_on(targets, now, kept_on);
@@ -200,7 +234,10 @@ namespace frametop_monitors {
   }
 
   bool still_as_set(const monitor_t &now, const wish_t &set) {
-    return now.on == set.on && (!set.on || !set.mode || (now.mode && same_mode(*now.mode, *set.mode)));
+    if (now.on != set.on) return false;
+    if (!set.on) return true;
+    return (!set.mode || (now.mode && same_mode(*now.mode, *set.mode))) &&
+           (!set.scale || (now.scale && same_scale(*now.scale, *set.scale)));
   }
 
   std::vector<target_t> restore_targets(const std::vector<std::string> &ids, const std::vector<monitor_t> &saved,
@@ -213,8 +250,8 @@ namespace frametop_monitors {
       if (!was || !m || made == set.end() || !still_as_set(*m, made->second)) continue;  // theirs stays
       if (!was->on) {
         if (m->on) targets.push_back({id, false, std::nullopt, json::object()});
-      } else if (!m->on || (was->mode && (!m->mode || !same_mode(*m->mode, *was->mode)))) {
-        targets.push_back({id, true, was->mode, was->place});
+      } else if (!still_as_set(*m, as_it_is(*was))) {
+        targets.push_back({id, true, was->mode, was->place, was->scale});
       }
     }
     return targets;

@@ -25,6 +25,13 @@ namespace frametop_monitors {
   /// 239.761 it reports).
   bool same_mode(const video_mode_t &a, const video_mode_t &b);
 
+  /// Scales within 0.001 of each other (Hyprland reports 1.25 as 1.250000).
+  bool same_scale(double a, double b);
+
+  /// The scales a plan may ask for: 50% to 400%.
+  constexpr double min_scale = 0.5;
+  constexpr double max_scale = 4.0;
+
   struct monitor_t {
     std::string id;  ///< as /api/display-devices names it: a Windows device id, a connector name
     std::string name;
@@ -34,6 +41,10 @@ namespace frametop_monitors {
     std::vector<video_mode_t> modes;  ///< the modes it takes (none known while it's off on Windows)
     /// Turned a quarter: its modes are listed unrotated, so a stream of it is height x width.
     bool sideways = false;
+    /// Its scale while on, where the platform can set it (Hyprland, KScreen); none on Windows.
+    std::optional<double> scale;
+    /// The scales it takes in its mode now (none: its scale can't be set here, or it's off).
+    std::vector<double> scales;
     /// The platform's own placement (position, scale, rotation...), to put it back as it was.
     nlohmann::json place = nlohmann::json::object();
   };
@@ -45,10 +56,12 @@ namespace frametop_monitors {
     int other_outputs = 0;
   };
 
-  /// What one monitor should be: on or off, and on, in `mode` (none: its own or as it was).
+  /// What one monitor should be: on or off, and on, in `mode` and at `scale` (none: its own,
+  /// as it was).
   struct wish_t {
     bool on = true;
     std::optional<video_mode_t> mode;
+    std::optional<double> scale;
   };
 
   using plan_t = std::map<std::string, wish_t>;
@@ -60,6 +73,7 @@ namespace frametop_monitors {
     bool on = true;
     std::optional<video_mode_t> mode;
     nlohmann::json place = nlohmann::json::object();
+    std::optional<double> scale;  ///< its scale, over the one in `place` (none: place's)
   };
 
   const monitor_t *find_monitor(const std::vector<monitor_t> &monitors, const std::string &id);
@@ -69,16 +83,21 @@ namespace frametop_monitors {
   nlohmann::json to_json(const monitor_t &monitor);
   std::optional<monitor_t> monitor_from_json(const nlohmann::json &value);
 
-  /// {"ID": {"on": bool, "mode": {...} | null}}; nullopt with *error for anything else.
+  /// {"ID": {"on": bool, "mode": {...} | null, "scale": number | null}}; nullopt with *error
+  /// for anything else.
   std::optional<plan_t> plan_from_json(const nlohmann::json &value, std::string *error);
   nlohmann::json to_json(const plan_t &plan);
+
+  /// What it is now, as a wish: on in its mode and scale, or off.
+  wish_t as_it_is(const monitor_t &m);
 
   /// The plan with every monitor of `now` it doesn't name turned off (a plan with others_off:
   /// Frametop's Remote Displays name only the monitors that have a display there).
   plan_t with_others_off(plan_t plan, const inventory_t &now);
 
   /// Why the plan can't be taken ("" if it can): every monitor it names is one of these, each
-  /// mode is one that monitor lists (if it lists any), and a physical monitor stays on. `going_back`: monitors
+  /// mode is one that monitor lists (if it lists any), a scale is asked only of one on that
+  /// lists scales (or off: it's tried when it comes on), and a physical monitor stays on. `going_back`: monitors
   /// the plan no longer names that go back as they were saved (on or off).
   std::string validate(const plan_t &plan, const inventory_t &now, const std::vector<monitor_t> &going_back = {});
 
