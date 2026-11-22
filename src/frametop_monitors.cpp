@@ -122,7 +122,7 @@ namespace frametop_monitors {
     if (wish->second.on) return m->on ? display_use_e::hold_after : display_use_e::hold_first;
     // Off in the plan: refused unless it stays on, as the one the desktop needs.
     if (!m->on) return display_use_e::refuse;
-    const auto targets = targets_locked(*now, nullptr);
+    const auto targets = targets_locked(plan, *now, nullptr);
     return std::any_of(targets.begin(), targets.end(), [&](const target_t &t) {
              return t.id == m->id && !t.on;
            }) ?
@@ -167,7 +167,7 @@ namespace frametop_monitors {
     if (set_.empty()) saved_.clear();
     std::string kept_on;
     const auto plan = plan_for(*now);
-    const auto targets = targets_locked(*now, &kept_on);
+    const auto targets = targets_locked(plan, *now, &kept_on);
     last_error_ = kept_on.empty() ? std::string {} : kept_on + " stays on: the desktop needs one display";
     if (!kept_on.empty()) log(last_error_);
     // Each monitor is saved as it is just before this first changes it, and what it's being
@@ -219,8 +219,7 @@ namespace frametop_monitors {
     return others_off_ ? with_others_off(plan_, now) : plan_;
   }
 
-  std::vector<target_t> manager_t::targets_locked(const inventory_t &now, std::string *kept_on) const {
-    const auto plan = plan_for(now);
+  std::vector<target_t> manager_t::targets_locked(const plan_t &plan, const inventory_t &now, std::string *kept_on) const {
     // Monitors this changed that the plan no longer names go back as they were.
     std::vector<std::string> dropped;
     for (const auto &[id, wish] : set_) {

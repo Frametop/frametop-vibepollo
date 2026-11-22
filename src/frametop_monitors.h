@@ -93,9 +93,9 @@ namespace frametop_monitors {
     /// What a change cut short by a crash got to: a pending target the monitor is now in, or one
     /// it's partly in (no longer as saved), counts as made, so it goes back; the rest as never made.
     void settle_pending_locked(const inventory_t &now);
-    /// The changes that make `now` match the plan, with monitors the plan no longer names going
+    /// The changes that make `now` match `plan` (plan_for), with monitors it no longer names going
     /// back; *kept_on names a monitor that stays on because the desktop needs one.
-    std::vector<target_t> targets_locked(const inventory_t &now, std::string *kept_on) const;
+    std::vector<target_t> targets_locked(const plan_t &plan, const inventory_t &now, std::string *kept_on) const;
     /// The plan for the monitors `now` has: with others_off_, the ones it doesn't name are off.
     plan_t plan_for(const inventory_t &now) const;
     /// Applies the plan to the monitors as they are now; snapshots them first.
