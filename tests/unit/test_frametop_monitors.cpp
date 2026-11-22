@@ -1,6 +1,7 @@
 #include "../tests_common.h"
 
 #include "src/frametop_monitors.h"
+#include "src/frametop_monitors_layout.h"
 
 #include <algorithm>
 #include <string>
@@ -108,9 +109,9 @@ namespace {
   };
 }  // namespace
 
-TEST(FrametopMonitorsModes, SameModeWithinHalfAHertz) {
-  EXPECT_TRUE(same_mode({1920, 1080, 59951}, {1920, 1080, 60000}));
-  EXPECT_FALSE(same_mode({1920, 1080, 59000}, {1920, 1080, 60000}));
+TEST(FrametopMonitorsModes, SameModeWithinTenMillihertz) {
+  EXPECT_TRUE(same_mode({2560, 1600, 239761}, {2560, 1600, 239760})) << "Hyprland's 239.761 listed as 239.76";
+  EXPECT_FALSE(same_mode({1920, 1080, 59940}, {1920, 1080, 60000})) << "59.94 and 60 Hz are two modes";
   EXPECT_FALSE(same_mode({1920, 1200, 60000}, {1920, 1080, 60000}));
 }
 
@@ -131,7 +132,8 @@ TEST(FrametopMonitorsPlan, ValidateNeedsKnownMonitorsModesAndOneOn) {
   EXPECT_EQ(validate({{"A", {false, {}}}}, now), "");
   EXPECT_NE(validate({{"C", {false, {}}}}, now), "");
   EXPECT_NE(validate({{"A", {true, video_mode_t {1920, 1080, 60000}}}}, now), "");
-  EXPECT_EQ(validate({{"A", {true, video_mode_t {2560, 1600, 59950}}}}, now), "");
+  EXPECT_EQ(validate({{"A", {true, video_mode_t {2560, 1600, 60005}}}}, now), "");
+  EXPECT_NE(validate({{"A", {true, video_mode_t {2560, 1600, 59940}}}}, now), "");
   EXPECT_NE(validate({{"A", {false, {}}}, {"B", {false, {}}}}, now), "");
   now.other_outputs = 1;  // a virtual display goes with its stream: it doesn't count
   EXPECT_NE(validate({{"A", {false, {}}}, {"B", {false, {}}}}, now), "");
@@ -331,10 +333,83 @@ TEST_F(FrametopMonitors, ADisplayStreamHoldsOnlyForAMonitorItCanHave) {
   EXPECT_EQ(manager.display_use("B"), use::hold_after);
 }
 
+TEST_F(FrametopMonitors, ADisplayStreamOfTheMonitorKeptOnIsTaken) {
+  auto manager = make();
+  ASSERT_EQ(manager.set_plan(off("B")), "");
+  platform.now.monitors.erase(platform.now.monitors.begin());  // A unplugged: B is the last one
+  using use = manager_t::display_use_e;
+  EXPECT_EQ(manager.display_use("B"), use::hold_after) << "the desktop needs it, so it stays on";
+  auto lease = manager.hold();
+  EXPECT_TRUE(platform.get("B").on);
+}
+
+TEST_F(FrametopMonitors, ACrashDuringAChangePutsBackWhatItGotTo) {
+  const auto journal = [&](const json &pending) {
+    store.state = json {{"version", 1}, {"plan", {{"A", {{"on", true}, {"mode", to_json(lo)}}}}},
+                        {"saved", {to_json(monitor("A", true, true)), to_json(monitor("B", true))}},
+                        {"set", {{"A", {{"on", true}, {"mode", to_json(lo)}}}}}, {"pending", pending}};
+  };
+  const video_mode_t mid {2560, 1600, 120000};
+  // A was at 60 Hz and the change to 120 never happened: A still goes back.
+  journal({{"A", {{"on", true}, {"mode", to_json(mid)}}}});
+  platform.get("A").mode = lo;
+  EXPECT_TRUE(make().start());
+  EXPECT_TRUE(same_mode(*platform.get("A").mode, hi));
+  // The change did happen: A goes back from 120 Hz too.
+  journal({{"A", {{"on", true}, {"mode", to_json(mid)}}}});
+  platform.get("A").mode = mid;
+  EXPECT_TRUE(make().start());
+  EXPECT_TRUE(same_mode(*platform.get("A").mode, hi));
+  // B's first change got made before the crash: it comes back on.
+  journal({{"B", {{"on", false}, {"mode", nullptr}}}});
+  (*store.state)["set"] = json::object();
+  platform.get("B").on = false;
+  EXPECT_TRUE(make().start());
+  EXPECT_TRUE(platform.get("B").on);
+  EXPECT_TRUE((*store.state)["pending"].empty());
+}
+
+TEST_F(FrametopMonitors, MonitorsGoingBackAndThePlanStillLeaveOneOn) {
+  // A run before turned B on (it was off), then the plan became "A off" with C on; C is gone now.
+  auto b_off = monitor("B", false);
+  store.state = json {{"version", 1}, {"plan", {{"A", {{"on", false}, {"mode", nullptr}}}}},
+                      {"saved", {to_json(b_off)}}, {"set", {{"B", {{"on", true}, {"mode", nullptr}}}}}};
+  platform.readable = false;
+  auto manager = make();
+  EXPECT_FALSE(manager.start());
+  platform.readable = true;
+  auto lease = manager.hold();
+  EXPECT_TRUE(platform.get("A").on) << "B goes back off, so A stays on";
+  EXPECT_FALSE(platform.get("B").on);
+  EXPECT_EQ(manager.state()["error"], "A name stays on: the desktop needs one display");
+}
+
 TEST_F(FrametopMonitors, StateSaysWhichMonitorIsSideways) {
   platform.get("B").sideways = true;
   auto manager = make();
   const auto state = manager.state();
   EXPECT_FALSE(state["monitors"][0]["sideways"].get<bool>());
   EXPECT_TRUE(state["monitors"][1]["sideways"].get<bool>());
+  ASSERT_EQ(manager.set_plan(off("B")), "");
+  auto lease = manager.hold();
+  platform.get("B").sideways = false;  // off, its rotation isn't listed
+  EXPECT_TRUE(manager.state()["monitors"][1]["sideways"].get<bool>()) << "as it was saved";
+}
+
+TEST(FrametopMonitorsLayout, AMonitorBackOnGoesWhereItWas) {
+  const layout_t before {{{"A", {0, 0}}, {"C", {-1920, 0}}}, "A"};
+  const auto wanted = layout_to_put_back(before, {{"B", true, std::nullopt, {{"x", 2560}, {"y", 0}, {"primary", false}}},
+                                                  {"C", false, std::nullopt, json::object()}});
+  EXPECT_EQ(wanted.primary, "A");
+  ASSERT_EQ(wanted.places.size(), 3u);
+  EXPECT_EQ(wanted.places.at("B").x, 2560);
+  EXPECT_EQ(wanted.places.at("C").x, -1920) << "an off target's place is left for Windows to drop";
+}
+
+TEST(FrametopMonitorsLayout, TheMainDisplayBackOnPutsNoPlacesBack) {
+  // A was the main display; with it off, Windows made B the main one at 0,0.
+  const layout_t before {{{"B", {0, 0}}}, "B"};
+  const auto wanted = layout_to_put_back(before, {{"A", true, std::nullopt, {{"x", 0}, {"y", 0}, {"primary", true}}}});
+  EXPECT_EQ(wanted.primary, "A");
+  EXPECT_TRUE(wanted.places.empty()) << "B's 0,0 was noted around B: putting it back would cover A";
 }

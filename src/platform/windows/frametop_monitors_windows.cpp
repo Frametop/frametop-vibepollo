@@ -6,13 +6,14 @@
  * Nothing here saves to Windows' display settings. A topology change (setTopology) takes the
  * layout Windows saved for the displays that are on, if it has one; without one Windows picks
  * the modes and places itself. So every display's mode, place and the main display are noted
- * first and put back after, each as far as it still applies: other displays keep their modes,
- * a monitor coming back on goes back where it was (main display again if it was), and the
- * places are put back while the main display they were noted with is still on. A reboot
- * undoes it all.
+ * first and put back after, each as far as it still applies (layout_to_put_back): other
+ * displays keep their modes, a monitor coming back on goes back where it was (main display
+ * again if it was), and the places are put back while the main display they were noted with is
+ * still on. A reboot undoes it all.
  */
 #ifdef _WIN32
 
+  #include "src/frametop_monitors_layout.h"
   #include "src/frametop_monitors_service.h"
   #include "src/logging.h"
   #include "src/platform/windows/frametop_display_access.h"
@@ -27,6 +28,7 @@
 namespace platf {
   namespace {
     using frametop_monitors::inventory_t;
+    using frametop_monitors::layout_t;
     using frametop_monitors::monitor_t;
     using frametop_monitors::target_t;
     using frametop_monitors::video_mode_t;
@@ -50,19 +52,20 @@ namespace platf {
     }
 
     // The active displays as they are: each one's place, and which is the main display.
-    struct layout_t {
-      std::map<std::string, display_device::Point> places;
-      std::string primary;
-    };
-
     layout_t layout_now(display_device::WinDisplayDeviceInterface &dd) {
       layout_t layout;
       for (const auto &device : dd.enumAvailableDevices(display_device::DeviceEnumerationDetail::Minimal)) {
         if (!device.m_info) continue;
-        layout.places[device.m_device_id] = device.m_info->m_origin_point;
+        layout.places[device.m_device_id] = {device.m_info->m_origin_point.m_x, device.m_info->m_origin_point.m_y};
         if (device.m_info->m_primary) layout.primary = device.m_device_id;
       }
       return layout;
+    }
+
+    std::map<std::string, display_device::Point> points_of(const layout_t &layout) {
+      std::map<std::string, display_device::Point> points;
+      for (const auto &[id, place] : layout.places) points[id] = {place.x, place.y};
+      return points;
     }
 
     std::set<std::string> ids_of(const layout_t &layout) {
@@ -124,16 +127,9 @@ namespace platf {
       std::string apply(const std::vector<target_t> &targets, const inventory_t &now) override {
         try {
           auto dd = access::make_display_device();
-          auto before = layout_now(*dd);
-          const auto modes_before = dd->getCurrentDisplayModes(ids_of(before));
-          // A monitor coming back on goes where it was, and is the main display again if it was.
-          for (const auto &t : targets) {
-            if (!t.on || !t.place.is_object()) continue;
-            if (t.place.contains("x") && t.place.contains("y") && t.place["x"].is_number_integer() && t.place["y"].is_number_integer()) {
-              before.places[t.id] = {t.place["x"].get<int>(), t.place["y"].get<int>()};
-            }
-            if (t.place.value("primary", false) == true) before.primary = t.id;
-          }
+          const auto noted = layout_now(*dd);
+          const auto modes_before = dd->getCurrentDisplayModes(ids_of(noted));
+          const auto wanted = frametop_monitors::layout_to_put_back(noted, targets);
           // On and off first: the topology Windows has a saved layout for.
           auto topology = dd->getCurrentTopology();
           bool changed = false;
@@ -176,14 +172,14 @@ namespace platf {
           // Then the main display and the places, which only fit together: noted with that main
           // display at 0,0. If it went off, Windows' own arrangement stays.
           const auto after = layout_now(*dd);
-          if (before.primary.empty() || !after.places.contains(before.primary)) {
+          if (wanted.primary.empty() || !after.places.contains(wanted.primary)) {
             BOOST_LOG(info) << "Frametop monitors: the main display is off; Windows arranged the others.";
             return {};
           }
-          if (after.primary != before.primary && !dd->setAsPrimary(before.primary)) {
-            BOOST_LOG(warning) << "Frametop monitors: couldn't make " << before.primary << " the main display again.";
+          if (after.primary != wanted.primary && !dd->setAsPrimary(wanted.primary)) {
+            BOOST_LOG(warning) << "Frametop monitors: couldn't make " << wanted.primary << " the main display again.";
           }
-          (void) access::put_places_back(before.places, "Frametop monitors: ");
+          if (!wanted.places.empty()) (void) access::put_places_back(points_of(wanted), "Frametop monitors: ");
           return {};
         } catch (const std::exception &e) {
           return e.what();

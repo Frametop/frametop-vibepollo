@@ -1,6 +1,6 @@
 /**
  * @file src/frametop_monitors.cpp
- * @brief Frametop's plan for the host's physical monitors (see the header).
+ * @brief Frametop's plan for the host's physical monitors: the manager (see the header).
  */
 #include "frametop_monitors.h"
 
@@ -13,202 +13,9 @@ namespace frametop_monitors {
     using json = nlohmann::json;
 
     const monitor_t *find(const std::vector<monitor_t> &monitors, const std::string &id) {
-      const auto it = std::find_if(monitors.begin(), monitors.end(), [&](const monitor_t &m) {
-        return m.id == id;
-      });
-      return it == monitors.end() ? nullptr : &*it;
-    }
-
-    std::string describe(const video_mode_t &mode) {
-      const unsigned whole = mode.refresh_mhz / 1000, part = mode.refresh_mhz % 1000;
-      std::string hz = std::to_string(whole);
-      if (part) {
-        std::string frac = std::to_string(part);
-        frac.insert(0, 3 - frac.size(), '0');
-        while (!frac.empty() && frac.back() == '0') frac.pop_back();
-        hz += "." + frac;
-      }
-      return std::to_string(mode.width) + "x" + std::to_string(mode.height) + "@" + hz;
-    }
-
-    std::string label(const monitor_t &m) {
-      return m.name.empty() ? m.id : m.name;
-    }
-
-    // How many outputs stay on once `targets` are made so.
-    int on_after(const inventory_t &now, const std::vector<target_t> &targets) {
-      int on = 0;
-      for (const auto &m : now.monitors) {
-        const auto t = std::find_if(targets.begin(), targets.end(), [&](const target_t &x) {
-          return x.id == m.id;
-        });
-        on += (t == targets.end() ? m.on : t->on) ? 1 : 0;
-      }
-      return on;
+      return find_monitor(monitors, id);
     }
   }  // namespace
-
-  bool same_mode(const video_mode_t &a, const video_mode_t &b) {
-    const auto diff = a.refresh_mhz > b.refresh_mhz ? a.refresh_mhz - b.refresh_mhz : b.refresh_mhz - a.refresh_mhz;
-    return a.width == b.width && a.height == b.height && diff <= 500;
-  }
-
-  json to_json(const video_mode_t &mode) {
-    return {{"width", mode.width}, {"height", mode.height}, {"refresh_mhz", mode.refresh_mhz}};
-  }
-
-  std::optional<video_mode_t> mode_from_json(const json &value) {
-    if (!value.is_object()) return std::nullopt;
-    for (const char *key : {"width", "height", "refresh_mhz"}) {
-      if (!value.contains(key) || !value[key].is_number_unsigned()) return std::nullopt;
-    }
-    video_mode_t mode {value["width"].get<unsigned>(), value["height"].get<unsigned>(), value["refresh_mhz"].get<unsigned>()};
-    if (!mode.width || !mode.height || mode.width > 16384 || mode.height > 16384 || mode.refresh_mhz > 1000000) {
-      return std::nullopt;
-    }
-    return mode;
-  }
-
-  json to_json(const monitor_t &m) {
-    json modes = json::array();
-    for (const auto &mode : m.modes) modes.push_back(to_json(mode));
-    return {{"id", m.id}, {"name", m.name}, {"on", m.on}, {"primary", m.primary},
-            {"mode", m.mode ? to_json(*m.mode) : json(nullptr)}, {"modes", std::move(modes)}, {"place", m.place},
-            {"sideways", m.sideways}};
-  }
-
-  std::optional<monitor_t> monitor_from_json(const json &value) {
-    if (!value.is_object() || !value.contains("id") || !value["id"].is_string()) return std::nullopt;
-    monitor_t m;
-    m.id = value["id"].get<std::string>();
-    if (value.contains("name") && value["name"].is_string()) m.name = value["name"].get<std::string>();
-    m.on = value.value("on", false) == true;
-    m.primary = value.value("primary", false) == true;
-    if (value.contains("mode")) m.mode = mode_from_json(value["mode"]);
-    if (value.contains("modes") && value["modes"].is_array()) {
-      for (const auto &mode : value["modes"]) {
-        if (const auto parsed = mode_from_json(mode)) m.modes.push_back(*parsed);
-      }
-    }
-    if (value.contains("place") && value["place"].is_object()) m.place = value["place"];
-    m.sideways = value.value("sideways", false) == true;
-    return m;
-  }
-
-  std::optional<plan_t> plan_from_json(const json &value, std::string *error) {
-    if (!value.is_object()) {
-      if (error) *error = "monitors must be an object of monitor ids";
-      return std::nullopt;
-    }
-    plan_t plan;
-    for (const auto &[id, wish] : value.items()) {
-      if (id.empty() || id.size() > 512 || !wish.is_object() || !wish.contains("on") || !wish["on"].is_boolean()) {
-        if (error) *error = "each monitor needs \"on\": true or false";
-        return std::nullopt;
-      }
-      wish_t w;
-      w.on = wish["on"].get<bool>();
-      if (wish.contains("mode") && !wish["mode"].is_null()) {
-        w.mode = mode_from_json(wish["mode"]);
-        if (!w.mode) {
-          if (error) *error = "a mode is {\"width\", \"height\", \"refresh_mhz\"}";
-          return std::nullopt;
-        }
-      }
-      if (!w.on) w.mode.reset();  // an off monitor has no mode to be in
-      plan[id] = w;
-    }
-    return plan;
-  }
-
-  json to_json(const plan_t &plan) {
-    json out = json::object();
-    for (const auto &[id, wish] : plan) {
-      out[id] = {{"on", wish.on}, {"mode", wish.mode ? to_json(*wish.mode) : json(nullptr)}};
-    }
-    return out;
-  }
-
-  std::string validate(const plan_t &plan, const inventory_t &now, const std::vector<monitor_t> &going_back) {
-    int on = 0;
-    for (const auto &m : now.monitors) {
-      const auto wish = plan.find(m.id);
-      const auto *back = find(going_back, m.id);
-      on += (wish != plan.end() ? wish->second.on : back ? back->on : m.on) ? 1 : 0;
-    }
-    for (const auto &[id, wish] : plan) {
-      const auto *m = find(now.monitors, id);
-      if (!m) return "There's no monitor " + id;
-      if (wish.mode && std::none_of(m->modes.begin(), m->modes.end(), [&](const video_mode_t &listed) {
-            return same_mode(listed, *wish.mode);
-          })) {
-        return label(*m) + " has no " + describe(*wish.mode) + " mode";
-      }
-    }
-    if (on == 0) return "Keep one display on: this would turn every display off";
-    return {};
-  }
-
-  std::vector<target_t> plan_targets(const plan_t &plan, const inventory_t &now, const std::vector<monitor_t> &saved,
-                                     std::string *kept_on) {
-    std::vector<target_t> targets;
-    for (const auto &[id, wish] : plan) {
-      const auto *m = find(now.monitors, id);
-      if (!m) continue;  // unplugged since
-      const auto *was = find(saved, id);
-      const bool was_on = was && was->on;
-      if (!wish.on) {
-        if (m->on) targets.push_back({id, false, std::nullopt, json::object()});
-      } else if (!m->on) {
-        targets.push_back({id, true, wish.mode ? wish.mode : was_on ? was->mode : std::nullopt,
-                           was_on ? was->place : json::object()});
-      } else if (wish.mode && (!m->mode || !same_mode(*m->mode, *wish.mode))) {
-        targets.push_back({id, true, wish.mode, m->place});
-      }
-    }
-    keep_one_on(targets, now, kept_on);
-    return targets;
-  }
-
-  void keep_one_on(std::vector<target_t> &targets, const inventory_t &now, std::string *kept_on) {
-    if (on_after(now, targets) > 0) return;
-    // Never every monitor off: the primary monitor stays (else the first one turned off).
-    auto keep = std::find_if(targets.begin(), targets.end(), [&](const target_t &t) {
-      const auto *m = find(now.monitors, t.id);
-      return !t.on && m && m->on && m->primary;
-    });
-    if (keep == targets.end()) {
-      keep = std::find_if(targets.begin(), targets.end(), [&](const target_t &t) {
-        const auto *m = find(now.monitors, t.id);
-        return !t.on && m && m->on;
-      });
-    }
-    if (keep != targets.end()) {
-      if (kept_on) *kept_on = label(*find(now.monitors, keep->id));
-      targets.erase(keep);
-    }
-  }
-
-  bool still_as_set(const monitor_t &now, const wish_t &set) {
-    return now.on == set.on && (!set.on || !set.mode || (now.mode && same_mode(*now.mode, *set.mode)));
-  }
-
-  std::vector<target_t> restore_targets(const std::vector<std::string> &ids, const std::vector<monitor_t> &saved,
-                                        const std::map<std::string, wish_t> &set, const inventory_t &now) {
-    std::vector<target_t> targets;
-    for (const auto &id : ids) {
-      const auto *was = find(saved, id);
-      const auto *m = find(now.monitors, id);
-      const auto made = set.find(id);
-      if (!was || !m || made == set.end() || !still_as_set(*m, made->second)) continue;  // theirs stays
-      if (!was->on) {
-        if (m->on) targets.push_back({id, false, std::nullopt, json::object()});
-      } else if (!m->on || (was->mode && (!m->mode || !same_mode(*m->mode, *was->mode)))) {
-        targets.push_back({id, true, was->mode, was->place});
-      }
-    }
-    return targets;
-  }
 
   manager_t::manager_t(platform_t &platform, store_t &store, schedule_fn schedule, std::chrono::milliseconds grace,
                        log_fn log):
@@ -232,7 +39,17 @@ namespace frametop_monitors {
     for (const auto &m : saved_) saved.push_back(to_json(m));
     json set = json::object();
     for (const auto &[id, wish] : set_) set[id] = {{"on", wish.on}, {"mode", wish.mode ? to_json(*wish.mode) : json(nullptr)}};
-    store_.save({{"version", 1}, {"plan", to_json(plan_)}, {"saved", std::move(saved)}, {"set", std::move(set)}});
+    json pending = json::object();
+    for (const auto &[id, wish] : pending_) pending[id] = {{"on", wish.on}, {"mode", wish.mode ? to_json(*wish.mode) : json(nullptr)}};
+    store_.save({{"version", 1}, {"plan", to_json(plan_)}, {"saved", std::move(saved)}, {"set", std::move(set)}, {"pending", std::move(pending)}});
+  }
+
+  void manager_t::settle_pending_locked(const inventory_t &now) {
+    for (const auto &[id, wish] : pending_) {
+      const auto *m = find(now.monitors, id);
+      if (m && still_as_set(*m, wish)) set_[id] = wish;
+    }
+    pending_.clear();
   }
 
   bool manager_t::start() {
@@ -251,11 +68,14 @@ namespace frametop_monitors {
         if (state->contains("set") && (*state)["set"].is_object()) {
           if (auto set = plan_from_json((*state)["set"], nullptr)) set_ = std::move(*set);
         }
+        if (state->contains("pending") && (*state)["pending"].is_object()) {
+          if (auto pending = plan_from_json((*state)["pending"], nullptr)) pending_ = std::move(*pending);
+        }
       }
     }
     // A stream that came since owns what is changed now: its release (and grace) puts it back.
     if (held_) return true;
-    if (set_.empty()) {
+    if (set_.empty() && pending_.empty()) {
       saved_.clear();
       return true;
     }
@@ -291,8 +111,15 @@ namespace frametop_monitors {
     if (m == now->monitors.end()) return display_use_e::hold_after;
     const auto wish = plan_.find(m->id);
     if (wish == plan_.end()) return display_use_e::hold_after;
-    if (!wish->second.on) return display_use_e::refuse;
-    return m->on ? display_use_e::hold_after : display_use_e::hold_first;
+    if (wish->second.on) return m->on ? display_use_e::hold_after : display_use_e::hold_first;
+    // Off in the plan: refused unless it stays on, as the one the desktop needs.
+    if (!m->on) return display_use_e::refuse;
+    const auto targets = targets_locked(*now, nullptr);
+    return std::any_of(targets.begin(), targets.end(), [&](const target_t &t) {
+             return t.id == m->id && !t.on;
+           }) ?
+             display_use_e::refuse :
+             display_use_e::hold_after;
   }
 
   void manager_t::release() {
@@ -328,21 +155,14 @@ namespace frametop_monitors {
       log(last_error_);
       return;
     }
+    settle_pending_locked(*now);
     if (set_.empty()) saved_.clear();
-    // Monitors this changed that the plan no longer names go back as they were.
-    std::vector<std::string> dropped;
-    for (const auto &[id, wish] : set_) {
-      if (!plan_.contains(id)) dropped.push_back(id);
-    }
-    auto targets = restore_targets(dropped, saved_, set_, *now);
     std::string kept_on;
-    const auto planned = plan_targets(plan_, *now, saved_, &kept_on);
-    targets.insert(targets.end(), planned.begin(), planned.end());
-    if (kept_on.empty()) keep_one_on(targets, *now, &kept_on);  // with the ones going back too
+    const auto targets = targets_locked(*now, &kept_on);
     last_error_ = kept_on.empty() ? std::string {} : kept_on + " stays on: the desktop needs one display";
     if (!kept_on.empty()) log(last_error_);
-    // Each monitor is saved as it is just before this first changes it, and what it's made
-    // now is in the store before the change, for a crash.
+    // Each monitor is saved as it is just before this first changes it, and what it's being
+    // made is in the store (pending) before the change, for a crash.
     for (const auto &t : targets) {
       if (!plan_.contains(t.id)) continue;  // going back: set_ has it already
       if (!set_.contains(t.id)) {
@@ -352,7 +172,7 @@ namespace frametop_monitors {
         });
         saved_.push_back(*m);
       }
-      set_[t.id] = {t.on, t.mode};
+      pending_[t.id] = {t.on, t.mode};
     }
     if (targets.empty()) {
       if (set_.empty()) saved_.clear();
@@ -364,6 +184,8 @@ namespace frametop_monitors {
       last_error_ = error;
       log("couldn't change the monitors: " + error);
     }
+    for (const auto &[id, wish] : pending_) set_[id] = wish;
+    pending_.clear();
     // What each one is now, for the check that it's still as this left it. One that is as it
     // was saved (the change didn't take, or it went back) has nothing left to put back.
     if (const auto after = platform_.inventory()) {
@@ -384,8 +206,23 @@ namespace frametop_monitors {
     save_locked();
   }
 
+  std::vector<target_t> manager_t::targets_locked(const inventory_t &now, std::string *kept_on) const {
+    // Monitors this changed that the plan no longer names go back as they were.
+    std::vector<std::string> dropped;
+    for (const auto &[id, wish] : set_) {
+      if (!plan_.contains(id)) dropped.push_back(id);
+    }
+    auto targets = restore_targets(dropped, saved_, set_, now);
+    std::string kept;
+    const auto planned = plan_targets(plan_, now, saved_, &kept);
+    targets.insert(targets.end(), planned.begin(), planned.end());
+    if (kept.empty()) keep_one_on(targets, now, &kept);  // with the ones going back too
+    if (kept_on) *kept_on = kept;
+    return targets;
+  }
+
   bool manager_t::restore_all_locked() {
-    if (set_.empty()) {
+    if (set_.empty() && pending_.empty()) {
       saved_.clear();
       save_locked();
       return true;
@@ -395,6 +232,7 @@ namespace frametop_monitors {
       log("couldn't read the monitors to put them back");
       return false;
     }
+    settle_pending_locked(*now);
     std::vector<std::string> ids;
     for (const auto &[id, wish] : set_) ids.push_back(id);
     const auto targets = restore_targets(ids, saved_, set_, *now);
@@ -445,6 +283,8 @@ namespace frametop_monitors {
                                               json {{"on", wish->second.on},
                                                     {"mode", wish->second.mode ? to_json(*wish->second.mode) : json(nullptr)}};
         entry["changed"] = set_.contains(m.id);
+        // Off, its rotation isn't listed: it comes back on as it was saved.
+        if (const auto *was = find(saved_, m.id); !m.on && was) entry["sideways"] = was->sideways;
         monitors.push_back(std::move(entry));
       }
     }

@@ -5204,7 +5204,12 @@ namespace nvhttp {
           // layout isn't touched, so ending this stream has nothing to undo.
           const auto requested_display = get_arg(args, std::string {remote_session::display_launch_arg}.c_str(), "");
           using display_use_e = frametop_monitors::manager_t::display_use_e;
+#ifdef _WIN32
+          // The plan names monitors by device id; a launch may name one \\.\DISPLAYn.
+          const auto plan_use = frametop_monitors::service::display_use(existing_display_device_id(requested_display).value_or(requested_display));
+#else
           const auto plan_use = frametop_monitors::service::display_use(requested_display);
+#endif
           if (plan_use == display_use_e::refuse) {
             tree.put("root.resume", 0);
             tree.put("root.<xmlattr>.status_code", 409);
@@ -5272,7 +5277,13 @@ namespace nvhttp {
           }
 #endif
           launch_session->remote_capture_output = *output;
-          if (!launch_session->frametop_monitors_hold) launch_session->frametop_monitors_hold = frametop_monitors::service::hold();
+          if (!launch_session->frametop_monitors_hold) {
+            launch_session->frametop_monitors_hold = frametop_monitors::service::hold();
+#if defined(_WIN32) || defined(__linux__)
+            // The plan may just have changed the displays (Windows renumbers \\.\DISPLAYn).
+            if (const auto again = existing_display_capture_output(requested_display)) launch_session->remote_capture_output = *again;
+#endif
+          }
 #ifdef _WIN32
           launch_session->remote_capture_device_id = existing_display_device_id(requested_display);
 #endif
