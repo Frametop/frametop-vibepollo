@@ -548,9 +548,11 @@ TEST_F(FrametopMonitors, APickedScaleAppliesAndGoesBack) {
   EXPECT_DOUBLE_EQ(*platform.get("A").scale, 2.0);
   EXPECT_TRUE(same_mode(*platform.get("A").mode, hi)) << "its mode stays";
   EXPECT_EQ(manager.state()["monitors"][0]["wish"]["scale"], 2.0);
+  EXPECT_EQ(manager.state()["monitors"][0]["own_scale"], 1.0) << "the one it goes back to";
   lease.reset();
   timers.run_all();
   EXPECT_DOUBLE_EQ(*platform.get("A").scale, 1.0) << "back after the grace";
+  EXPECT_FALSE(manager.state()["monitors"][0].contains("own_scale")) << "its scale is its own again";
   EXPECT_TRUE((*store.state)["set"].empty());
 }
 

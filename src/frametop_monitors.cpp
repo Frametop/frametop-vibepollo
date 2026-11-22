@@ -324,8 +324,12 @@ namespace frametop_monitors {
         const auto wish = plan.find(m.id);
         entry["wish"] = wish == plan.end() ? json(nullptr) : to_json(plan_t {{m.id, wish->second}})[m.id];
         entry["changed"] = set_.contains(m.id);
-        // Off, its rotation isn't listed: it comes back on as it was saved.
-        if (const auto *was = find(saved_, m.id); !m.on && was) entry["sideways"] = was->sideways;
+        if (const auto *was = find(saved_, m.id)) {
+          // Off, its rotation isn't listed: it comes back on as it was saved.
+          if (!m.on) entry["sideways"] = was->sideways;
+          // Its own scale, to go back to, while it has one Frametop picked.
+          if (set_.contains(m.id) && was->scale) entry["own_scale"] = *was->scale;
+        }
         monitors.push_back(std::move(entry));
       }
     }
