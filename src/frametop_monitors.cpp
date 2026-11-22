@@ -47,7 +47,13 @@ namespace frametop_monitors {
   void manager_t::settle_pending_locked(const inventory_t &now) {
     for (const auto &[id, wish] : pending_) {
       const auto *m = find(now.monitors, id);
-      if (m && still_as_set(*m, wish)) set_[id] = wish;
+      const auto *was = find(saved_, id);
+      if (!m) continue;
+      if (still_as_set(*m, wish)) {
+        set_[id] = wish;
+      } else if (was && !set_.contains(id) && !still_as_set(*m, {was->on, was->mode})) {
+        set_[id] = {m->on, m->on ? m->mode : std::nullopt};  // part of it took (on, not yet in its mode)
+      }
     }
     pending_.clear();
   }

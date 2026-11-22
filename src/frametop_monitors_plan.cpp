@@ -141,7 +141,8 @@ namespace frametop_monitors {
     for (const auto &[id, wish] : plan) {
       const auto *m = find(now.monitors, id);
       if (!m) return "There's no monitor " + id;
-      if (wish.mode && std::none_of(m->modes.begin(), m->modes.end(), [&](const video_mode_t &listed) {
+      // Checked only against a list: Windows lists no modes for a monitor while it's off.
+      if (wish.mode && !m->modes.empty() && std::none_of(m->modes.begin(), m->modes.end(), [&](const video_mode_t &listed) {
             return same_mode(listed, *wish.mode);
           })) {
         return label(*m) + " has no " + describe(*wish.mode) + " mode";

@@ -74,7 +74,7 @@ namespace frametop_monitors {
   nlohmann::json to_json(const plan_t &plan);
 
   /// Why the plan can't be taken ("" if it can): every monitor it names is one of these, each
-  /// mode is one that monitor lists, and a physical monitor stays on. `going_back`: monitors
+  /// mode is one that monitor lists (if it lists any), and a physical monitor stays on. `going_back`: monitors
   /// the plan no longer names that go back as they were saved (on or off).
   std::string validate(const plan_t &plan, const inventory_t &now, const std::vector<monitor_t> &going_back = {});
 

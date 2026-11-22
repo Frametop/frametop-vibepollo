@@ -134,6 +134,8 @@ TEST(FrametopMonitorsPlan, ValidateNeedsKnownMonitorsModesAndOneOn) {
   EXPECT_NE(validate({{"A", {true, video_mode_t {1920, 1080, 60000}}}}, now), "");
   EXPECT_EQ(validate({{"A", {true, video_mode_t {2560, 1600, 60005}}}}, now), "");
   EXPECT_NE(validate({{"A", {true, video_mode_t {2560, 1600, 59940}}}}, now), "");
+  now.monitors[1].modes.clear();  // Windows lists no modes for a monitor while it's off
+  EXPECT_EQ(validate({{"B", {true, video_mode_t {3840, 2160, 60000}}}}, now), "");
   EXPECT_NE(validate({{"A", {false, {}}}, {"B", {false, {}}}}, now), "");
   now.other_outputs = 1;  // a virtual display goes with its stream: it doesn't count
   EXPECT_NE(validate({{"A", {false, {}}}, {"B", {false, {}}}}, now), "");
@@ -367,6 +369,13 @@ TEST_F(FrametopMonitors, ACrashDuringAChangePutsBackWhatItGotTo) {
   EXPECT_TRUE(make().start());
   EXPECT_TRUE(platform.get("B").on);
   EXPECT_TRUE((*store.state)["pending"].empty());
+  // B (off) was coming on at 60 Hz: it came on, but the crash came before its mode.
+  journal({{"B", {{"on", true}, {"mode", to_json(lo)}}}});
+  (*store.state)["set"] = json::object();
+  (*store.state)["saved"] = json::array({to_json(monitor("B", false))});
+  EXPECT_TRUE(platform.get("B").on);
+  EXPECT_TRUE(make().start());
+  EXPECT_FALSE(platform.get("B").on) << "partly made still goes back";
 }
 
 TEST_F(FrametopMonitors, MonitorsGoingBackAndThePlanStillLeaveOneOn) {

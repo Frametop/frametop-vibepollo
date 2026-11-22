@@ -5205,11 +5205,13 @@ namespace nvhttp {
           const auto requested_display = get_arg(args, std::string {remote_session::display_launch_arg}.c_str(), "");
           using display_use_e = frametop_monitors::manager_t::display_use_e;
 #ifdef _WIN32
-          // The plan names monitors by device id; a launch may name one \\.\DISPLAYn.
-          const auto plan_use = frametop_monitors::service::display_use(existing_display_device_id(requested_display).value_or(requested_display));
+          // The plan names monitors by device id, and a change of topology renumbers \\.\DISPLAYn:
+          // a launch naming one is the device it names now.
+          const auto display_id = existing_display_device_id(requested_display).value_or(requested_display);
 #else
-          const auto plan_use = frametop_monitors::service::display_use(requested_display);
+          const auto &display_id = requested_display;
 #endif
+          const auto plan_use = frametop_monitors::service::display_use(display_id);
           if (plan_use == display_use_e::refuse) {
             tree.put("root.resume", 0);
             tree.put("root.<xmlattr>.status_code", 409);
@@ -5281,11 +5283,11 @@ namespace nvhttp {
             launch_session->frametop_monitors_hold = frametop_monitors::service::hold();
 #if defined(_WIN32) || defined(__linux__)
             // The plan may just have changed the displays (Windows renumbers \\.\DISPLAYn).
-            if (const auto again = existing_display_capture_output(requested_display)) launch_session->remote_capture_output = *again;
+            if (const auto again = existing_display_capture_output(display_id)) launch_session->remote_capture_output = *again;
 #endif
           }
 #ifdef _WIN32
-          launch_session->remote_capture_device_id = existing_display_device_id(requested_display);
+          launch_session->remote_capture_device_id = existing_display_device_id(display_id);
 #endif
           BOOST_LOG(info) << "Frametop display for client '" << request_client_identity.uuid
                           << "' captures existing display '" << *output << "' (requested '" << requested_display << "').";

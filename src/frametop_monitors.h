@@ -89,8 +89,8 @@ namespace frametop_monitors {
     /// the generation); tries again while that fails.
     void restore_later_locked(std::uint64_t generation);
     void save_locked();
-    /// What a change cut short by a crash got to: each pending target the monitor is now in
-    /// counts as made (so it goes back), the rest as never made.
+    /// What a change cut short by a crash got to: a pending target the monitor is now in, or one
+    /// it's partly in (no longer as saved), counts as made, so it goes back; the rest as never made.
     void settle_pending_locked(const inventory_t &now);
     /// The changes that make `now` match the plan, with monitors the plan no longer names going
     /// back; *kept_on names a monitor that stays on because the desktop needs one.
