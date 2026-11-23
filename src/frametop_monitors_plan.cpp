@@ -271,19 +271,39 @@ namespace frametop_monitors {
     }
   }
 
-  std::string not_taken(const std::vector<target_t> &targets, const inventory_t &after) {
-    const auto size = [](const video_mode_t &mode) {
-      return std::to_string(mode.width) + "x" + std::to_string(mode.height);
-    };
+  namespace {
+    // The size only: a custom mode's refresh rate is the desktop's to round.
+    bool same_size(const video_mode_t &a, const video_mode_t &b) {
+      return a.width == b.width && a.height == b.height;
+    }
+  }  // namespace
+
+  std::vector<target_t> not_taken(const std::vector<target_t> &targets, const inventory_t &after) {
+    std::vector<target_t> out;
     for (const auto &t : targets) {
       const auto *m = find(after.monitors, t.id);
-      if (!t.on || !t.mode || !m || !m->on || !m->mode) continue;
-      // The size only: a custom mode's refresh rate is the desktop's to round.
-      if (m->mode->width != t.mode->width || m->mode->height != t.mode->height) {
-        return label(*m) + " can't be " + size(*t.mode) + ": it stays " + size(*m->mode);
-      }
+      if (t.on && t.mode && m && m->on && m->mode && !same_size(*m->mode, *t.mode)) out.push_back(t);
     }
-    return {};
+    return out;
+  }
+
+  plan_t without_refused(plan_t plan, const inventory_t &now, const refused_t &refused, std::string *said) {
+    if (said) said->clear();
+    for (auto &[id, wish] : plan) {
+      const auto sizes = refused.find(id);
+      if (!wish.mode || sizes == refused.end() ||
+          std::none_of(sizes->second.begin(), sizes->second.end(), [&](const video_mode_t &size) {
+            return same_size(size, *wish.mode);
+          })) {
+        continue;
+      }
+      if (said && said->empty()) {
+        const auto *m = find(now.monitors, id);
+        *said = (m ? label(*m) : id) + " can't be " + std::to_string(wish.mode->width) + "x" + std::to_string(wish.mode->height);
+      }
+      wish.mode.reset();
+    }
+    return plan;
   }
 
   bool still_as_set(const monitor_t &now, const wish_t &set) {

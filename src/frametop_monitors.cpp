@@ -159,18 +159,24 @@ namespace frametop_monitors {
   }
 
   void manager_t::apply_locked() {
+    // A size refused: once more, without it, which puts that monitor back from wherever the
+    // desktop left it (Hyprland falls back to another of its modes).
+    if (apply_once_locked()) apply_once_locked();
+  }
+
+  bool manager_t::apply_once_locked() {
     const auto now = platform_.inventory();
     if (!now) {
       last_error_ = "couldn't read the monitors";
       log(last_error_);
-      return;
+      return false;
     }
     settle_pending_locked(*now);
     if (set_.empty()) saved_.clear();
-    std::string kept_on;
-    const auto plan = plan_for(*now);
+    std::string kept_on, refused;
+    const auto plan = plan_for(*now, &refused);
     const auto targets = targets_locked(plan, *now, &kept_on);
-    last_error_ = kept_on.empty() ? std::string {} : kept_on + " stays on: the desktop needs one display";
+    last_error_ = kept_on.empty() ? refused : kept_on + " stays on: the desktop needs one display";
     if (!kept_on.empty()) log(last_error_);
     // Each monitor is saved as it is just before this first changes it, and what it's being
     // made is in the store (pending) before the change, for a crash.
@@ -188,7 +194,7 @@ namespace frametop_monitors {
     if (targets.empty()) {
       if (set_.empty()) saved_.clear();
       save_locked();
-      return;
+      return false;
     }
     save_locked();
     if (const auto error = platform_.apply(targets, *now); !error.empty()) {
@@ -199,11 +205,14 @@ namespace frametop_monitors {
     pending_.clear();
     // What each one is now, for the check that it's still as this left it. One that is as it
     // was saved (the change didn't take, or it went back) has nothing left to put back.
+    bool refused_one = false;
     if (const auto after = platform_.inventory()) {
-      // A mode the desktop took and the monitor didn't: said, like a change it refused.
-      if (const auto error = not_taken(targets, *after); last_error_.empty() && !error.empty()) {
-        last_error_ = error;
-        log("couldn't change the monitors: " + error);
+      // A mode the desktop took and the monitor didn't: that size isn't asked of it again.
+      for (const auto &t : not_taken(targets, *after)) {
+        refused_[t.id].push_back({t.mode->width, t.mode->height, 0});
+        refused_one = true;
+        log(t.id + " didn't go into " + std::to_string(t.mode->width) + "x" + std::to_string(t.mode->height) +
+            ": it's put back as it was");
       }
       for (const auto &t : targets) {
         const auto *m = find(after->monitors, t.id);
@@ -220,10 +229,11 @@ namespace frametop_monitors {
       return !set_.contains(x.id);
     });
     save_locked();
+    return refused_one;
   }
 
-  plan_t manager_t::plan_for(const inventory_t &now) const {
-    return resolve_sizes(others_off_ ? with_others_off(plan_, now) : plan_, now, saved_);
+  plan_t manager_t::plan_for(const inventory_t &now, std::string *said) const {
+    return without_refused(resolve_sizes(others_off_ ? with_others_off(plan_, now) : plan_, now, saved_), now, refused_, said);
   }
 
   std::vector<target_t> manager_t::targets_locked(const plan_t &plan, const inventory_t &now, std::string *kept_on) const {
@@ -329,6 +339,11 @@ namespace frametop_monitors {
         const auto wish = plan.find(m.id);
         entry["wish"] = wish == plan.end() ? json(nullptr) : to_json(plan_t {{m.id, wish->second}})[m.id];
         entry["changed"] = set_.contains(m.id);
+        // The sizes it didn't go into when asked (this run): a panel of one crops or fits it.
+        entry["refused"] = json::array();
+        if (const auto sizes = refused_.find(m.id); sizes != refused_.end()) {
+          for (const auto &size : sizes->second) entry["refused"].push_back({{"width", size.width}, {"height", size.height}});
+        }
         if (const auto *was = find(saved_, m.id)) {
           // Off, its rotation isn't listed: it comes back on as it was saved.
           if (!m.on) entry["sideways"] = was->sideways;

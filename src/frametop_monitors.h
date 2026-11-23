@@ -102,10 +102,14 @@ namespace frametop_monitors {
     /// The changes that make `now` match `plan` (plan_for), with monitors it no longer names going
     /// back; *kept_on names a monitor that stays on because the desktop needs one.
     std::vector<target_t> targets_locked(const plan_t &plan, const inventory_t &now, std::string *kept_on) const;
-    /// The plan for the monitors `now` has: with others_off_, the ones it doesn't name are off.
-    plan_t plan_for(const inventory_t &now) const;
-    /// Applies the plan to the monitors as they are now; snapshots them first.
+    /// The plan for the monitors `now` has: with others_off_, the ones it doesn't name are off,
+    /// and a size its monitor refused (refused_) is its own mode. *said names the first of those.
+    plan_t plan_for(const inventory_t &now, std::string *said = nullptr) const;
+    /// Applies the plan to the monitors as they are now; snapshots them first. A monitor that
+    /// didn't go into the size asked is put back as it was, and that size isn't asked of it again.
     void apply_locked();
+    /// One pass of apply_locked; true when a monitor refused a size in it (now in refused_).
+    bool apply_once_locked();
     /// Puts back every monitor this changed; false if some couldn't be (kept for later).
     bool restore_all_locked();
 
@@ -121,6 +125,7 @@ namespace frametop_monitors {
     std::vector<monitor_t> saved_;  // before the first change; empty when nothing is changed
     std::map<std::string, wish_t> set_;  // what this made each changed monitor
     std::map<std::string, wish_t> pending_;  // what a change under way is making them (in the store, for a crash)
+    refused_t refused_;  // the sizes a monitor didn't go into, this run: not asked of it again
     int holders_ = 0;
     bool loaded_ = false;  // the store read (start())
     bool held_ = false;  // a stream came since this started: it owns what's changed

@@ -121,10 +121,18 @@ namespace frametop_monitors {
   std::vector<target_t> plan_targets(const plan_t &plan, const inventory_t &now, const std::vector<monitor_t> &saved,
                                      std::string *kept_on = nullptr);
 
-  /// Why `after` (the monitors once `targets` were applied) isn't what was asked ("" if it is): a
-  /// monitor asked into a mode that is on in another size. A desktop may take a mode and fall
-  /// back when the monitor refuses it (Hyprland: a custom mode taller than a laptop's panel).
-  std::string not_taken(const std::vector<target_t> &targets, const inventory_t &after);
+  /// The targets that `after` (the monitors once `targets` were applied) doesn't have: a monitor
+  /// asked into a mode that is on in another size. A desktop may take a mode and fall back to
+  /// another when the monitor or its driver refuses it (Hyprland: a custom mode taller than a
+  /// laptop's panel, or any custom mode on NVIDIA).
+  std::vector<target_t> not_taken(const std::vector<target_t> &targets, const inventory_t &after);
+
+  /// The sizes (width and height) each monitor didn't go into when asked, by monitor id.
+  using refused_t = std::map<std::string, std::vector<video_mode_t>>;
+
+  /// The plan with each mode of a size its monitor refused taken out, so it stays in its own
+  /// mode and isn't asked again. *said: "NAME can't be WxH" for the first one ("" none).
+  plan_t without_refused(plan_t plan, const inventory_t &now, const refused_t &refused, std::string *said = nullptr);
 
   /// Whether `now` is still as this left it (`set`): only then is it put back.
   bool still_as_set(const monitor_t &now, const wish_t &set);
