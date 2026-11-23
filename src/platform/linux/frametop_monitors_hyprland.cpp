@@ -80,32 +80,52 @@ namespace platf::frametop_monitors_hyprland {
       return out;
     }
 
-    // The scales Hyprland takes for a mode: ones that make a whole-pixel desktop size (it
-    // swaps any other for a nearby one and says the config is wrong).
+    // The scales Hyprland takes for a mode: ones that make a whole-pixel desktop size, as they
+    // are or at the nearest 120th (the fractional scale protocol's step: 1.666667 is 200/120).
+    // Any other it refuses for its default scale and says the config is wrong. This is its
+    // own check, doubles compared exactly, so a scale that passes here passes there.
     bool whole_at(const video_mode_t &mode, double scale) {
-      const auto whole = [&](unsigned pixels) {
-        const auto size = pixels / scale;
-        return std::abs(size - std::round(size)) < 0.01;
+      const auto whole = [&](double by) {
+        const double w = mode.width / by, h = mode.height / by;
+        return w == std::round(w) && h == std::round(h);
       };
-      return whole(mode.width) && whole(mode.height);
+      return whole(scale) || whole(std::round(scale * 120.0) / 120.0);
     }
 
+    // The asked scale if the mode takes it, else the nearest 120th it does (1 takes every mode).
+    double fit_scale(double scale, const video_mode_t &mode) {
+      if (whole_at(mode, scale)) return scale;
+      const int asked = static_cast<int>(std::lround(scale * 120));
+      for (int off = 1; off < 120; ++off) {
+        for (const int steps : {asked - off, asked + off}) {
+          if (steps >= 60 && steps <= 480 && whole_at(mode, steps / 120.0)) return steps / 120.0;
+        }
+      }
+      return 1.0;
+    }
+
+    // The scales listed for a mode: the round ones it takes, and what 125%, 150%, 175% and
+    // 200% fit to, which Frametop's picker always has.
     std::vector<double> scales_for(const video_mode_t &mode) {
       std::vector<double> out;
       for (const double scale : {1.0, 1.25, 1.5, 1.6, 1.75, 2.0, 2.25, 2.5, 3.0}) {
         if (whole_at(mode, scale)) out.push_back(scale);
       }
+      for (const double scale : {1.25, 1.5, 1.75, 2.0}) {
+        const auto fit = fit_scale(scale, mode);
+        if (std::none_of(out.begin(), out.end(), [&](double s) {
+              return frametop_monitors::same_scale(s, fit);
+            })) {
+          out.push_back(fit);
+        }
+      }
+      std::sort(out.begin(), out.end());
       return out;
     }
 
-    // The asked scale if the mode takes it, else the nearest one it does (1 takes every mode).
-    double fit_scale(double scale, const video_mode_t &mode) {
-      if (whole_at(mode, scale)) return scale;
-      double best = 1.0;
-      for (const auto s : scales_for(mode)) {
-        if (std::abs(s - scale) < std::abs(best - scale)) best = s;
-      }
-      return best;
+    // Whether a scale Hyprland reports (to two places: 1.67 for 200/120) is the one set.
+    bool reads_as(double read, double set) {
+      return std::abs(read - set) < 0.006;
     }
 
     // "2560x1600@240.00Hz"
@@ -131,7 +151,7 @@ namespace platf::frametop_monitors_hyprland {
       if (m->on != t.on) return false;
       if (!t.on) return true;
       if (t.mode && !(m->mode && frametop_monitors::same_mode(*m->mode, *t.mode))) return false;
-      return !t.scale || !m->mode || (m->scale && frametop_monitors::same_scale(*m->scale, fit_scale(*t.scale, *m->mode)));
+      return !t.scale || !m->mode || (m->scale && reads_as(*m->scale, fit_scale(*t.scale, *m->mode)));
     }
   }  // namespace
 

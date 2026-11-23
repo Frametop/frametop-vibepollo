@@ -72,7 +72,9 @@ TEST(FrametopMonitorsHyprland, ListsTheScalesItsModeTakes) {
   const auto &laptop = now->monitors[0];
   ASSERT_TRUE(laptop.scale);
   EXPECT_DOUBLE_EQ(*laptop.scale, 1.25);
-  EXPECT_EQ(laptop.scales, (std::vector<double> {1.0, 1.25, 1.6, 2.0, 2.5})) << "whole-pixel sizes of 2560x1600";
+  ASSERT_EQ(laptop.scales.size(), 6u) << "whole-pixel sizes of 2560x1600, and what 150% and 175% fit to";
+  const std::vector<double> listed {1.0, 1.25, 1.6, 200 / 120.0, 2.0, 2.5};
+  for (std::size_t i = 0; i < listed.size(); ++i) EXPECT_NEAR(laptop.scales[i], listed[i], 1e-9);
   EXPECT_TRUE(now->monitors[1].scales.empty()) << "off: its scale comes with it";
 }
 
@@ -86,6 +88,9 @@ TEST(FrametopMonitorsHyprland, APickedScaleFitsTheMode) {
   EXPECT_EQ(hypr::rule_for(t, *now).scale, "2");
   t.scale = 1.5;  // 1706.67 px wide: Hyprland would swap it
   EXPECT_EQ(hypr::rule_for(t, *now).scale, "1.6");
+  t.scale = 1.75;  // the nearest 120th that gives whole pixels: 200/120, 1536x960
+  EXPECT_EQ(hypr::rule_for(t, *now).scale, "1.666667");
+  t.scale = 1.5;
   t.mode = video_mode_t {1920, 1200, 59950};
   EXPECT_EQ(hypr::rule_for(t, *now).scale, "1.5") << "1920x1200 takes 1.5";
 }
