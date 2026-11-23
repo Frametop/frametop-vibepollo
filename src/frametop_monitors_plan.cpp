@@ -271,6 +271,21 @@ namespace frametop_monitors {
     }
   }
 
+  std::string not_taken(const std::vector<target_t> &targets, const inventory_t &after) {
+    const auto size = [](const video_mode_t &mode) {
+      return std::to_string(mode.width) + "x" + std::to_string(mode.height);
+    };
+    for (const auto &t : targets) {
+      const auto *m = find(after.monitors, t.id);
+      if (!t.on || !t.mode || !m || !m->on || !m->mode) continue;
+      // The size only: a custom mode's refresh rate is the desktop's to round.
+      if (m->mode->width != t.mode->width || m->mode->height != t.mode->height) {
+        return label(*m) + " can't be " + size(*t.mode) + ": it stays " + size(*m->mode);
+      }
+    }
+    return {};
+  }
+
   bool still_as_set(const monitor_t &now, const wish_t &set) {
     if (now.on != set.on) return false;
     if (!set.on) return true;

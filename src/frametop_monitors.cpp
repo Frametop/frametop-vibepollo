@@ -200,6 +200,11 @@ namespace frametop_monitors {
     // What each one is now, for the check that it's still as this left it. One that is as it
     // was saved (the change didn't take, or it went back) has nothing left to put back.
     if (const auto after = platform_.inventory()) {
+      // A mode the desktop took and the monitor didn't: said, like a change it refused.
+      if (const auto error = not_taken(targets, *after); last_error_.empty() && !error.empty()) {
+        last_error_ = error;
+        log("couldn't change the monitors: " + error);
+      }
       for (const auto &t : targets) {
         const auto *m = find(after->monitors, t.id);
         const auto *was = find(saved_, t.id);

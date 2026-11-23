@@ -121,6 +121,11 @@ namespace frametop_monitors {
   std::vector<target_t> plan_targets(const plan_t &plan, const inventory_t &now, const std::vector<monitor_t> &saved,
                                      std::string *kept_on = nullptr);
 
+  /// Why `after` (the monitors once `targets` were applied) isn't what was asked ("" if it is): a
+  /// monitor asked into a mode that is on in another size. A desktop may take a mode and fall
+  /// back when the monitor refuses it (Hyprland: a custom mode taller than a laptop's panel).
+  std::string not_taken(const std::vector<target_t> &targets, const inventory_t &after);
+
   /// Whether `now` is still as this left it (`set`): only then is it put back.
   bool still_as_set(const monitor_t &now, const wish_t &set);
 

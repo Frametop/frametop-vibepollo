@@ -31,6 +31,7 @@ namespace {
     inventory_t now;
     bool readable = true;
     std::string refuse;
+    unsigned tallest = 0;  // a mode taller than this (0: none is) is taken and not made
     std::vector<std::vector<target_t>> applied;
 
     std::string backend() const override {
@@ -54,7 +55,8 @@ namespace {
       for (const auto &t : targets) {
         auto &m = get(t.id);
         m.on = t.on;
-        m.mode = t.on ? (t.mode ? t.mode : m.mode ? m.mode : std::optional<video_mode_t> {hi}) : std::nullopt;
+        const bool made = !t.mode || !tallest || t.mode->height <= tallest;
+        m.mode = t.on ? (t.mode && made ? t.mode : m.mode ? m.mode : std::optional<video_mode_t> {hi}) : std::nullopt;
         m.scale = t.on ? (t.scale ? t.scale : m.scale ? m.scale : std::optional<double> {1.0}) : std::nullopt;
         if (t.on && !t.place.empty()) m.place = t.place;
         if (!t.on) m.place = json::object();
@@ -620,6 +622,27 @@ TEST_F(FrametopMonitors, AStreamSizeSetsTheMonitorAndGoesBack) {
   EXPECT_TRUE(same_mode(*platform.get("A").mode, hi)) << "its own size: back to its own mode";
   EXPECT_DOUBLE_EQ(*platform.get("A").scale, 1.0);
   EXPECT_FALSE(manager.state()["monitors"][0]["changed"].get<bool>());
+}
+
+TEST(FrametopMonitorsPlan, AModeTheMonitorDidntGoIntoIsNotTaken) {
+  inventory_t after {{monitor("A", true, true), monitor("B", false)}};
+  EXPECT_EQ(not_taken({{"A", true, video_mode_t {2560, 1600, 59951}}}, after), "") << "its size, at the desktop's rate";
+  EXPECT_EQ(not_taken({{"A", true, std::nullopt}, {"B", false, std::nullopt}, {"C", true, lo}}, after), "");
+  EXPECT_EQ(not_taken({{"A", true, video_mode_t {2560, 1800, 60000}}}, after), "A name can't be 2560x1800: it stays 2560x1600");
+}
+
+TEST_F(FrametopMonitors, ASizeTheMonitorRefusesIsSaid) {
+  platform.get("A").any_mode = true;
+  platform.tallest = 1600;  // Hyprland takes the custom mode, the panel doesn't
+  auto manager = make();
+  auto lease = manager.hold();
+  ASSERT_EQ(manager.set_plan({{"monitors", {{"A", {{"on", true}, {"mode", to_json(video_mode_t {2560, 1800, 0})}}}}}}), "");
+  EXPECT_TRUE(same_mode(*platform.get("A").mode, hi));
+  EXPECT_EQ(manager.state()["error"], "A name can't be 2560x1800: it stays 2560x1600");
+  EXPECT_FALSE(manager.state()["monitors"][0]["changed"].get<bool>()) << "as it was: nothing to put back";
+  ASSERT_EQ(manager.set_plan({{"monitors", {{"A", {{"on", true}, {"mode", to_json(video_mode_t {2560, 1200, 0})}}}}}}), "");
+  EXPECT_TRUE(same_mode(*platform.get("A").mode, {2560, 1200, 60000}));
+  EXPECT_EQ(manager.state()["error"], "") << "a size it takes clears it";
 }
 
 TEST_F(FrametopMonitors, AShutdownPutsThemBackNow) {
