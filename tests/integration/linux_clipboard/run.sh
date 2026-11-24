@@ -6,10 +6,13 @@ set -e
 pacman -Sy --noconfirm --needed sway wl-clipboard wayland python >/tmp/pacman.log 2>&1
 mkdir -p /tmp/clip && cd /tmp/clip
 xml=/src/third-party/wlr-protocols/unstable/wlr-data-control-unstable-v1.xml
+ext_xml=/src/src/platform/linux/protocols/ext-data-control-v1.xml
 wayland-scanner client-header $xml wlr-data-control-unstable-v1.h
 wayland-scanner private-code $xml wlr-data-control-unstable-v1.c
+wayland-scanner client-header $ext_xml ext-data-control-v1.h
+wayland-scanner private-code $ext_xml ext-data-control-v1.c
 gcc -std=gnu11 -O2 -Wall -Wextra -Werror -I. -I/src/packaging/linux -o vibepollo-clipboard \
-  /src/packaging/linux/vibepollo-clipboard.c wlr-data-control-unstable-v1.c -lwayland-client
+  /src/packaging/linux/vibepollo-clipboard.c ext-data-control-v1.c wlr-data-control-unstable-v1.c -lwayland-client
 cp /usr/bin/sway /tmp/sway  # a copy drops the file capability the container may not grant
 export XDG_RUNTIME_DIR=/tmp/xdg
 mkdir -p -m 700 $XDG_RUNTIME_DIR

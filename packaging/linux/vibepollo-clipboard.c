@@ -1,8 +1,8 @@
 /*
  * Frametop: vibepollo-clipboard, the desktop session's clipboard for Vibepollo's
  * /actions/clipboard (a Frametop client's shared clipboard). A Wayland client of the desktop's
- * compositor through wlr-data-control, which KWin and Hyprland give clients that don't have
- * focus, as a clipboard manager needs.
+ * compositor through ext-data-control (or wlr-data-control on older compositors), which KWin
+ * and Hyprland give clients that don't have focus, as a clipboard manager needs.
  *
  * Vibepollo starts it once and keeps it: run as the desktop user, it runs it itself; as the
  * system service, the session broker runs it in the desktop session (vibepollo-session-exec
@@ -16,6 +16,7 @@
  */
 #define _GNU_SOURCE
 
+#include "ext-data-control-v1.h"
 #include "vibepollo-clipboard-protocol.h"
 #include "wlr-data-control-unstable-v1.h"
 
@@ -48,8 +49,12 @@ static const char secret_hint[] = "x-kde-passwordManagerHint";
 
 static struct wl_display *display;
 static struct wl_seat *seat;
-static struct zwlr_data_control_manager_v1 *manager;
-static struct zwlr_data_control_device_v1 *device;
+static uint32_t ext_manager_name, wlr_manager_name;
+static bool have_ext_manager, have_wlr_manager;
+static struct ext_data_control_manager_v1 *ext_manager;
+static struct ext_data_control_device_v1 *ext_device;
+static struct zwlr_data_control_manager_v1 *wlr_manager;
+static struct zwlr_data_control_device_v1 *wlr_device;
 
 static int64_t now_ms(void) {
   struct timespec now;
@@ -87,69 +92,111 @@ static void reply_ok(const void *data, size_t length) {
 /* --------------------------------------------------------------------- the clipboard's offer */
 
 struct offer {
-  struct zwlr_data_control_offer_v1 *offer;
+  struct ext_data_control_offer_v1 *ext;
+  struct zwlr_data_control_offer_v1 *wlr;
   int text;  /* index into text_types, text_type_count: no text */
   bool png, secret;
 };
 static struct offer *selection; /* the clipboard as it stands, NULL when empty */
 
-static void offer_type(void *data, struct zwlr_data_control_offer_v1 *offer, const char *type) {
-  (void) offer;
-  struct offer *o = data;
+static void offer_record_type(struct offer *o, const char *type) {
   if (!strcmp(type, png_type)) o->png = true;
   else if (!strcmp(type, secret_hint)) o->secret = true;
   for (int i = 0; i < o->text; ++i)
     if (!strcmp(type, text_types[i])) o->text = i;
 }
-static const struct zwlr_data_control_offer_v1_listener offer_listener = {offer_type};
+static void ext_offer_type(void *data, struct ext_data_control_offer_v1 *offer, const char *type) {
+  (void) offer;
+  offer_record_type(data, type);
+}
+static void wlr_offer_type(void *data, struct zwlr_data_control_offer_v1 *offer, const char *type) {
+  (void) offer;
+  offer_record_type(data, type);
+}
+static const struct ext_data_control_offer_v1_listener ext_offer_listener = {ext_offer_type};
+static const struct zwlr_data_control_offer_v1_listener wlr_offer_listener = {wlr_offer_type};
 
 static void forget(struct offer *o) {
   if (!o) return;
-  zwlr_data_control_offer_v1_destroy(o->offer);
+  if (o->ext) ext_data_control_offer_v1_destroy(o->ext);
+  else if (o->wlr) zwlr_data_control_offer_v1_destroy(o->wlr);
   free(o);
 }
 
-static void device_offer(void *data, struct zwlr_data_control_device_v1 *d, struct zwlr_data_control_offer_v1 *offer) {
+static void handle_selection(struct offer *next) {
+  if (selection != next) forget(selection);
+  selection = next;
+}
+static void handle_finished(void) {
+  fprintf(stderr, "vibepollo-clipboard: the desktop took its clipboard away (its seat went)\n");
+  _exit(1);
+}
+static void handle_primary(struct offer *o) {
+  if (o && o != selection) forget(o); /* not shared */
+}
+
+static void ext_device_offer(void *data, struct ext_data_control_device_v1 *d, struct ext_data_control_offer_v1 *offer) {
+  (void) data, (void) d;
+  struct offer *o = calloc(1, sizeof *o);
+  if (!o) {
+    ext_data_control_offer_v1_destroy(offer);
+    return;
+  }
+  o->ext = offer, o->text = text_type_count;
+  ext_data_control_offer_v1_add_listener(offer, &ext_offer_listener, o);
+}
+static void ext_device_selection(void *data, struct ext_data_control_device_v1 *d, struct ext_data_control_offer_v1 *offer) {
+  (void) data, (void) d;
+  handle_selection(offer ? ext_data_control_offer_v1_get_user_data(offer) : NULL);
+}
+static void ext_device_finished(void *data, struct ext_data_control_device_v1 *d) {
+  (void) data, (void) d;
+  handle_finished();
+}
+static void ext_device_primary(void *data, struct ext_data_control_device_v1 *d, struct ext_data_control_offer_v1 *offer) {
+  (void) data, (void) d;
+  if (offer) handle_primary(ext_data_control_offer_v1_get_user_data(offer));
+}
+static const struct ext_data_control_device_v1_listener ext_device_listener = {ext_device_offer, ext_device_selection,
+                                                                               ext_device_finished, ext_device_primary};
+
+static void wlr_device_offer(void *data, struct zwlr_data_control_device_v1 *d, struct zwlr_data_control_offer_v1 *offer) {
   (void) data, (void) d;
   struct offer *o = calloc(1, sizeof *o);
   if (!o) {
     zwlr_data_control_offer_v1_destroy(offer);
     return;
   }
-  o->offer = offer, o->text = text_type_count;
-  zwlr_data_control_offer_v1_add_listener(offer, &offer_listener, o);
+  o->wlr = offer, o->text = text_type_count;
+  zwlr_data_control_offer_v1_add_listener(offer, &wlr_offer_listener, o);
 }
-static void device_selection(void *data, struct zwlr_data_control_device_v1 *d, struct zwlr_data_control_offer_v1 *offer) {
+static void wlr_device_selection(void *data, struct zwlr_data_control_device_v1 *d, struct zwlr_data_control_offer_v1 *offer) {
   (void) data, (void) d;
-  struct offer *next = offer ? zwlr_data_control_offer_v1_get_user_data(offer) : NULL;
-  if (selection != next) forget(selection);
-  selection = next;
+  handle_selection(offer ? zwlr_data_control_offer_v1_get_user_data(offer) : NULL);
 }
-static void device_finished(void *data, struct zwlr_data_control_device_v1 *d) {
+static void wlr_device_finished(void *data, struct zwlr_data_control_device_v1 *d) {
   (void) data, (void) d;
-  fprintf(stderr, "vibepollo-clipboard: the desktop took its clipboard away (its seat went)\n");
-  _exit(1);
+  handle_finished();
 }
-static void device_primary(void *data, struct zwlr_data_control_device_v1 *d, struct zwlr_data_control_offer_v1 *offer) {
+static void wlr_device_primary(void *data, struct zwlr_data_control_device_v1 *d, struct zwlr_data_control_offer_v1 *offer) {
   (void) data, (void) d;
-  if (offer) forget(zwlr_data_control_offer_v1_get_user_data(offer)); /* not shared */
+  if (offer) handle_primary(zwlr_data_control_offer_v1_get_user_data(offer));
 }
-static const struct zwlr_data_control_device_v1_listener device_listener = {device_offer, device_selection, device_finished,
-                                                                            device_primary};
+static const struct zwlr_data_control_device_v1_listener wlr_device_listener = {wlr_device_offer, wlr_device_selection,
+                                                                                wlr_device_finished, wlr_device_primary};
 
 /* ---------------------------------------------------------------- what this helper put there */
 
 struct copy {
-  struct zwlr_data_control_source_v1 *source;
+  struct ext_data_control_source_v1 *ext;
+  struct zwlr_data_control_source_v1 *wlr;
   char *data;
   size_t length;
   bool image;
 };
 static struct copy *current; /* on the clipboard now, NULL once something else was copied */
 
-static void source_send(void *data, struct zwlr_data_control_source_v1 *source, const char *type, int32_t fd) {
-  (void) source, (void) type;
-  const struct copy *c = data;
+static void handle_source_send(const struct copy *c, int32_t fd) {
   /* A child writes it, so an app that reads slowly (a big image) or not at all holds up
    * nothing here. It gets PASTE_MS for all of it. */
   const pid_t child = fork();
@@ -175,14 +222,33 @@ static void source_send(void *data, struct zwlr_data_control_source_v1 *source, 
   }
   close(fd);
 }
-static void source_cancelled(void *data, struct zwlr_data_control_source_v1 *source) {
-  struct copy *c = data;
+static void handle_source_cancelled(struct copy *c) {
   if (c == current) current = NULL; /* something else was copied */
-  zwlr_data_control_source_v1_destroy(source);
+  if (c->ext) ext_data_control_source_v1_destroy(c->ext);
+  else if (c->wlr) zwlr_data_control_source_v1_destroy(c->wlr);
   free(c->data);
   free(c);
 }
-static const struct zwlr_data_control_source_v1_listener source_listener = {source_send, source_cancelled};
+
+static void ext_source_send(void *data, struct ext_data_control_source_v1 *source, const char *type, int32_t fd) {
+  (void) source, (void) type;
+  handle_source_send(data, fd);
+}
+static void ext_source_cancelled(void *data, struct ext_data_control_source_v1 *source) {
+  (void) source;
+  handle_source_cancelled(data);
+}
+static const struct ext_data_control_source_v1_listener ext_source_listener = {ext_source_send, ext_source_cancelled};
+
+static void wlr_source_send(void *data, struct zwlr_data_control_source_v1 *source, const char *type, int32_t fd) {
+  (void) source, (void) type;
+  handle_source_send(data, fd);
+}
+static void wlr_source_cancelled(void *data, struct zwlr_data_control_source_v1 *source) {
+  (void) source;
+  handle_source_cancelled(data);
+}
+static const struct zwlr_data_control_source_v1_listener wlr_source_listener = {wlr_source_send, wlr_source_cancelled};
 
 /* ------------------------------------------------------------------------------ requests */
 
@@ -203,7 +269,9 @@ static void get(bool image) {
     reply_fail("no pipe");
     return;
   }
-  zwlr_data_control_offer_v1_receive(o->offer, image ? png_type : text_types[o->text], fds[1]);
+  const char *mime = image ? png_type : text_types[o->text];
+  if (o->ext) ext_data_control_offer_v1_receive(o->ext, mime, fds[1]);
+  else zwlr_data_control_offer_v1_receive(o->wlr, mime, fds[1]);
   wl_display_flush(display);
   close(fds[1]);
   size_t size = 0, capacity = 65536;
@@ -274,15 +342,24 @@ static void set(bool image, size_t length) {
     return;
   }
   c->data = data, c->length = length, c->image = image;
-  c->source = zwlr_data_control_manager_v1_create_data_source(manager);
-  zwlr_data_control_source_v1_add_listener(c->source, &source_listener, c);
-  if (image) zwlr_data_control_source_v1_offer(c->source, png_type);
-  else
-    for (int i = 0; i < text_type_count; ++i) zwlr_data_control_source_v1_offer(c->source, text_types[i]);
   /* The one before gets "cancelled" and goes. Sent, not waited for: a desktop that stopped
    * answering mustn't hold Vibepollo's request up (the main loop sees what follows). */
   current = c;
-  zwlr_data_control_device_v1_set_selection(device, c->source);
+  if (ext_manager) {
+    c->ext = ext_data_control_manager_v1_create_data_source(ext_manager);
+    ext_data_control_source_v1_add_listener(c->ext, &ext_source_listener, c);
+    if (image) ext_data_control_source_v1_offer(c->ext, png_type);
+    else
+      for (int i = 0; i < text_type_count; ++i) ext_data_control_source_v1_offer(c->ext, text_types[i]);
+    ext_data_control_device_v1_set_selection(ext_device, c->ext);
+  } else {
+    c->wlr = zwlr_data_control_manager_v1_create_data_source(wlr_manager);
+    zwlr_data_control_source_v1_add_listener(c->wlr, &wlr_source_listener, c);
+    if (image) zwlr_data_control_source_v1_offer(c->wlr, png_type);
+    else
+      for (int i = 0; i < text_type_count; ++i) zwlr_data_control_source_v1_offer(c->wlr, text_types[i]);
+    zwlr_data_control_device_v1_set_selection(wlr_device, c->wlr);
+  }
   if (wl_display_flush(display) < 0 && errno != EAGAIN) {
     reply_fail("the desktop went away");
     _exit(1);
@@ -323,8 +400,10 @@ static void global(void *data, struct wl_registry *registry, uint32_t name, cons
   (void) data, (void) version;
   if (!seat && !strcmp(interface, wl_seat_interface.name))
     seat = wl_registry_bind(registry, name, &wl_seat_interface, 1);
-  else if (!manager && !strcmp(interface, zwlr_data_control_manager_v1_interface.name))
-    manager = wl_registry_bind(registry, name, &zwlr_data_control_manager_v1_interface, 1);
+  else if (!have_ext_manager && !strcmp(interface, ext_data_control_manager_v1_interface.name))
+    have_ext_manager = true, ext_manager_name = name;
+  else if (!have_wlr_manager && !strcmp(interface, zwlr_data_control_manager_v1_interface.name))
+    have_wlr_manager = true, wlr_manager_name = name;
 }
 static void global_remove(void *data, struct wl_registry *registry, uint32_t name) { (void) data, (void) registry, (void) name; }
 static const struct wl_registry_listener registry_listener = {global, global_remove};
@@ -345,12 +424,21 @@ int main(int argc, char **argv) {
   }
   struct wl_registry *registry = wl_display_get_registry(display);
   wl_registry_add_listener(registry, &registry_listener, NULL);
-  if (wl_display_roundtrip(display) < 0 || !seat || !manager) {
-    reply_fail(!manager ? "the desktop has no clipboard for other programs (wlr-data-control)" : "the desktop has no seat");
+  if (wl_display_roundtrip(display) < 0 || !seat || (!have_ext_manager && !have_wlr_manager)) {
+    reply_fail(!have_ext_manager && !have_wlr_manager
+                 ? "the desktop has no clipboard for other programs (ext-data-control / wlr-data-control)"
+                 : "the desktop has no seat");
     return 1;
   }
-  device = zwlr_data_control_manager_v1_get_data_device(manager, seat);
-  zwlr_data_control_device_v1_add_listener(device, &device_listener, NULL);
+  if (have_ext_manager) {
+    ext_manager = wl_registry_bind(registry, ext_manager_name, &ext_data_control_manager_v1_interface, 1);
+    ext_device = ext_data_control_manager_v1_get_data_device(ext_manager, seat);
+    ext_data_control_device_v1_add_listener(ext_device, &ext_device_listener, NULL);
+  } else {
+    wlr_manager = wl_registry_bind(registry, wlr_manager_name, &zwlr_data_control_manager_v1_interface, 1);
+    wlr_device = zwlr_data_control_manager_v1_get_data_device(wlr_manager, seat);
+    zwlr_data_control_device_v1_add_listener(wlr_device, &wlr_device_listener, NULL);
+  }
   /* The device's first events are the clipboard as it stands. */
   if (wl_display_roundtrip(display) < 0) {
     reply_fail("the desktop went away");

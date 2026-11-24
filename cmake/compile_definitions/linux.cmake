@@ -217,6 +217,7 @@ if(WAYLAND_FOUND)
     GEN_WAYLAND("${WAYLAND_PROTOCOLS_DIR}" "unstable/linux-dmabuf" linux-dmabuf-unstable-v1)
     GEN_WAYLAND("${CMAKE_SOURCE_DIR}/third-party/wlr-protocols" "unstable" wlr-screencopy-unstable-v1)
     # Frametop shared clipboard: vibepollo-clipboard (cmake/packaging/linux.cmake).
+    GEN_WAYLAND("${CMAKE_SOURCE_DIR}/src/platform/linux/protocols" "" ext-data-control-v1)
     GEN_WAYLAND("${CMAKE_SOURCE_DIR}/third-party/wlr-protocols" "unstable" wlr-data-control-unstable-v1)
     # Read-only KWin DPMS state observation for failed physical-topology recovery.
     GEN_WAYLAND("${CMAKE_SOURCE_DIR}/third-party/plasma-wayland-protocols/src/protocols" "" dpms)

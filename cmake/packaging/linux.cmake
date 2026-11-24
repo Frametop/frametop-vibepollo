@@ -161,6 +161,7 @@ else()
             # session broker (or by Vibepollo itself, run as the desktop user).
             add_executable(vibepollo_clipboard
                     "${CMAKE_SOURCE_DIR}/packaging/linux/vibepollo-clipboard.c"
+                    "${CMAKE_BINARY_DIR}/generated-src/ext-data-control-v1.c"
                     "${CMAKE_BINARY_DIR}/generated-src/wlr-data-control-unstable-v1.c")
             set_target_properties(vibepollo_clipboard PROPERTIES OUTPUT_NAME "vibepollo-clipboard")
             target_include_directories(vibepollo_clipboard PRIVATE

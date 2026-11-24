@@ -16,6 +16,7 @@ Vibepollo with Frametop's changes, for streaming a computer's displays to a Stea
   - Web app windows (such as Omarchy web apps) are matched across any Chromium-based browser (Chrome, Brave, etc.), not only Chrome's window class.
 - **Hyprland pointer accuracy:** the Frame's pointer lands where you point, including when displays don't start at the top left and as displays or window outputs come and go. Captures follow the live output layout, restart when it changes, and idle outputs notice layout changes too.
 - **Frametop Together (Linux / Hyprland):** send this PC's open app windows as panels (3 to 6) into your headset's Together room via `ft-pcsend`, encoded in HEVC only while watched, adapting bitrate and frame rate on the fly. (`ft-pcsend` is built separately from Frametop's `together/pcsend`.)
+- **Shared clipboard (`ext-data-control-v1`, Linux):** `vibepollo-clipboard` now supports the standard Wayland `ext-data-control-v1` protocol (with `wlr-data-control` fallback), keeping clipboard sharing working on KDE Plasma 6.6+ and newer Wayland compositors that dropped `wlr-data-control`.
 - **OpenSSL 4 compatibility:** updated certificate generation and signing APIs for OpenSSL 4.
 
 ## Heads up: host input is on by default
