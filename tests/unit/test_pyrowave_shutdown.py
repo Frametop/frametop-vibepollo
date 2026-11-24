@@ -115,6 +115,9 @@ namespace pyrowave::host {
 namespace platf::linux_private_display {
   void request_process_shutdown_preserve() { record("display preserve"); }
 }
+namespace frametop_together {
+  void stop() { record("frametop together stopped"); }
+}
 void stop_termination_signal_monitor() { record("signal monitor stopped"); }
 struct event_t {
   bool requested = false;
