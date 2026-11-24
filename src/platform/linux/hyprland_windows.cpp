@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -68,6 +69,7 @@ namespace platf::hyprland_windows {
       bool captured = false;  // a stream captured it at the last watch round
       bool launching = false;  // the output waits for a launched app's window (no address yet)
       std::optional<clock::time_point> refade_at;  // fullscreen again then (see refade)
+      clock::time_point settling;  // until then, a layer that opens may be a bar of ours (see settle)
     };
 
     std::recursive_timed_mutex lock;  // held across a whole operation: one window move at a time
@@ -203,6 +205,31 @@ namespace platf::hyprland_windows {
       lua("hl.dispatch(hl.dsp.window.fullscreen_state({window = " + window + ", internal = 0, client = 0})) "
           "hl.dispatch(hl.dsp.window.fullscreen_state({window = " + window + ", internal = 2, client = 0}))",
           nullptr);
+    }
+
+    // A new or changed output: the desktop's shell makes its bar for it anew (Omarchy's does, half a
+    // second later), over the window. A layer that opens meanwhile has the refade come right after it
+    // (layer_opened); without one it still comes.
+    void settle(hosted_t &h) {
+      h.refade_at = clock::now() + 1500ms;
+      h.settling = clock::now() + 5s;
+    }
+
+    void layer_opened() {
+      std::lock_guard guard {lock};
+      const auto now = clock::now();
+      for (auto &[output, h] : hosted) {
+        if (now < h.settling) h.refade_at = now + 150ms;
+      }
+    }
+
+    // When the watcher's next round is due: `latest`, or a refade before that.
+    clock::time_point next_round(clock::time_point latest) {
+      std::lock_guard guard {lock};
+      for (const auto &[output, h] : hosted) {
+        if (h.refade_at && !h.launching) latest = std::min(latest, *h.refade_at);
+      }
+      return latest;
     }
 
     // How a window move names a workspace: its number, or "name:NAME" for a named one (Hyprland
@@ -374,7 +401,7 @@ namespace platf::hyprland_windows {
         put_back(output);
         return std::nullopt;
       }
-      hosted[output].refade_at = clock::now() + 1500ms;
+      settle(hosted[output]);
       BOOST_LOG(info) << "Frametop windows: " << address << " (" << client.value("class", "") << ") on " << output << ' '
                       << width << 'x' << height << " at " << hyprland_scale::text(hyprland_scale::fit(width, height, scale));
       auto out = shape(output, width, height, scale);
@@ -475,11 +502,12 @@ namespace platf::hyprland_windows {
     void watch() {
       int events = -1;
       std::string pending;
-      auto next = clock::now() + kWatch;
+      auto next = clock::now() + kWatch, last = clock::time_point {};
       while (!stopping) {
         if (events < 0) events = connect_events(), pending.clear();
-        bool now = false;
-        const auto wait = std::chrono::duration_cast<std::chrono::milliseconds>(next - clock::now());
+        bool now = false, layer = false;
+        const auto due = std::max(next_round(next), last + 100ms);  // (a refade Hyprland didn't answer waits)
+        const auto wait = std::chrono::ceil<std::chrono::milliseconds>(due - clock::now());
         if (events >= 0) {
           pollfd p {events, POLLIN, 0};
           if (::poll(&p, 1, std::max<int>(0, int(wait.count()))) > 0) {
@@ -493,6 +521,7 @@ namespace platf::hyprland_windows {
               for (size_t end; (end = pending.find('\n')) != std::string::npos; pending.erase(0, end + 1)) {
                 const auto line = std::string_view(pending).substr(0, end);
                 now = now || line.starts_with("closewindow>>") || line.starts_with("monitorremoved>>");
+                layer = layer || line.starts_with("openlayer>>");
               }
               if (pending.size() > 65536) pending.clear();  // no newline in that much: not Hyprland's
             }
@@ -500,8 +529,10 @@ namespace platf::hyprland_windows {
         } else if (wait.count() > 0) {
           std::this_thread::sleep_for(wait);
         }
-        if (!now && clock::now() < next) continue;
-        next = clock::now() + kWatch;
+        if (layer) layer_opened();
+        if (!now && clock::now() < due) continue;
+        last = clock::now();
+        next = last + kWatch;
         try {
           end_streams(watch_once());
         } catch (const std::exception &e) {
@@ -712,7 +743,7 @@ namespace platf::hyprland_windows {
       put_back(output);
       return std::nullopt;
     }
-    hosted[output].refade_at = clock::now() + 1500ms;
+    settle(hosted[output]);
     BOOST_LOG(info) << "Frametop windows: launched " << app_id << " as " << address << " on " << output << found_by;
     auto out = shape(output, width, height, scale);
     out["address"] = address;
@@ -729,9 +760,9 @@ namespace platf::hyprland_windows {
       return std::nullopt;
     }
     const auto &output = it->first;
+    const auto m = find_monitor(output);
     if (width <= 0 || height <= 0) {
-      const auto m = scale > 0 ? find_monitor(output) : std::nullopt;
-      if (!m) {
+      if (!m || scale <= 0) {
         *error = scale > 0 ? "Hyprland didn't answer" : "a resize needs a width and a height, or a scale";
         return std::nullopt;
       }
@@ -743,6 +774,9 @@ namespace platf::hyprland_windows {
     scale = asked_scale(scale);
     if (!lua(mode_rule(output, width, height, scale), error)) return std::nullopt;
     it->second.scale = scale;
+    const bool same = m && m->value("width", 0) == width && m->value("height", 0) == height &&
+      std::abs(m->value("scale", 0.0) - hyprland_scale::fit(width, height, scale)) < 0.005;
+    if (!same) settle(it->second);  // (a stream that came back asks for what it has)
     return shape(output, width, height, scale);
   }
 
