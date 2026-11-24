@@ -41,6 +41,7 @@ extern "C" {
 #include "display_device.h"
 #include "amf/amf_encoder.h"
 #include "amf/amf_lifecycle.h"
+#include "frametop_together.h"
 #include "globals.h"
 #include "input.h"
 #include "input_geometry_policy.h"
@@ -3814,6 +3815,9 @@ namespace video {
 
       packet->replacements = &session.replacements;
       packet->channel_data = channel_data;
+      if (frametop_together::take_video_packet(*packet)) {
+        continue;  // a Frametop Together panel's: it goes to the room, not to a stream session
+      }
       if (webrtc_stream::has_active_sessions()) {
         webrtc_stream::submit_video_packet(*packet);
       }
@@ -3841,6 +3845,9 @@ namespace video {
 
     auto packet = std::make_unique<packet_raw_generic>(std::move(encoded_frame.data), encoded_frame.frame_index, encoded_frame.idr);
     packet->channel_data = channel_data;
+    if (frametop_together::take_video_packet(*packet)) {
+      return 0;
+    }
     packet->after_ref_frame_invalidation = encoded_frame.after_ref_frame_invalidation;
     packet->frame_timestamp = frame_timestamp;
     packet->capture_timestamp = capture_timestamp ? capture_timestamp : frame_timestamp;
@@ -5434,8 +5441,10 @@ namespace video {
       config.encodingFramerate = fallback_fps;
     }
 
-    // set max frame time based on client-requested target framerate.
-    double minimum_fps_target = (config::video.minimum_fps_target > 0.0) ? config::video.minimum_fps_target * 1000 : std::max(config.encodingFramerate / 5, 10000);
+    // set max frame time based on client-requested target framerate. A stream slower than the
+    // configured minimum keeps its own rate: the minimum would send it more pictures a second
+    // than it asked for (a Frametop Together panel nobody looks at closely is encoded at 10).
+    double minimum_fps_target = (config::video.minimum_fps_target > 0.0) ? std::min(config::video.minimum_fps_target * 1000, double(config.encodingFramerate)) : std::max(config.encodingFramerate / 5, 10000);
     auto max_frametime = std::chrono::nanoseconds(1000ms) * 1000 / minimum_fps_target;
     auto encode_frame_threshold = std::chrono::nanoseconds(1000ms) * 1000 / config.encodingFramerate;
     auto frame_variation_threshold = encode_frame_threshold / 4;
