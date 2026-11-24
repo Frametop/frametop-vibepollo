@@ -1,10 +1,10 @@
 ---
-# Frametop's build of Vibepollo, 2.0.5 (https://github.com/DeeJanuz/frametop), on upstream's
+# Frametop's build of Vibepollo, 2.0.6 (https://github.com/DeeJanuz/frametop), on upstream's
 # 2.0.2-nightly.d20261026: sunshine.exe, which
 # Frametop's Windows host setup swaps in over the stock one, and the Arch Linux package, on
 # Depot's runners (the Frametop org's Depot GitHub app). It runs when started by hand (Actions
 # -> Frametop build -> Run workflow), which keeps the files as artifacts, and on a frametop-*
-# tag named for that version (frametop-2.0.5), which also publishes them as a GitHub release, each with its SHA-256
+# tag named for that version (frametop-2.0.6), which also publishes them as a GitHub release, each with its SHA-256
 # (.github/frametop-publish.sh, notes in .github/frametop-release-notes.md). Upstream's ci.yml
 # skips frametop/ branches and frametop-* tags, so this is the only build of them.
 #
@@ -30,7 +30,7 @@ jobs:
     permissions:
       contents: read
     env:
-      BUILD_VERSION: 2.0.5
+      BUILD_VERSION: 2.0.6
       NODE_VERSION: 22.22.2
       CMAKE_BUILD_PARALLEL_LEVEL: 8
       WEBRTC_ROOT: ${{ github.workspace }}\.vibepollo-deps\libwebrtc\out
@@ -155,18 +155,21 @@ jobs:
           cmake --build build --parallel "$CMAKE_BUILD_PARALLEL_LEVEL" --target sunshine frametop_clipboard sunshine_wgc_capture \
             test_component_remote_display_topology test_component_remote_session test_component_rtsp_pending_policy \
             test_component_clipboard_image test_component_clipboard_read \
-            test_component_frametop_vdesktop test_component_frametop_hostin_capture
+            test_component_frametop_vdesktop test_component_frametop_hostin_capture \
+            test_component_frametop_monitors test_component_frametop_together_wire \
+            test_component_frametop_together_policy test_component_crypto_compat
           echo "::remove-matcher owner=gcc::"
 
       # The suites Frametop's changes touch (the Remote Monitor release, the Frametop display
       # role and the RTSP policy for it, the shared clipboard's conversions and reader, the
-      # virtual-desktop pull and host input's capture policy).
+      # virtual-desktop pull, host input's capture policy, monitor plans, Together wire/policy,
+      # and OpenSSL 4 certificate compatibility).
       - name: Test
         run: |
           set -euo pipefail
           export PATH="$(cygpath -u "${WEBRTC_ROOT}")/bin:$(cygpath -u "${WEBRTC_ROOT}")/lib:$PATH"
           ctest --test-dir build --output-on-failure \
-            -R '^test_component_(remote_display_topology|remote_session|rtsp_pending_policy|clipboard_image|clipboard_read|frametop_vdesktop|frametop_hostin_capture)$'
+            -R '^test_component_(remote_display_topology|remote_session|rtsp_pending_policy|clipboard_image|clipboard_read|frametop_vdesktop|frametop_hostin_capture|frametop_monitors|frametop_together_wire|frametop_together_policy|crypto_compat)$'
 
       # FrametopHostSetup.exe: the Windows host setup to double-click. It runs Frametop's
       # host/windows/get.ps1 from main and holds no pins, so any release's copy installs the
@@ -219,7 +222,7 @@ jobs:
       build_tests: true
       artifact_retention_days: 14
       release_commit: ${{ github.sha }}
-      release_version: 2.0.5
+      release_version: 2.0.6
       # Omarchy's mirror: Frametop's Linux hosts run Omarchy, which trails current Arch (CMake and
       # OpenSSL majors the fork doesn't build with yet).
       arch_mirror: 'https://stable-mirror.omarchy.org/$repo/os/$arch'

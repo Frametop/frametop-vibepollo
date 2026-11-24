@@ -1,4 +1,4 @@
-Vibepollo with Frametop's changes, for streaming a computer's displays to a Steam Frame with Frametop (https://github.com/Frametop/frametop). Built on upstream Vibepollo 2.0.2. It's numbered 2.0.5 so update checks see it as newer than 2.0.4.
+Vibepollo with Frametop's changes, for streaming a computer's displays to a Steam Frame with Frametop (https://github.com/Frametop/frametop). Built on upstream Vibepollo 2.0.2. It's numbered 2.0.6 so update checks see it as newer than 2.0.4 (2.0.5 wasn't published).
 
 ## Install
 
@@ -6,10 +6,17 @@ Vibepollo with Frametop's changes, for streaming a computer's displays to a Stea
 - Windows: `sunshine.exe`, with `frametop_clipboard.exe` and `sunshine_wgc_capture.exe` for its `tools` folder, go into a Vibepollo 2.0.3 install (Nonary's `VibepolloSetup-v2.0.3.exe`). Frametop's Windows host kit installs them: it checks each hash, keeps the originals, and puts them back with `-Undo`. Steps: https://github.com/Frametop/frametop/blob/experimental/host/windows/README.md
 - Arch Linux and CachyOS: `vibepollo-*.pkg.tar.zst`, installed with Vibepollo's installer (`sudo bash scripts/linux_install.sh --package ./vibepollo-*.pkg.tar.zst`). Steps: https://github.com/Frametop/frametop/blob/experimental/host/linux/README.md
 
-## New in 2.0.5
+## New in 2.0.6
 
-- `FrametopHostSetup.exe`: Windows host setup you can double-click (see Install).
-- Hyprland: the Frame's pointer lands where you point. It used to land up to about 1100 px off, on another display or window, when displays don't start at the top left, and it drifted as displays or window outputs came and went. Captures now follow the live display layout, restart when it changes, and an idle display notices the change too.
+- **Monitor plans (Windows, Hyprland, KDE Plasma):** Frametop can turn physical monitors on or off while you stream (including turning off monitors without a panel), switch a monitor's resolution to match its panel's stream size, and pick a per-monitor scale on Hyprland and KDE Plasma. Monitors go back to their previous state and places 15 seconds after the last display stream ends or on clean shutdown (keeping any manual changes made in between), and changes are journaled so a crash restores them on restart. If a monitor refuses a requested size and falls back, it is restored to its own mode, remembered for the run, and reported to Frametop.
+- **`FrametopHostSetup.exe` (Windows):** Windows host setup you can double-click (see Install).
+- **App windows (Hyprland):**
+  - Per-window scaling, set at open or changed live (scale-only changes keep the pixel size so the stream keeps running, and the pointer follows).
+  - Shell bars recreated after a resize or scale change move back under the fullscreen app window right away instead of sitting on top of it.
+  - Web app windows (such as Omarchy web apps) are matched across any Chromium-based browser (Chrome, Brave, etc.), not only Chrome's window class.
+- **Hyprland pointer accuracy:** the Frame's pointer lands where you point, including when displays don't start at the top left and as displays or window outputs come and go. Captures follow the live output layout, restart when it changes, and idle outputs notice layout changes too.
+- **Frametop Together (Linux / Hyprland):** send this PC's open app windows as panels (3 to 6) into your headset's Together room via `ft-pcsend`, encoded in HEVC only while watched, adapting bitrate and frame rate on the fly. (`ft-pcsend` is built separately from Frametop's `together/pcsend`.)
+- **OpenSSL 4 compatibility:** updated certificate generation and signing APIs for OpenSSL 4.
 
 ## Heads up: host input is on by default
 
