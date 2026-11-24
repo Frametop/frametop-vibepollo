@@ -91,7 +91,7 @@ namespace platf::hyprland_windows::catalog {
     const auto apps = desktop_apps();
     std::map<std::string, std::string> by_wm, by_stem, by_exec;
     for (const auto &a : apps) {
-      if (!a.wm_class.empty()) by_wm.emplace(lower(a.wm_class), a.id);
+      if (!a.wm_class.empty()) by_wm.emplace(window_class_key(a.wm_class), a.id);
       const auto stem = a.id.size() > 8 && a.id.ends_with(".desktop") ? a.id.substr(0, a.id.size() - 8) : a.id;
       by_stem.emplace(lower(stem), a.id);
       for (const auto &cls : app_window_classes(a.wm_class, a.id, a.exec)) by_exec.emplace(cls, a.id);

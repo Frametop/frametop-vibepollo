@@ -553,7 +553,7 @@ namespace platf::hyprland_windows {
       const auto ws = c.contains("workspace") ? c["workspace"].value("name", "") : "";
       w["shown"] = shown.contains(ws);
       for (const auto *key : {"class", "initialClass"}) {
-        if (const auto it = app_of.find(lower(c.value(key, ""))); it != app_of.end()) {
+        if (const auto it = app_of.find(window_class_key(c.value(key, ""))); it != app_of.end()) {
           w["app"] = it->second;
           break;
         }
@@ -669,8 +669,8 @@ namespace platf::hyprland_windows {
           address = a;
           break;
         }
-        if (by_class.empty() && (classes.contains(lower(c.value("class", ""))) ||
-                                 classes.contains(lower(c.value("initialClass", ""))))) {
+        if (by_class.empty() && (classes.contains(window_class_key(c.value("class", ""))) ||
+                                 classes.contains(window_class_key(c.value("initialClass", ""))))) {
           by_class = a;
         }
       }

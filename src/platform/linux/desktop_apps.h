@@ -20,7 +20,7 @@ namespace platf::hyprland_windows::catalog {
   std::vector<desktop_app_t> desktop_apps();
 
   /**
-   * Window class (lower case) -> the desktop app it belongs to. A StartupWMClass says it best,
+   * Window class (window_class_key) -> the desktop app it belongs to. A StartupWMClass says it best,
    * then the desktop file's name, then a program on the Exec line. Read again every 30 s.
    */
   const std::map<std::string, std::string> &app_classes();
