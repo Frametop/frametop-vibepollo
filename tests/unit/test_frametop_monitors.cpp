@@ -32,6 +32,7 @@ namespace {
     bool readable = true;
     std::string refuse;
     unsigned tallest = 0;  // a mode taller than this (0: none is) is taken and not made
+    std::string follows;  // moves to x 0 while another monitor is off (an auto place)
     std::optional<video_mode_t> fallback;  // what a monitor goes into instead (none: it stays as it is)
     std::vector<std::vector<target_t>> applied;
 
@@ -61,6 +62,7 @@ namespace {
         m.scale = t.on ? (t.scale ? t.scale : m.scale ? m.scale : std::optional<double> {1.0}) : std::nullopt;
         if (t.on && !t.place.empty()) m.place = t.place;
         if (!t.on) m.place = json::object();
+        if (!t.on && !follows.empty() && follows != t.id) get(follows).place = {{"x", 0}, {"y", 0}};
       }
       return {};
     }
@@ -205,6 +207,45 @@ TEST_F(FrametopMonitors, AppliesWhileHeldAndPutsBackAfterTheGrace) {
   EXPECT_EQ(platform.get("B").place, (json {{"x", 2560}, {"y", 0}}));
   EXPECT_TRUE(same_mode(*platform.get("A").mode, hi));
   EXPECT_TRUE((*store.state)["set"].empty());
+}
+
+TEST_F(FrametopMonitors, AMonitorMovedByAnotherGoingOffGoesBackWhereItWas) {
+  platform.follows = "B";
+  auto manager = make();
+  manager.set_plan(off("A"));
+  auto lease = manager.hold();
+  ASSERT_EQ(platform.get("B").place, (json {{"x", 0}, {"y", 0}})) << "the desktop moved it, not the plan";
+  ASSERT_EQ(manager.set_plan({{"monitors", {{"A", {{"on", false}}}, {"B", {{"on", true}, {"scale", 2}}}}}}), "");
+  ASSERT_DOUBLE_EQ(*platform.get("B").scale, 2.0);
+  ASSERT_EQ(manager.set_plan({{"monitors", json::object()}}), "");
+  EXPECT_EQ(platform.get("A").place, (json {{"x", 0}, {"y", 0}}));
+  EXPECT_EQ(platform.get("B").place, (json {{"x", 2560}, {"y", 0}})) << "not over A";
+  EXPECT_DOUBLE_EQ(*platform.get("B").scale, 1.0);
+}
+
+TEST_F(FrametopMonitors, AStreamBackAfterTheGraceAppliesThePlanAgain) {
+  auto manager = make();
+  manager.set_plan(off("B"));
+  auto lease = manager.hold();
+  lease.reset();
+  ASSERT_EQ(timers.pending.size(), 1u);
+  EXPECT_EQ(timers.pending[0].first, std::chrono::seconds {15});
+  timers.run_all();
+  ASSERT_TRUE(platform.get("B").on);
+  auto again = manager.hold();
+  EXPECT_FALSE(platform.get("B").on) << "the plan outlives the grace";
+}
+
+TEST_F(FrametopMonitors, AnEmptyPlanDuringTheGracePutsThemBackNow) {
+  auto manager = make();
+  manager.set_plan(off("B"));
+  auto lease = manager.hold();
+  lease.reset();
+  ASSERT_FALSE(platform.get("B").on);
+  ASSERT_EQ(manager.set_plan({{"monitors", json::object()}}), "");
+  EXPECT_TRUE(platform.get("B").on);
+  auto again = manager.hold();
+  EXPECT_TRUE(platform.get("B").on) << "no plan is left to apply";
 }
 
 TEST_F(FrametopMonitors, AStreamWithinTheGraceKeepsThePlan) {

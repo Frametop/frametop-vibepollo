@@ -47,8 +47,9 @@ namespace frametop_monitors {
     using log_fn = std::function<void(const std::string &)>;
 
     /// After the last stream ends, the plan holds this long, so a reconnect doesn't flash the
-    /// monitors back on.
-    static constexpr std::chrono::milliseconds default_grace {std::chrono::minutes {2}};
+    /// monitors back on. Frametop lets go of the plan itself when its user does (an empty plan),
+    /// so this is for a stream that was lost: one that comes back later applies the plan again.
+    static constexpr std::chrono::milliseconds default_grace {std::chrono::seconds {15}};
     /// After a stream ends while others go on, the monitors are checked again this long after
     /// (Windows can bring its saved layout back when a virtual display goes).
     static constexpr std::chrono::milliseconds recheck_after {std::chrono::seconds {3}};
@@ -122,6 +123,7 @@ namespace frametop_monitors {
     mutable std::mutex mutex_;
     plan_t plan_;
     bool others_off_ = false;  // monitors the plan doesn't name go off too
+    std::vector<monitor_t> before_;  // every monitor as it was when nothing was changed yet, for saved_'s places
     std::vector<monitor_t> saved_;  // before the first change; empty when nothing is changed
     std::map<std::string, wish_t> set_;  // what this made each changed monitor
     std::map<std::string, wish_t> pending_;  // what a change under way is making them (in the store, for a crash)

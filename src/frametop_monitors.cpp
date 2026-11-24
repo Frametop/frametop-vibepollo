@@ -172,7 +172,10 @@ namespace frametop_monitors {
       return false;
     }
     settle_pending_locked(*now);
-    if (set_.empty()) saved_.clear();
+    if (set_.empty()) {
+      saved_.clear();
+      before_ = now->monitors;
+    }
     std::string kept_on, refused;
     const auto plan = plan_for(*now, &refused);
     const auto targets = targets_locked(plan, *now, &kept_on);
@@ -188,6 +191,12 @@ namespace frametop_monitors {
           return x.id == t.id;
         });
         saved_.push_back(*m);
+        // Where it was before any change: turning another monitor off may have moved it since
+        // (Hyprland's auto places), and back there it would overlap that one.
+        if (const auto *was = find(before_, t.id);
+            was && was->on && was->sideways == m->sideways && still_as_set(*m, as_it_is(*was))) {
+          saved_.back().place = was->place;
+        }
       }
       pending_[t.id] = {t.on, t.mode, t.scale};
     }
