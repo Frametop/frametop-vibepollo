@@ -1409,6 +1409,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND SUNSHINE_TEST_ENABLE_COMPONENT)
     add_test(NAME test_component_linux_app_window_class COMMAND test_linux_app_window_class)
     set_tests_properties(test_component_linux_app_window_class PROPERTIES LABELS "component")
 
+    add_executable(test_linux_hypr_scale
+        "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_hypr_scale.cpp")
+    target_compile_features(test_linux_hypr_scale PRIVATE cxx_std_20)
+    add_test(NAME test_component_linux_hypr_scale COMMAND test_linux_hypr_scale)
+    set_tests_properties(test_component_linux_hypr_scale PROPERTIES LABELS "component")
+
     add_executable(test_linux_window_cursor
         "${CMAKE_CURRENT_LIST_DIR}/unit/platform/linux/test_window_cursor.cpp")
     target_compile_features(test_linux_window_cursor PRIVATE cxx_std_20)

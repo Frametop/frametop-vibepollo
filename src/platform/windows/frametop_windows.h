@@ -34,15 +34,16 @@ namespace platf::frametop_windows {
   /**
    * Makes the window (its address, 0x...) an output of its own, its capture width x height
    * (0: the window's own size; at most its monitor's work area). Returns {"output", "width",
-   * "height", "address"} or nullopt with *error set.
+   * "height", "address"} or nullopt with *error set. It has its monitor's scale: `scale`, as
+   * in the calls below, is the Hyprland side's.
    */
-  std::optional<nlohmann::json> open(const std::string &address, int width, int height, std::string *error);
+  std::optional<nlohmann::json> open(const std::string &address, int width, int height, double scale, std::string *error);
 
   /** Starts a Start menu app (an id from apps()) and opens its first new window. */
-  std::optional<nlohmann::json> launch(const std::string &app_id, int width, int height, std::string *error);
+  std::optional<nlohmann::json> launch(const std::string &app_id, int width, int height, double scale, std::string *error);
 
   /** Resizes a window output's window: its capture restarts at the new size. */
-  bool resize(const std::string &output, int width, int height, std::string *error);
+  std::optional<nlohmann::json> resize(const std::string &output, int width, int height, double scale, std::string *error);
 
   /**
    * Where a released window goes instead of back where it came from: the monitor (a device id

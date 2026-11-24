@@ -599,7 +599,7 @@ namespace platf::frametop_windows {
     return out;
   }
 
-  std::optional<nlohmann::json> open(const std::string &address, int width, int height, std::string *error) {
+  std::optional<nlohmann::json> open(const std::string &address, int width, int height, [[maybe_unused]] double scale, std::string *error) {
     const auto hwnd = target::parse(std::string {target::prefix} + address);
     if (!hwnd || !address.starts_with("0x")) {
       *error = "address must be a window address (0x...)";
@@ -614,7 +614,7 @@ namespace platf::frametop_windows {
     });
   }
 
-  std::optional<nlohmann::json> launch(const std::string &app_id, int width, int height, std::string *error) {
+  std::optional<nlohmann::json> launch(const std::string &app_id, int width, int height, [[maybe_unused]] double scale, std::string *error) {
     if (app_id.find('!') != std::string::npos) {
       await_store_apps();  // a Store app's AUMID
     } else {
@@ -686,12 +686,12 @@ namespace platf::frametop_windows {
     return std::nullopt;
   }
 
-  bool resize(const std::string &output, int width, int height, std::string *error) {
+  std::optional<nlohmann::json> resize(const std::string &output, int width, int height, [[maybe_unused]] double scale, std::string *error) {
     if (width <= 0 || height <= 0) {
       *error = "a resize needs a width and a height";
-      return false;
+      return std::nullopt;
     }
-    return window_thread().run([&] {
+    const bool resized = window_thread().run([&] {
       std::lock_guard guard {lock};
       const auto it = hosted_windows.find(output);
       if (it == hosted_windows.end()) {
@@ -709,6 +709,8 @@ namespace platf::frametop_windows {
       size_window(it->second.hwnd, width, height);
       return true;
     });
+    if (!resized) return std::nullopt;
+    return nlohmann::json {{"output", output}};
   }
 
   bool release(const std::string &output_or_address, std::string *error, const drop_t *drop) {

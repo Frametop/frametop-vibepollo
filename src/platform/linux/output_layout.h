@@ -78,6 +78,8 @@ namespace platf::linux_display::layout {
     int y = 0;
     int desktop_width = 0;
     int desktop_height = 0;
+    int width = 0;  // its own size in the layout: a new scale changes it and may change nothing else
+    int height = 0;
     bool operator==(const placement_t &) const = default;
   };
 
@@ -99,7 +101,7 @@ namespace platf::linux_display::layout {
     }
     const auto layout = normalize(std::move(sized));
     const auto &rect = layout.outputs[own];
-    return {rect.x, rect.y, layout.width, layout.height};
+    return {rect.x, rect.y, layout.width, layout.height, rect.width, rect.height};
   }
 
   /**

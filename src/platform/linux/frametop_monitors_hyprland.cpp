@@ -4,6 +4,8 @@
  */
 #include "frametop_monitors_hyprland.h"
 
+#include "hypr_scale.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -70,38 +72,12 @@ namespace platf::frametop_monitors_hyprland {
       return std::to_string(mode.width) + "x" + std::to_string(mode.height) + "@" + hz(mode.refresh_mhz);
     }
 
-    std::string scale_text(double scale) {
-      if (!(scale > 0) || scale >= 100) return "auto";
-      char buffer[32];
-      std::snprintf(buffer, sizeof buffer, "%.6f", scale);
-      std::string out = buffer;
-      while (out.back() == '0') out.pop_back();
-      if (out.back() == '.') out.pop_back();
-      return out;
-    }
-
-    // The scales Hyprland takes for a mode: ones that make a whole-pixel desktop size, as they
-    // are or at the nearest 120th (the fractional scale protocol's step: 1.666667 is 200/120).
-    // Any other it refuses for its default scale and says the config is wrong. This is its
-    // own check, doubles compared exactly, so a scale that passes here passes there.
     bool whole_at(const video_mode_t &mode, double scale) {
-      const auto whole = [&](double by) {
-        const double w = mode.width / by, h = mode.height / by;
-        return w == std::round(w) && h == std::round(h);
-      };
-      return whole(scale) || whole(std::round(scale * 120.0) / 120.0);
+      return hyprland_scale::whole_at(int(mode.width), int(mode.height), scale);
     }
 
-    // The asked scale if the mode takes it, else the nearest 120th it does (1 takes every mode).
     double fit_scale(double scale, const video_mode_t &mode) {
-      if (whole_at(mode, scale)) return scale;
-      const int asked = static_cast<int>(std::lround(scale * 120));
-      for (int off = 1; off < 120; ++off) {
-        for (const int steps : {asked - off, asked + off}) {
-          if (steps >= 60 && steps <= 480 && whole_at(mode, steps / 120.0)) return steps / 120.0;
-        }
-      }
-      return 1.0;
+      return hyprland_scale::fit(int(mode.width), int(mode.height), scale);
     }
 
     // The scales listed for a mode: the round ones it takes, and what 125%, 150%, 175% and
@@ -242,9 +218,9 @@ namespace platf::frametop_monitors_hyprland {
       rule.position = std::to_string(place["x"].get<int>()) + "x" + std::to_string(place["y"].get<int>());
     }
     if (target.scale) {
-      rule.scale = scale_text(mode ? fit_scale(*target.scale, *mode) : *target.scale);
+      rule.scale = hyprland_scale::text(mode ? fit_scale(*target.scale, *mode) : *target.scale);
     } else if (place.contains("scale") && place["scale"].is_number()) {
-      rule.scale = scale_text(place["scale"].get<double>());
+      rule.scale = hyprland_scale::text(place["scale"].get<double>());
     }
     if (place.contains("transform") && place["transform"].is_number_integer()) {
       rule.transform = std::clamp(place["transform"].get<int>(), 0, 7);

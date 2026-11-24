@@ -471,9 +471,9 @@ TEST(OutputLayout, PlacesTheStreamedOutputInTheBox) {
   const std::vector<output_rect_t> outputs {{"eDP-2", 1536, 2880, 2048, 1280}, {"FT-W1", 30000, 0, 672, 1200}, {"FT-W2", 38200, 0, 646, 1200}};
   constexpr int width = 38200 + 646 - 1536;
   constexpr int height = 2880 + 1280;
-  EXPECT_EQ(placement_of(outputs, 0), (placement_t {0, 2880, width, height}));
-  EXPECT_EQ(placement_of(outputs, 1), (placement_t {30000 - 1536, 0, width, height}));
-  EXPECT_EQ(placement_of(outputs, 2), (placement_t {38200 - 1536, 0, width, height}));
+  EXPECT_EQ(placement_of(outputs, 0), (placement_t {0, 2880, width, height, 2048, 1280}));
+  EXPECT_EQ(placement_of(outputs, 1), (placement_t {30000 - 1536, 0, width, height, 672, 1200}));
+  EXPECT_EQ(placement_of(outputs, 2), (placement_t {38200 - 1536, 0, width, height, 646, 1200}));
   EXPECT_EQ(placement_of(outputs, 3), placement_t {});
   EXPECT_EQ(placement_of({}, 0), placement_t {});
 }
@@ -482,7 +482,7 @@ TEST(OutputLayout, PlacementFollowsTheLayoutsEdges) {
   using namespace platf::linux_display::layout;
   std::vector<output_rect_t> outputs {{"eDP-2", 1536, 2880, 2048, 1280}, {"FT-W1", 30000, 0, 672, 1200}, {"FT-W2", 10000, 0, 640, 1200}};
   const auto before = placement_of(outputs, 1);
-  EXPECT_EQ(before, (placement_t {30000 - 1536, 0, 30672 - 1536, 4160}));
+  EXPECT_EQ(before, (placement_t {30000 - 1536, 0, 30672 - 1536, 4160, 672, 1200}));
 
   // Moving an output inside the box changes nothing for the streamed one.
   auto moved_inside = outputs;
@@ -492,11 +492,17 @@ TEST(OutputLayout, PlacementFollowsTheLayoutsEdges) {
   // A new output left of the box moves the streamed output along it.
   auto with_left = outputs;
   with_left.push_back({"FT-W3", 0, 0, 640, 1200});
-  EXPECT_EQ(placement_of(with_left, 1), (placement_t {30000, 0, 30672, 4160}));
+  EXPECT_EQ(placement_of(with_left, 1), (placement_t {30000, 0, 30672, 4160, 672, 1200}));
 
   // Removing the outputs around it (eDP-2 set the left and bottom edges) shrinks the box to this one.
   const std::vector<output_rect_t> window_only {{"FT-W1", 30000, 0, 672, 1200}};
-  EXPECT_EQ(placement_of(window_only, 0), (placement_t {0, 0, 672, 1200}));
+  EXPECT_EQ(placement_of(window_only, 0), (placement_t {0, 0, 672, 1200, 672, 1200}));
+
+  // A new scale resizes it in the layout where the box stays (an output sits right of it).
+  std::vector<output_rect_t> scaled {{"FT-W1", 30000, 0, 1280, 800}, {"FT-W2", 38200, 0, 1280, 800}};
+  const auto unscaled = placement_of(scaled, 0);
+  scaled[0].width = 800, scaled[0].height = 500;
+  EXPECT_NE(placement_of(scaled, 0), unscaled);
 }
 
 TEST(OutputLayout, PlacementLeavesUnsizedOutputsOutOfTheBox) {
@@ -504,7 +510,7 @@ TEST(OutputLayout, PlacementLeavesUnsizedOutputsOutOfTheBox) {
   // An output announced but without its xdg_output yet reads as (0, 0, 0, 0): counted, it
   // would pull the box's left edge to 0 and put the pointer on another output.
   const std::vector<output_rect_t> outputs {{"eDP-2", 1536, 2880, 2048, 1280}, {"FT-W1", 30000, 0, 672, 1200}, {"", 0, 0, 0, 0}};
-  EXPECT_EQ(placement_of(outputs, 1), (placement_t {30000 - 1536, 0, 30672 - 1536, 4160}));
+  EXPECT_EQ(placement_of(outputs, 1), (placement_t {30000 - 1536, 0, 30672 - 1536, 4160, 672, 1200}));
   // The streamed output itself is always placed.
   const std::vector<output_rect_t> unsized_own {{"eDP-2", 1536, 2880, 2048, 1280}, {"FT-W1", 30000, 0, 0, 0}};
   EXPECT_EQ(placement_of(unsized_own, 1), (placement_t {30000 - 1536, 0, 30000 - 1536, 4160}));

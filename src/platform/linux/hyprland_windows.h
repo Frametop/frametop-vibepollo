@@ -44,16 +44,22 @@ namespace platf::hyprland_windows {
   std::vector<monitor_t> monitor_list();
 
   /**
-   * Gives the window (a Hyprland address, 0x...) its own output, width x height (0: the window's
-   * own size). Returns {"output", "width", "height", "address"} or nullopt with *error set.
+   * Gives the window (a Hyprland address, 0x...) its own output, width x height pixels (0: the
+   * window's own size) at `scale`, or the nearest one that size takes (0: 1, or the one it has
+   * when it's out already). Returns {"output", "width", "height", "scale", "address"} or nullopt
+   * with *error set.
    */
-  std::optional<nlohmann::json> open(const std::string &address, int width, int height, std::string *error);
+  std::optional<nlohmann::json> open(const std::string &address, int width, int height, double scale, std::string *error);
 
   /** Starts the desktop app (an id from apps()) on a new output and waits for its window. */
-  std::optional<nlohmann::json> launch(const std::string &app_id, int width, int height, std::string *error);
+  std::optional<nlohmann::json> launch(const std::string &app_id, int width, int height, double scale, std::string *error);
 
-  /** Resizes a window output, and with it the window. */
-  bool resize(const std::string &output, int width, int height, std::string *error);
+  /**
+   * Resizes a window output (named by it or its window's address), and with it the window, or
+   * scales it, or both (0: that stays). A scale alone keeps its pixels, so its stream runs on.
+   * Returns {"output", "width", "height", "scale"} or nullopt with *error set.
+   */
+  std::optional<nlohmann::json> resize(const std::string &output_or_address, int width, int height, double scale, std::string *error);
 
   /**
    * Where a released window goes instead of back where it came from: the monitor a window panel

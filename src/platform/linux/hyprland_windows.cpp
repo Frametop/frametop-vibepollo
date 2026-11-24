@@ -8,6 +8,7 @@
 #include "hyprland_windows.h"
 #include "app_window_class.h"
 #include "desktop_apps.h"
+#include "hypr_scale.h"
 #include "hyprland_ipc.h"
 #include "window_cursor.h"
 #include "window_pick.h"
@@ -63,6 +64,7 @@ namespace platf::hyprland_windows {
       bool floating = false;
       int x = 0, y = 0, w = 0, h = 0;
       clock::time_point seen;  // last captured by a stream, or opened
+      double scale = 1;  // the scale its panel asked for (what the output has is the nearest its size takes)
       bool captured = false;  // a stream captured it at the last watch round
       bool launching = false;  // the output waits for a launched app's window (no address yet)
       std::optional<clock::time_point> refade_at;  // fullscreen again then (see refade)
@@ -147,17 +149,26 @@ namespace platf::hyprland_windows {
       return {};
     }
 
-    std::string mode_rule(const std::string &output, int width, int height) {
+    std::string mode_rule(const std::string &output, int width, int height, double scale) {
       const int slot = std::max(1, std::atoi(output.c_str() + std::char_traits<char>::length(kPrefix)));
       return "hl.monitor({output = " + lua_string(output) + ", mode = \"" + std::to_string(width) + "x" +
         std::to_string(height) + "@60\", position = \"" + std::to_string(kFirstX + (slot - 1) * kSlotWidth) +
-        "x0\", scale = 1})";
+        "x0\", scale = " + hyprland_scale::text(hyprland_scale::fit(width, height, scale)) + "})";
     }
 
-    // A new headless output of this size; its workspace id, or nullopt.
-    std::optional<std::string> create_output(const std::string &output, int width, int height, std::string *error) {
+    // The scale a panel asks for: kept in a range apps stay usable in, 1 for none.
+    double asked_scale(double scale) {
+      return scale > 0 ? std::clamp(scale, 0.5, 4.0) : 1.0;
+    }
+
+    nlohmann::json shape(const std::string &output, int width, int height, double scale) {
+      return {{"output", output}, {"width", width}, {"height", height}, {"scale", hyprland_scale::fit(width, height, scale)}};
+    }
+
+    // A new headless output of this size and scale; its workspace id, or nullopt.
+    std::optional<std::string> create_output(const std::string &output, int width, int height, double scale, std::string *error) {
       if (!run("output create headless " + output, error)) return std::nullopt;
-      if (!lua(mode_rule(output, width, height), error)) {
+      if (!lua(mode_rule(output, width, height, scale), error)) {
         run("output remove " + output, nullptr);
         return std::nullopt;
       }
@@ -335,16 +346,17 @@ namespace platf::hyprland_windows {
       return true;
     }
 
-    std::optional<nlohmann::json> host(const std::string &address, const nlohmann::json &client, int width, int height,
+    std::optional<nlohmann::json> host(const std::string &address, const nlohmann::json &client, int width, int height, double scale,
                                        std::string workspace_back, std::string monitor_back, std::string *error) {
       const auto output = free_output_name();
       if (output.empty()) {
         *error = "every window output is in use";
         return std::nullopt;
       }
-      const auto workspace = create_output(output, width, height, error);
+      const auto workspace = create_output(output, width, height, scale, error);
       if (!workspace) return std::nullopt;
       hosted_t h;
+      h.scale = scale;
       h.address = address;
       h.workspace = std::move(workspace_back);
       h.monitor = std::move(monitor_back);
@@ -364,8 +376,10 @@ namespace platf::hyprland_windows {
       }
       hosted[output].refade_at = clock::now() + 1500ms;
       BOOST_LOG(info) << "Frametop windows: " << address << " (" << client.value("class", "") << ") on " << output << ' '
-                      << width << 'x' << height;
-      return nlohmann::json {{"output", output}, {"width", width}, {"height", height}, {"address", address}};
+                      << width << 'x' << height << " at " << hyprland_scale::text(hyprland_scale::fit(width, height, scale));
+      auto out = shape(output, width, height, scale);
+      out["address"] = address;
+      return out;
     }
 
     // A window output's stream ended (the Frame went, or its Wi-Fi did) while the cursor was on
@@ -562,10 +576,11 @@ namespace platf::hyprland_windows {
       windows.push_back(std::move(w));
     }
     nlohmann::json outputs = nlohmann::json::array();
-    for (const auto &[output, h] : hosted) outputs.push_back({{"output", output}, {"address", h.address}});
+    for (const auto &[output, h] : hosted) outputs.push_back({{"output", output}, {"address", h.address}, {"scale", h.scale}});
     // Locked, the desktop draws only its lock screen: window outputs stream black until it's unlocked.
     const auto locked = ask("locked");
-    return {{"windows", windows}, {"outputs", outputs}, {"locked", locked && locked->rfind("true", 0) == 0}};
+    // "scaling": an open and a resize take a scale here.
+    return {{"windows", windows}, {"outputs", outputs}, {"locked", locked && locked->rfind("true", 0) == 0}, {"scaling", true}};
   }
 
   nlohmann::json apps() {
@@ -584,7 +599,7 @@ namespace platf::hyprland_windows {
     return out;
   }
 
-  std::optional<nlohmann::json> open(const std::string &address, int width, int height, std::string *error) {
+  std::optional<nlohmann::json> open(const std::string &address, int width, int height, double scale, std::string *error) {
     std::lock_guard guard {lock};
     if (!valid_address(address)) {
       *error = "address must be a Hyprland window address (0x...)";
@@ -595,12 +610,11 @@ namespace platf::hyprland_windows {
       // Already out: the Frame asks again after a restart of its own. Same output, new size,
       // and its grace starts over (the new stream may take a moment to capture it).
       h.seen = clock::now();
-      if (width > 0 && height > 0 && !resize(output, width, height, error)) return std::nullopt;
+      if (((width > 0 && height > 0) || scale > 0) && !resize(output, width, height, scale, error)) return std::nullopt;
       const auto m = find_monitor(output);
-      return nlohmann::json {{"output", output},
-                             {"width", m ? m->value("width", width) : width},
-                             {"height", m ? m->value("height", height) : height},
-                             {"address", address}};
+      auto out = shape(output, m ? m->value("width", width) : width, m ? m->value("height", height) : height, h.scale);
+      out["address"] = address;
+      return out;
     }
     const auto client = find_client(address);
     if (!client || !client->value("mapped", false)) {
@@ -615,11 +629,11 @@ namespace platf::hyprland_windows {
     const auto size = client->value("size", nlohmann::json::array({1280, 800}));
     width = even_clamp(width > 0 ? width : size[0].get<int>(), 320, 7680);
     height = even_clamp(height > 0 ? height : size[1].get<int>(), 240, 4320);
-    return host(address, *client, width, height, workspace_selector(workspace), monitor_name(client->value("monitor", -1)),
+    return host(address, *client, width, height, asked_scale(scale), workspace_selector(workspace), monitor_name(client->value("monitor", -1)),
                 error);
   }
 
-  std::optional<nlohmann::json> launch(const std::string &app_id, int width, int height, std::string *error) {
+  std::optional<nlohmann::json> launch(const std::string &app_id, int width, int height, double scale, std::string *error) {
     std::unique_lock guard {lock};
     const auto apps = desktop_apps();
     const auto app = std::find_if(apps.begin(), apps.end(), [&](const auto &a) { return a.id == app_id; });
@@ -629,12 +643,13 @@ namespace platf::hyprland_windows {
     }
     width = even_clamp(width > 0 ? width : 1280, 320, 7680);
     height = even_clamp(height > 0 ? height : 800, 240, 4320);
+    scale = asked_scale(scale);
     const auto output = free_output_name();
     if (output.empty()) {
       *error = "every window output is in use";
       return std::nullopt;
     }
-    const auto workspace = create_output(output, width, height, error);
+    const auto workspace = create_output(output, width, height, scale, error);
     if (!workspace) return std::nullopt;
     const auto clients = query("clients");
     if (!clients) {
@@ -651,6 +666,7 @@ namespace platf::hyprland_windows {
     // The output is spoken for while the app starts, without holding up the other calls.
     hosted_t reserved;
     reserved.launching = true;
+    reserved.scale = scale;
     reserved.seen = clock::now();
     hosted[output] = reserved;
     const auto deadline = clock::now() + kLaunchWait;
@@ -698,22 +714,36 @@ namespace platf::hyprland_windows {
     }
     hosted[output].refade_at = clock::now() + 1500ms;
     BOOST_LOG(info) << "Frametop windows: launched " << app_id << " as " << address << " on " << output << found_by;
-    return nlohmann::json {{"output", output}, {"width", width}, {"height", height}, {"address", address}};
+    auto out = shape(output, width, height, scale);
+    out["address"] = address;
+    return out;
   }
 
-  bool resize(const std::string &output, int width, int height, std::string *error) {
+  std::optional<nlohmann::json> resize(const std::string &output_or_address, int width, int height, double scale, std::string *error) {
     std::lock_guard guard {lock};
-    if (!hosted.contains(output)) {
-      *error = "no window output " + output;
-      return false;
+    const auto it = std::find_if(hosted.begin(), hosted.end(), [&](const auto &entry) {
+      return entry.first == output_or_address || (!output_or_address.empty() && entry.second.address == output_or_address);
+    });
+    if (it == hosted.end()) {
+      *error = "no window output " + output_or_address;
+      return std::nullopt;
     }
+    const auto &output = it->first;
     if (width <= 0 || height <= 0) {
-      *error = "a resize needs a width and a height";
-      return false;
+      const auto m = scale > 0 ? find_monitor(output) : std::nullopt;
+      if (!m) {
+        *error = scale > 0 ? "Hyprland didn't answer" : "a resize needs a width and a height, or a scale";
+        return std::nullopt;
+      }
+      width = m->value("width", 0), height = m->value("height", 0);
     }
     width = even_clamp(width, 320, 7680);
     height = even_clamp(height, 240, 4320);
-    return lua(mode_rule(output, width, height), error);
+    if (scale <= 0) scale = it->second.scale;
+    scale = asked_scale(scale);
+    if (!lua(mode_rule(output, width, height, scale), error)) return std::nullopt;
+    it->second.scale = scale;
+    return shape(output, width, height, scale);
   }
 
   bool release(const std::string &output_or_address, std::string *error, const drop_t *drop) {

@@ -1509,9 +1509,10 @@ namespace confighttp {
     const auto body = frametop_windows_body(response, request);
     if (!body) return;
     std::string error;
+    const auto scale = frametop_windows_number(*body, "scale", 0);
     const auto opened = body->contains("app") ?
-      frametop_windows::launch(frametop_windows_string(*body, "app"), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), &error) :
-      frametop_windows::open(frametop_windows_string(*body, "address"), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), &error);
+      frametop_windows::launch(frametop_windows_string(*body, "app"), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), scale, &error) :
+      frametop_windows::open(frametop_windows_string(*body, "address"), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), scale, &error);
     if (!opened) return bad_request(response, request, error);
     auto out = *opened;
     out["status"] = true;
@@ -1540,10 +1541,14 @@ namespace confighttp {
     const auto body = frametop_windows_body(response, request);
     if (!body) return;
     std::string error;
-    if (!frametop_windows::resize(frametop_windows_string(*body, "output"), frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"), &error)) {
-      return bad_request(response, request, error);
-    }
-    send_response(response, nlohmann::json {{"status", true}});
+    auto which = frametop_windows_string(*body, "output");
+    if (which.empty()) which = frametop_windows_string(*body, "address");
+    const auto resized = frametop_windows::resize(which, frametop_windows_int(*body, "width"), frametop_windows_int(*body, "height"),
+                                                  frametop_windows_number(*body, "scale", 0), &error);
+    if (!resized) return bad_request(response, request, error);
+    auto out = *resized;
+    out["status"] = true;
+    send_response(response, out);
   }
 
   void postFrametopWindowRelease(resp_https_t response, req_https_t request) {

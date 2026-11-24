@@ -97,8 +97,8 @@ scopes list them.
 | --- | --- |
 | `GET /api/frametop/windows` | `windows`, the `outputs` open now, and whether the session is `locked` |
 | `GET /api/frametop/windows/apps` | Installed apps a launch can name |
-| `POST /api/frametop/windows/open` | Opens a window (`address`) or launches an app (`app`), at `width` x `height`: its `output` |
-| `POST /api/frametop/windows/resize` | Resizes a window output |
+| `POST /api/frametop/windows/open` | Opens a window (`address`) or launches an app (`app`), at `width` x `height` pixels and `scale`: its `output` |
+| `POST /api/frametop/windows/resize` | Gives a window output (named by its `output` or its `address`) a new `width` and `height`, a new `scale`, or both |
 | `POST /api/frametop/windows/at` | Which window is at a point |
 | `POST /api/frametop/windows/release` | Puts a window back, named by its `output` or its `address` |
 
