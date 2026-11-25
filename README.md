@@ -1,14 +1,62 @@
 # Vibepollo, Frametop's build
 
-This fork is Vibepollo 2.0.0 with a few changes for [Frametop](https://github.com/Frametop/frametop)'s remote displays, which show a computer's monitors as screens on a Steam Frame. The branch is `frametop/2.0.0`, and each `frametop-*` tag is a release. The rest of this README is Vibepollo's own.
+This fork is Vibepollo with a few changes for [Frametop](https://github.com/Frametop/frametop)'s remote displays, which show a computer's monitors as screens on a Steam Frame. Each `frametop-*` tag is a release, and its files are on the [releases page](https://github.com/Frametop/frametop-vibepollo/releases). The rest of this README, below the line, is Vibepollo's own.
 
 ## Install it
 
-Don't build it yourself. Frametop's host kits install the release:
+Don't build it yourself. Every [release](https://github.com/Frametop/frametop-vibepollo/releases/latest) has the files for Windows and Linux, each with its SHA-256 next to it (`.sha256`). The steps below use `frametop-2.0.6`, the newest release now.
 
-- **Windows:** [host/windows/README.md](https://github.com/Frametop/frametop/blob/experimental/host/windows/README.md). The kit installs Vibepollo 2.0.0 if needed, then swaps its `sunshine.exe` for this build after checking the file's SHA-256. The original stays next to it as `sunshine.exe.2.0.0-original`, and the kit's `-Undo` puts it back. Only Vibepollo 2.0.0's own exe is replaced; another version stops the kit with a message.
-- **Linux (Arch, CachyOS; not tested with Frametop yet):** [host/linux/README.md](https://github.com/Frametop/frametop/blob/experimental/host/linux/README.md). Install the release's `vibepollo-*.pkg.tar.zst` with Vibepollo's installer. Don't add Vibepollo's package repository afterwards: an update from it would replace this build.
-- **macOS:** Vibepollo has no Mac build. Frametop's Mac kit uses LizardByte's Sunshine instead, one instance per monitor: [host/macos/README.md](https://github.com/Frametop/frametop/blob/experimental/host/macos/README.md).
+The PC and the Steam Frame need to be on the same network, or the PC needs a Steam Link dongle. If Sunshine runs on the PC, uninstall it first: Vibepollo uses the same ports.
+
+### Windows 10 or 11 (64-bit)
+
+Frametop's build is three files that go into a Vibepollo 2.0.3 install.
+
+1. Install Vibepollo 2.0.3 with its own installer, [VibepolloSetup-v2.0.3.exe](https://github.com/Nonary/Vibepollo/releases/download/2.0.3/VibepolloSetup-v2.0.3.exe), unless it's installed already. It brings the drivers. If Apollo is installed, the installer replaces it and keeps its settings and pairings.
+2. From the [newest release](https://github.com/Frametop/frametop-vibepollo/releases/latest), download `sunshine.exe`, `sunshine_wgc_capture.exe` and `frametop_clipboard.exe`.
+3. Open PowerShell as administrator and stop Vibepollo: `Stop-Service ApolloService` (Vibepollo keeps Apollo's service name).
+4. Copy `sunshine.exe` into Vibepollo's folder, `C:\Program Files\Apollo` unless you chose another, and the other two files into its `tools` folder. They replace the files there, so keep copies of the originals if you may want them back.
+5. Start Vibepollo again: `Start-Service ApolloService`.
+6. Open https://localhost:47990 and create the Web UI login. The Steam Frame signs in with it once.
+7. For virtual displays, turn on "Remove it when the client disconnects" in the Web UI's Remote Monitor settings. Then a virtual display goes away when Frametop disconnects it, and stays through a dropped stream.
+
+The Web UI still offers Vibepollo's own updates. Don't install them: they replace this build. To update, repeat steps 2 to 5 with a newer release.
+
+On a network that Windows calls Public, or over a Steam Link dongle, the Steam Frame may not reach the PC. This line, in PowerShell as administrator, lets Vibepollo through the firewall on every network type:
+
+```powershell
+New-NetFirewallRule -DisplayName "Vibepollo (Frametop)" -Program "C:\Program Files\Apollo\sunshine.exe" -Direction Inbound -Action Allow -Profile Any
+```
+
+### Linux (Arch Linux or CachyOS, x86_64)
+
+It needs KDE Plasma 6 on Wayland, or Hyprland (see [docs/linux/hyprland.md](https://github.com/Frametop/frametop-vibepollo/blob/frametop/hyprland/docs/linux/hyprland.md)), Linux 6.16 or newer, and a graphics card with a hardware H.264 encoder.
+
+1. Download the package and Vibepollo's installer, check the package, and install it:
+
+   ```bash
+   release=https://github.com/Frametop/frametop-vibepollo/releases/download/frametop-2.0.6
+   curl -fLO "$release/vibepollo-2.0.6-1-x86_64.pkg.tar.zst"
+   curl -fLO "$release/vibepollo-2.0.6-1-x86_64.pkg.tar.zst.sha256"
+   sha256sum -c vibepollo-2.0.6-1-x86_64.pkg.tar.zst.sha256
+   curl -fLO https://raw.githubusercontent.com/Frametop/frametop-vibepollo/frametop-2.0.6/scripts/linux_install.sh
+   sudo bash linux_install.sh --package ./vibepollo-2.0.6-1-x86_64.pkg.tar.zst
+   ```
+
+   `sha256sum -c` should print `OK`. The installer checks the requirements, installs the kernel headers if needed, installs the package, and opens the firewall (firewalld or ufw). Don't add Vibepollo's own package repository afterwards: an update from it would replace this build.
+2. Restart the PC after the first install, and log in to the desktop.
+3. Open https://localhost:47990 and create the Web UI login. The Steam Frame signs in with it once.
+4. For virtual displays, turn on "Remove it when the client disconnects" in the Web UI's Remote Monitor settings.
+
+To update, repeat step 1 with a newer release. Vibepollo's [Linux install guide](https://github.com/Frametop/frametop-vibepollo/blob/frametop-2.0.6/docs/linux/install.md) has the details and troubleshooting.
+
+### Then, on the Steam Frame
+
+Open Remote displays in Frametop Settings (in Frametop 0.3.0 and builds before exp.24, the Frametop Remote Displays app) and choose Add computer. Pick the PC, sign in with the Web UI login, and choose the displays to show.
+
+### macOS
+
+Vibepollo has no Mac build. Frametop's Mac kit uses LizardByte's Sunshine instead, one instance per monitor: [host/macos/README.md](https://github.com/Frametop/frametop/blob/experimental/host/macos/README.md).
 
 ## What it changes
 
@@ -18,8 +66,6 @@ Don't build it yourself. Frametop's host kits install the release:
 - Windows: removing a Remote Monitor (a virtual display) releases it before the layout is recomposed, so the host's own monitor layout is never reset.
 - The HTTPS thread never waits on a client's TLS close, so the Web UI doesn't stall after a client disconnects.
 - A client can send its microphone on the encrypted control stream (packet type 0x3003, Opus), and apps on the host record it. Windows: from "Microphone (Steam Streaming Microphone)", Steam's virtual microphone, installed from Steam's drivers if it's missing; the level Windows adds to it above 0 dB is taken back off, so apps hear the client's own level. Linux: from "Frametop Microphone", a PulseAudio or PipeWire source that's there while a client sends, only when Sunshine runs as the desktop user; the system service (`vibepollo.service`) reaches the desktop's sound through its session broker, which can't add a microphone yet. Only clients allowed keyboard input can send it, one at a time, and never in the clear.
-
-Frametop's own settings for Vibepollo (sound on Remote Monitors, and when they go away) are set by the Windows kit; see its README.
 
 ---
 
